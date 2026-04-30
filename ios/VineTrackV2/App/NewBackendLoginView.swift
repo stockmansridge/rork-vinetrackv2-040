@@ -193,9 +193,8 @@ struct NewBackendLoginView: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .background(.blue, in: .rect(cornerRadius: 15))
+            .background(Color.blue, in: .rect(cornerRadius: 15))
             .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
-            .opacity(auth.isLoading || !canSubmit ? 0.56 : 1)
         }
         .buttonStyle(.plain)
         .disabled(auth.isLoading || !canSubmit)
