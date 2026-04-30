@@ -157,7 +157,7 @@ final class NewBackendAuthService {
             #if DEBUG
             print("[Auth] Password reset code requested for \(trimmedEmail)")
             #endif
-            passwordResetSuccessMessage = "We emailed a 6-digit code to \(trimmedEmail). Enter it below with your new password."
+            passwordResetSuccessMessage = "If an account exists for \(trimmedEmail), we've sent a 6-digit code. Enter it below with your new password."
             return true
         } catch {
             #if DEBUG
