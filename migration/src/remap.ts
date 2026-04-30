@@ -64,6 +64,7 @@ export const vineyardDataTypeToEntityName: Record<string, string> = {
   repair_buttons: "repairButtons",
   growth_buttons: "growthButtons",
   custom_patterns: "savedCustomPatterns",
+  saved_custom_patterns: "savedCustomPatterns",
   settings: "settings",
   yield_sessions: "yieldSessions",
   damage_records: "damageRecords",
@@ -258,11 +259,15 @@ export function buildVineyardDataInventory(v1: SourceSnapshot, vineyardFilter?: 
     const dataType = normalizeDataType(row.data_type);
     const mappedEntityName = dataType ? vineyardDataTypeToEntityName[dataType] ?? null : null;
     const payload = extractVineyardPayload(row);
-    const vineyardId = asNullableString(row.vineyard_id ?? row.vineyardId ?? getValueAsRecord(payload.value)?.vineyardId ?? getValueAsRecord(payload.value)?.vineyard_id);
+    const vineyardId = asNullableString(row.vineyard_id ?? row.vineyardId);
     const knownCounts: Record<string, number> = Object.fromEntries(vineyardDataKeys.map((key) => [key, 0]));
     const keysFound = getPayloadKeys(payload.value);
     const unknownKeys = buildUnknownVineyardDataKeys(dataType, mappedEntityName, payload.value);
-    const recordCount = mappedEntityName ? countPayloadRecords(payload.value, mappedEntityName) : countLegacyRecordVolume(payload.value);
+    const recordCount = mappedEntityName
+      ? countPayloadRecords(payload.value, mappedEntityName)
+      : dataType
+        ? countPayloadRecords(payload.value, null)
+        : countLegacyRecordVolume(payload.value);
     let estimatedRecordVolume = recordCount;
 
     if (mappedEntityName) {
@@ -352,7 +357,7 @@ function asNullableString(value: unknown): string | null {
 function extractVineyardPayload(row: JsonRecord): { value: unknown; kind: VineyardDataPayloadKind; parseError?: string } {
   const candidates = [row.data, row.payload, row.json, row.value];
   const candidate = candidates.find((value) => value !== undefined);
-  if (candidate === undefined) return { value: row, kind: "object" };
+  if (candidate === undefined) return { value: null, kind: "null" };
   if (typeof candidate !== "string") return { value: candidate, kind: payloadKind(candidate, false) };
 
   const trimmed = candidate.trim();
@@ -378,7 +383,11 @@ function payloadKind(value: unknown, parsedFromString: boolean): VineyardDataPay
 
 function normalizeDataType(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
+  const normalized = value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[\s-]+/g, "_")
+    .toLowerCase();
   return normalized.length > 0 ? normalized : null;
 }
 
@@ -412,7 +421,7 @@ function countPayloadRecords(value: unknown, mappedEntityName: string | null): n
   const record = value as JsonRecord;
   const list = findRecordList(record, mappedEntityName);
   if (list) return list.length;
-  return Object.keys(record).length > 0 ? 1 : 0;
+  return countRecordObject(record);
 }
 
 function findRecordList(record: JsonRecord, mappedEntityName: string | null): unknown[] | null {
@@ -441,11 +450,24 @@ function preferredListKeys(mappedEntityName: string | null): string[] {
     "patterns",
     "chemicals",
     "equipment",
-    "varieties"
+    "varieties",
+    "sessions",
+    "logs",
+    "tasks",
+    "purchases"
   ];
 
   if (!mappedEntityName) return keys;
   return [mappedEntityName, toSnakeCase(mappedEntityName), ...keys];
+}
+
+function countRecordObject(record: JsonRecord): number {
+  const entries = Object.entries(record);
+  if (entries.length === 0) return 0;
+  const objectValueCount = entries.filter(([, value]) => value !== null && typeof value === "object" && !Array.isArray(value)).length;
+  const idLikeKeyCount = entries.filter(([key]) => key.length >= 20 || isUuid(key)).length;
+  if (objectValueCount === entries.length || idLikeKeyCount > 0) return entries.length;
+  return 1;
 }
 
 function toSnakeCase(value: string): string {
