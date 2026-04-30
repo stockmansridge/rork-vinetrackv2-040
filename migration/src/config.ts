@@ -15,19 +15,25 @@ export type MigrationConfig = {
   stage: Stage;
   vineyardId?: string;
   apply: boolean;
+  applyAccess: boolean;
+  migrationFallbackUserId?: string;
 };
 
-const stages = new Set<Stage>(["identity", "vineyards", "invitations", "all"]);
+const stages = new Set<Stage>(["identity", "vineyards", "invitations", "access", "all"]);
 
 export function loadConfig(argv: string[]): MigrationConfig {
   const args = parseArgs(argv);
   const stageArg = args.stage ?? "all";
   if (!stages.has(stageArg as Stage)) {
-    throw new Error(`Unsupported stage "${stageArg}". Use identity, vineyards, invitations, or all.`);
+    throw new Error(`Unsupported stage "${stageArg}". Use identity, vineyards, invitations, access, or all.`);
   }
   const apply = args.apply === "true" || args.apply === "1";
   if (apply) {
-    throw new Error("apply not implemented in Phase 16B");
+    throw new Error("Generic --apply is not enabled. Use --apply-access with --stage=access for the access-only migration.");
+  }
+  const applyAccess = args["apply-access"] === "true" || args["apply-access"] === "1";
+  if (applyAccess && stageArg !== "access") {
+    throw new Error("--apply-access requires --stage=access.");
   }
 
   const v1Url = requiredEnv("V1_SUPABASE_URL");
@@ -43,7 +49,9 @@ export function loadConfig(argv: string[]): MigrationConfig {
     outDir: path.resolve(dirname, "../out"),
     stage: stageArg as Stage,
     vineyardId: args.vineyard,
-    apply
+    apply,
+    applyAccess,
+    migrationFallbackUserId: optionalEnv("MIGRATION_FALLBACK_USER_ID")
   };
 }
 
@@ -65,4 +73,9 @@ function requiredEnv(name: string): string {
     throw new Error(`Missing ${name}. Copy migration/.env.example to migration/.env and fill in the value.`);
   }
   return value;
+}
+
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
 }

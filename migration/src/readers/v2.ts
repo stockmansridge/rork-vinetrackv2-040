@@ -6,6 +6,7 @@ export const expectedV2Tables = [
   "vineyards",
   "vineyard_members",
   "invitations",
+  "disclaimer_acceptances",
   "pins",
   "paddocks",
   "trips",

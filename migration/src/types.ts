@@ -1,4 +1,4 @@
-export type Stage = "identity" | "vineyards" | "invitations" | "all";
+export type Stage = "identity" | "vineyards" | "invitations" | "access" | "all";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -281,6 +281,94 @@ export type Phase16CReportSummary = {
   warnings: string[];
 };
 
+export type AccessMigrationAction = {
+  table: "vineyards" | "vineyard_members" | "invitations" | "disclaimer_acceptances";
+  action: "insert" | "update" | "skip";
+  key: string;
+  sourceId: string | null;
+  row: JsonRecord;
+  existingRow: JsonRecord | null;
+  changedFields: string[];
+  warnings: string[];
+};
+
+export type AccessMigrationSkippedUser = {
+  sourceTable: "vineyard_members" | "disclaimer_acceptances" | "vineyards";
+  v1UserId: string | null;
+  email: string | null;
+  vineyardId: string | null;
+  reason: string;
+};
+
+export type AccessMigrationPlan = {
+  generatedAt: string;
+  mode: "dry-run" | "apply-access-plan";
+  stage: "access";
+  filters: { vineyardId?: string };
+  fallbackUserId: string | null;
+  vineyardsToUpsert: AccessMigrationAction[];
+  membershipsToUpsert: AccessMigrationAction[];
+  invitationsToCreate: AccessMigrationAction[];
+  invitationUpdates: AccessMigrationAction[];
+  disclaimerAcceptancesToUpsert: AccessMigrationAction[];
+  skippedUsers: AccessMigrationSkippedUser[];
+  duplicateEmails: {
+    v1: DuplicateEmailReport[];
+    v2: DuplicateEmailReport[];
+  };
+  unmappedUsers: IdentityMapEntry[];
+  existingV2RowsThatWillBeUpdated: AccessMigrationAction[];
+  risks: string[];
+  warnings: string[];
+  counts: Record<string, number>;
+};
+
+export type AccessMigrationReport = {
+  generatedAt: string;
+  mode: "dry-run";
+  stage: "access";
+  counts: Record<string, number>;
+  vineyardsToUpsert: AccessMigrationAction[];
+  membershipsToUpsert: AccessMigrationAction[];
+  invitationsToCreate: AccessMigrationAction[];
+  invitationUpdates: AccessMigrationAction[];
+  disclaimerAcceptancesToUpsert: AccessMigrationAction[];
+  skippedUsers: AccessMigrationSkippedUser[];
+  duplicateEmails: {
+    v1: DuplicateEmailReport[];
+    v2: DuplicateEmailReport[];
+  };
+  unmappedUsers: IdentityMapEntry[];
+  existingV2RowsThatWillBeUpdated: AccessMigrationAction[];
+  risks: string[];
+  warnings: string[];
+};
+
+export type AccessApplyResult = {
+  generatedAt: string;
+  mode: "apply-access";
+  counts: {
+    vineyards: { inserted: number; updated: number; skipped: number };
+    memberships: { inserted: number; updated: number; skipped: number };
+    invitations: { inserted: number; updated: number; skipped: number };
+    disclaimerAcceptances: { inserted: number; skipped: number };
+  };
+  errors: Array<{ table: string; key: string; action: string; message: string }>;
+};
+
+export type AccessMigrationReportSummary = {
+  vineyardsToUpsert: number;
+  membershipsToUpsert: number;
+  invitationsToCreate: number;
+  disclaimerAcceptancesToUpsert: number;
+  skippedUsers: number;
+  duplicateV1Emails: number;
+  duplicateV2Emails: number;
+  unmappedUsers: number;
+  existingV2RowsThatWillBeUpdated: number;
+  risks: string[];
+};
+
 export type ReportSummary = {
   generatedAt: string;
   mode: "dry-run";
@@ -291,4 +379,5 @@ export type ReportSummary = {
   warnings: string[];
   schemaCoverage?: SchemaCoverageReport;
   phase16c?: Phase16CReportSummary;
+  access?: AccessMigrationReportSummary;
 };

@@ -3,6 +3,12 @@ import { createMigrationClients } from "./clients.js";
 import { readV1Snapshot } from "./readers/v1.js";
 import { readV2Snapshot } from "./readers/v2.js";
 import {
+  applyAccessMigrationPlan,
+  buildAccessMigrationPlan,
+  buildAccessMigrationReport,
+  buildAccessSummary
+} from "./access.js";
+import {
   buildDisclaimerReport,
   buildIdentityReport,
   buildInvitationReport,
@@ -13,7 +19,7 @@ import {
   buildVineyardReport
 } from "./remap.js";
 import { writeJson } from "./report.js";
-import type { Phase16CReportSummary, ReportSummary, VineyardDataTransformReport } from "./types.js";
+import type { AccessMigrationReportSummary, Phase16CReportSummary, ReportSummary, VineyardDataTransformReport } from "./types.js";
 
 async function main(): Promise<void> {
   const config = loadConfig(process.argv.slice(2));
@@ -24,6 +30,47 @@ async function main(): Promise<void> {
 
   const { report: identityReport, maps } = buildIdentityReport(v1, v2);
   filesWritten.push(await writeJson(config.outDir, "maps.json", maps));
+
+  if (config.stage === "access") {
+    const plan = buildAccessMigrationPlan({
+      v1,
+      v2,
+      maps,
+      identityReport,
+      vineyardId: config.vineyardId,
+      fallbackUserId: config.migrationFallbackUserId,
+      mode: config.applyAccess ? "apply-access-plan" : "dry-run"
+    });
+    const report = buildAccessMigrationReport(plan);
+    if (config.applyAccess) {
+      filesWritten.push(await writeJson(config.outDir, "access-apply-plan.json", plan));
+      const applyResult = await applyAccessMigrationPlan(clients.v2, plan);
+      filesWritten.push(await writeJson(config.outDir, "access-apply-result.json", applyResult));
+      console.log(`Phase 16C-lite access apply complete. Wrote ${filesWritten.length} files to migration/out.`);
+      return;
+    }
+    filesWritten.push(await writeJson(config.outDir, "access-migration-plan.json", plan));
+    filesWritten.push(await writeJson(config.outDir, "access-migration-report.json", report));
+    const accessSummary = buildAccessSummary(plan);
+    const count = (key: string): number => plan.counts[key] ?? 0;
+    const summary = buildReportSummary({
+      config,
+      filesWritten,
+      warnings: [...plan.warnings, ...plan.risks],
+      v1,
+      v2,
+      identityReport,
+      vineyardSourceCount: count("vineyardsToUpsert") + count("vineyardsSkipped"),
+      mappedVineyards: count("vineyardsToUpsert"),
+      vineyardMembers: count("membershipsToUpsert") + count("membershipsSkipped"),
+      pendingInvitations: count("invitationsToCreate"),
+      disclaimerAcceptances: count("disclaimerAcceptancesToUpsert") + count("disclaimerAcceptancesSkipped"),
+      accessSummary
+    });
+    filesWritten.push(await writeJson(config.outDir, "report-summary.json", summary));
+    console.log(`Phase 16C-lite access dry-run complete. Wrote ${filesWritten.length} files to migration/out.`);
+    return;
+  }
 
   if (config.stage === "identity" || config.stage === "all") {
     filesWritten.push(await writeJson(config.outDir, "dry-run-identity.json", identityReport));
@@ -79,24 +126,65 @@ async function main(): Promise<void> {
     if (vineyardDataTransformReport.existingV2NaturalKeyConflicts.length > 0) warnings.push(`${vineyardDataTransformReport.existingV2NaturalKeyConflicts.length} proposed natural key conflict(s) against existing V2 rows found`);
   }
 
-  const summary: ReportSummary = {
+  const summary = buildReportSummary({
+    config,
+    filesWritten,
+    warnings,
+    v1,
+    v2,
+    identityReport,
+    vineyardSourceCount: vineyardReport.sourceCount,
+    mappedVineyards: vineyardReport.mapped.length,
+    vineyardMembers: memberReport.sourceCount,
+    pendingInvitations: invitationReport.pendingCurrentCount,
+    disclaimerAcceptances: disclaimerReport.sourceCount,
+    vineyardDataTransformReport,
+    phase16cSummary
+  });
+
+  filesWritten.push(await writeJson(config.outDir, "report-summary.json", summary));
+  console.log(`Phase 16C dry-run complete. Wrote ${filesWritten.length} files to migration/out.`);
+  if (warnings.length > 0) console.log(`${warnings.length} warning(s) written to report-summary.json.`);
+}
+
+type ReportSummaryInput = {
+  config: ReturnType<typeof loadConfig>;
+  filesWritten: string[];
+  warnings: string[];
+  v1: Awaited<ReturnType<typeof readV1Snapshot>>;
+  v2: Awaited<ReturnType<typeof readV2Snapshot>>;
+  identityReport: ReturnType<typeof buildIdentityReport>["report"];
+  vineyardSourceCount: number;
+  mappedVineyards: number;
+  vineyardMembers: number;
+  pendingInvitations: number;
+  disclaimerAcceptances: number;
+  vineyardDataTransformReport?: VineyardDataTransformReport | null;
+  phase16cSummary?: Phase16CReportSummary;
+  accessSummary?: AccessMigrationReportSummary;
+};
+
+function buildReportSummary(input: ReportSummaryInput): ReportSummary {
+  const phase16cSummary = input.phase16cSummary;
+  const vineyardDataTransformReport = input.vineyardDataTransformReport;
+  return {
     generatedAt: new Date().toISOString(),
     mode: "dry-run",
-    stage: config.stage,
-    filters: { vineyardId: config.vineyardId },
-    filesWritten: filesWritten.map((file) => file.replace(`${config.outDir}/`, "migration/out/")),
+    stage: input.config.stage,
+    filters: { vineyardId: input.config.vineyardId },
+    filesWritten: input.filesWritten.map((file) => file.replace(`${input.config.outDir}/`, "migration/out/")),
     counts: {
-      v1AuthUsers: v1.users.length,
-      v1Profiles: v1.profiles.rows.length,
-      v2AuthUsers: v2.users.length,
-      mappedUsers: identityReport.mappedUsers.filter((entry) => entry.v2UserId).length,
-      unmappedV1Users: identityReport.unmappedV1Users.length,
-      vineyards: vineyardReport.sourceCount,
-      mappedVineyards: vineyardReport.mapped.length,
-      vineyardMembers: memberReport.sourceCount,
-      pendingInvitations: invitationReport.pendingCurrentCount,
-      disclaimerAcceptances: disclaimerReport.sourceCount,
-      v1VineyardDataRows: v1.vineyardData.rows.length,
+      v1AuthUsers: input.v1.users.length,
+      v1Profiles: input.v1.profiles.rows.length,
+      v2AuthUsers: input.v2.users.length,
+      mappedUsers: input.identityReport.mappedUsers.filter((entry) => entry.v2UserId).length,
+      unmappedV1Users: input.identityReport.unmappedV1Users.length,
+      vineyards: input.vineyardSourceCount,
+      mappedVineyards: input.mappedVineyards,
+      vineyardMembers: input.vineyardMembers,
+      pendingInvitations: input.pendingInvitations,
+      disclaimerAcceptances: input.disclaimerAcceptances,
+      v1VineyardDataRows: input.config.stage === "access" ? 0 : input.v1.vineyardData.rows.length,
       proposedV2VineyardDataRows: vineyardDataTransformReport?.proposedRowCount ?? 0,
       vineyardDataTransformFallbacks: vineyardDataTransformReport?.fallbackCount ?? 0,
       vineyardDataSkippedRows: phase16cSummary?.skippedRowCount ?? 0,
@@ -106,16 +194,12 @@ async function main(): Promise<void> {
       vineyardDataExistingRowIdConflicts: phase16cSummary?.existingV2RowIdConflicts.length ?? 0,
       vineyardDataExistingNaturalKeyConflicts: phase16cSummary?.existingV2NaturalKeyConflicts.length ?? 0
     },
-    warnings,
-    schemaCoverage: v2.schemaCoverage,
-    phase16c: phase16cSummary
+    warnings: input.warnings,
+    schemaCoverage: input.v2.schemaCoverage,
+    phase16c: phase16cSummary,
+    access: input.accessSummary
   };
-
-  filesWritten.push(await writeJson(config.outDir, "report-summary.json", summary));
-  console.log(`Phase 16C dry-run complete. Wrote ${filesWritten.length} files to migration/out.`);
-  if (warnings.length > 0) console.log(`${warnings.length} warning(s) written to report-summary.json.`);
 }
-
 
 main().catch((error: unknown) => {
   if (error instanceof Error) {
