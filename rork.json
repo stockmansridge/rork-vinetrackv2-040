@@ -1,0 +1,10 @@
+{
+  "$schema": "https://rork.com/schema/rork.json",
+  "apps": [
+    {
+      "name": "Vine Track V 2",
+      "path": "ios",
+      "framework": "swift"
+    }
+  ]
+}

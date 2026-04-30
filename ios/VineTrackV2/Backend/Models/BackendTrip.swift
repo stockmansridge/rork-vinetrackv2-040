@@ -1,0 +1,223 @@
+import Foundation
+
+nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
+    let id: UUID
+    let vineyardId: UUID
+
+    let paddockId: UUID?
+    let paddockIds: [UUID]?
+    let paddockName: String?
+
+    let trackingPattern: String?
+    let startTime: Date?
+    let endTime: Date?
+    let isActive: Bool?
+    let isPaused: Bool?
+
+    let totalDistance: Double?
+    let currentPathDistance: Double?
+    let currentRowNumber: Double?
+    let nextRowNumber: Double?
+    let sequenceIndex: Int?
+    let rowSequence: [Double]?
+
+    let pathPoints: [CoordinatePoint]?
+    let completedPaths: [Double]?
+    let skippedPaths: [Double]?
+    let pinIds: [UUID]?
+    let tankSessions: [TankSession]?
+    let activeTankNumber: Int?
+    let totalTanks: Int?
+    let pauseTimestamps: [Date]?
+    let resumeTimestamps: [Date]?
+    let isFillingTank: Bool?
+    let fillingTankNumber: Int?
+
+    let personName: String?
+
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+    let clientUpdatedAt: Date?
+    let syncVersion: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case paddockId = "paddock_id"
+        case paddockIds = "paddock_ids"
+        case paddockName = "paddock_name"
+        case trackingPattern = "tracking_pattern"
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case isActive = "is_active"
+        case isPaused = "is_paused"
+        case totalDistance = "total_distance"
+        case currentPathDistance = "current_path_distance"
+        case currentRowNumber = "current_row_number"
+        case nextRowNumber = "next_row_number"
+        case sequenceIndex = "sequence_index"
+        case rowSequence = "row_sequence"
+        case pathPoints = "path_points"
+        case completedPaths = "completed_paths"
+        case skippedPaths = "skipped_paths"
+        case pinIds = "pin_ids"
+        case tankSessions = "tank_sessions"
+        case activeTankNumber = "active_tank_number"
+        case totalTanks = "total_tanks"
+        case pauseTimestamps = "pause_timestamps"
+        case resumeTimestamps = "resume_timestamps"
+        case isFillingTank = "is_filling_tank"
+        case fillingTankNumber = "filling_tank_number"
+        case personName = "person_name"
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case clientUpdatedAt = "client_updated_at"
+        case syncVersion = "sync_version"
+    }
+}
+
+/// Encodable payload used when upserting a trip from the client. Server-managed
+/// fields (created_at, updated_at, deleted_at, sync_version, updated_by) are omitted.
+nonisolated struct BackendTripUpsert: Encodable, Sendable {
+    let id: UUID
+    let vineyardId: UUID
+    let paddockId: UUID?
+    let paddockIds: [UUID]
+    let paddockName: String
+    let trackingPattern: String?
+    let startTime: Date
+    let endTime: Date?
+    let isActive: Bool
+    let isPaused: Bool
+    let totalDistance: Double
+    let currentPathDistance: Double
+    let currentRowNumber: Double
+    let nextRowNumber: Double
+    let sequenceIndex: Int
+    let rowSequence: [Double]
+    let pathPoints: [CoordinatePoint]
+    let completedPaths: [Double]
+    let skippedPaths: [Double]
+    let pinIds: [UUID]
+    let tankSessions: [TankSession]
+    let activeTankNumber: Int?
+    let totalTanks: Int
+    let pauseTimestamps: [Date]
+    let resumeTimestamps: [Date]
+    let isFillingTank: Bool
+    let fillingTankNumber: Int?
+    let personName: String
+    let createdBy: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case paddockId = "paddock_id"
+        case paddockIds = "paddock_ids"
+        case paddockName = "paddock_name"
+        case trackingPattern = "tracking_pattern"
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case isActive = "is_active"
+        case isPaused = "is_paused"
+        case totalDistance = "total_distance"
+        case currentPathDistance = "current_path_distance"
+        case currentRowNumber = "current_row_number"
+        case nextRowNumber = "next_row_number"
+        case sequenceIndex = "sequence_index"
+        case rowSequence = "row_sequence"
+        case pathPoints = "path_points"
+        case completedPaths = "completed_paths"
+        case skippedPaths = "skipped_paths"
+        case pinIds = "pin_ids"
+        case tankSessions = "tank_sessions"
+        case activeTankNumber = "active_tank_number"
+        case totalTanks = "total_tanks"
+        case pauseTimestamps = "pause_timestamps"
+        case resumeTimestamps = "resume_timestamps"
+        case isFillingTank = "is_filling_tank"
+        case fillingTankNumber = "filling_tank_number"
+        case personName = "person_name"
+        case createdBy = "created_by"
+        case clientUpdatedAt = "client_updated_at"
+    }
+}
+
+extension BackendTrip {
+    /// Map a local Trip into an upsert payload.
+    static func upsert(from trip: Trip, createdBy: UUID?, clientUpdatedAt: Date) -> BackendTripUpsert {
+        BackendTripUpsert(
+            id: trip.id,
+            vineyardId: trip.vineyardId,
+            paddockId: trip.paddockId,
+            paddockIds: trip.paddockIds,
+            paddockName: trip.paddockName,
+            trackingPattern: trip.trackingPattern.rawValue,
+            startTime: trip.startTime,
+            endTime: trip.endTime,
+            isActive: trip.isActive,
+            isPaused: trip.isPaused,
+            totalDistance: trip.totalDistance,
+            currentPathDistance: trip.currentPathDistance,
+            currentRowNumber: trip.currentRowNumber,
+            nextRowNumber: trip.nextRowNumber,
+            sequenceIndex: trip.sequenceIndex,
+            rowSequence: trip.rowSequence,
+            pathPoints: trip.pathPoints,
+            completedPaths: trip.completedPaths,
+            skippedPaths: trip.skippedPaths,
+            pinIds: trip.pinIds,
+            tankSessions: trip.tankSessions,
+            activeTankNumber: trip.activeTankNumber,
+            totalTanks: trip.totalTanks,
+            pauseTimestamps: trip.pauseTimestamps,
+            resumeTimestamps: trip.resumeTimestamps,
+            isFillingTank: trip.isFillingTank,
+            fillingTankNumber: trip.fillingTankNumber,
+            personName: trip.personName,
+            createdBy: createdBy,
+            clientUpdatedAt: clientUpdatedAt
+        )
+    }
+
+    /// Map a remote BackendTrip into a local Trip.
+    func toTrip() -> Trip {
+        Trip(
+            id: id,
+            vineyardId: vineyardId,
+            paddockId: paddockId,
+            paddockName: paddockName ?? "",
+            paddockIds: paddockIds ?? (paddockId.map { [$0] } ?? []),
+            startTime: startTime ?? Date(),
+            endTime: endTime,
+            currentRowNumber: currentRowNumber ?? 0.5,
+            nextRowNumber: nextRowNumber ?? 1.5,
+            pathPoints: pathPoints ?? [],
+            isActive: isActive ?? false,
+            trackingPattern: trackingPattern.flatMap { TrackingPattern(rawValue: $0) } ?? .sequential,
+            rowSequence: rowSequence ?? [],
+            sequenceIndex: sequenceIndex ?? 0,
+            personName: personName ?? "",
+            totalDistance: totalDistance ?? 0,
+            pinIds: pinIds ?? [],
+            completedPaths: completedPaths ?? [],
+            skippedPaths: skippedPaths ?? [],
+            currentPathDistance: currentPathDistance ?? 0,
+            tankSessions: tankSessions ?? [],
+            activeTankNumber: activeTankNumber,
+            totalTanks: totalTanks ?? 0,
+            pauseTimestamps: pauseTimestamps ?? [],
+            resumeTimestamps: resumeTimestamps ?? [],
+            isPaused: isPaused ?? false,
+            isFillingTank: isFillingTank ?? false,
+            fillingTankNumber: fillingTankNumber
+        )
+    }
+}
