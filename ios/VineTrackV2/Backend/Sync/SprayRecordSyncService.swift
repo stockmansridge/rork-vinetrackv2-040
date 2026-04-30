@@ -94,7 +94,7 @@ final class SprayRecordSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.sprayRecords.map { ($0.id, $0) })
+            let byId = Dictionary(store.sprayRecords.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendSprayRecordUpsert] = []
             var pushedIds: [UUID] = []
             for (recordId, ts) in dirty {

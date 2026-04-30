@@ -94,7 +94,7 @@ final class PaddockSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.paddocks.map { ($0.id, $0) })
+            let byId = Dictionary(store.paddocks.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendPaddockUpsert] = []
             var pushedIds: [UUID] = []
             for (paddockId, ts) in dirty {

@@ -96,7 +96,7 @@ final class PinSyncService {
         guard let store else { return }
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let pinsById = Dictionary(uniqueKeysWithValues: store.pins.map { ($0.id, $0) })
+            let pinsById = Dictionary(store.pins.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendPinUpsert] = []
             var pushedIds: [UUID] = []
             var photoUploadFailures: [String] = []

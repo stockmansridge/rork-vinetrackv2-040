@@ -94,7 +94,7 @@ final class TripSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.trips.map { ($0.id, $0) })
+            let byId = Dictionary(store.trips.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendTripUpsert] = []
             var pushedIds: [UUID] = []
             for (tripId, ts) in dirty {

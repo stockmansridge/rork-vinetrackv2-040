@@ -114,7 +114,7 @@ final class WorkTaskSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.workTasks.map { ($0.id, $0) })
+            let byId = Dictionary(store.workTasks.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendWorkTaskUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -234,7 +234,7 @@ final class MaintenanceLogSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.maintenanceLogs.map { ($0.id, $0) })
+            let byId = Dictionary(store.maintenanceLogs.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendMaintenanceLogUpsert] = []
             var pushed: [UUID] = []
             var photoUploadFailures: [String] = []
@@ -422,7 +422,7 @@ final class YieldEstimationSessionSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.yieldSessions.map { ($0.id, $0) })
+            let byId = Dictionary(store.yieldSessions.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendYieldEstimationSessionUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -538,7 +538,7 @@ final class DamageRecordSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.damageRecords.map { ($0.id, $0) })
+            let byId = Dictionary(store.damageRecords.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendDamageRecordUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -653,7 +653,7 @@ final class HistoricalYieldRecordSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.historicalYieldRecords.map { ($0.id, $0) })
+            let byId = Dictionary(store.historicalYieldRecords.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendHistoricalYieldRecordUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {

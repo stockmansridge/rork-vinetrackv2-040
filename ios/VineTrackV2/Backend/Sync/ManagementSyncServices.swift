@@ -135,7 +135,7 @@ final class SavedChemicalSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.savedChemicals.map { ($0.id, $0) })
+            let byId = Dictionary(store.savedChemicals.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendSavedChemicalUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -260,7 +260,7 @@ final class SavedSprayPresetSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.savedSprayPresets.map { ($0.id, $0) })
+            let byId = Dictionary(store.savedSprayPresets.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendSavedSprayPresetUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -380,7 +380,7 @@ final class SprayEquipmentSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.sprayEquipment.map { ($0.id, $0) })
+            let byId = Dictionary(store.sprayEquipment.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendSprayEquipmentUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -500,7 +500,7 @@ final class TractorSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.tractors.map { ($0.id, $0) })
+            let byId = Dictionary(store.tractors.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendTractorUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -620,7 +620,7 @@ final class FuelPurchaseSyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.fuelPurchases.map { ($0.id, $0) })
+            let byId = Dictionary(store.fuelPurchases.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendFuelPurchaseUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
@@ -740,7 +740,7 @@ final class OperatorCategorySyncService {
         let createdBy = auth?.userId
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: store.operatorCategories.map { ($0.id, $0) })
+            let byId = Dictionary(store.operatorCategories.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             var payloads: [BackendOperatorCategoryUpsert] = []
             var pushed: [UUID] = []
             for (id, ts) in dirty {
