@@ -303,7 +303,8 @@ private struct NewHomeTabView: View {
             }
             Text(store.selectedVineyard?.name ?? "No Vineyard")
                 .font(.title2.weight(.bold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
