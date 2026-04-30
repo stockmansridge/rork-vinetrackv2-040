@@ -70,6 +70,7 @@ async function main(): Promise<void> {
     if (!table.exists) warnings.push(`V2 destination table missing or inaccessible: ${table.table}${table.error ? ` (${table.error})` : ""}`);
   }
   if (vineyardDataTransformReport) {
+    warnings.push(...vineyardDataTransformReport.warnings);
     if (vineyardDataTransformReport.fallbackCount > 0) warnings.push(`${vineyardDataTransformReport.fallbackCount} vineyard_data transform fallback(s) flagged`);
     if (vineyardDataTransformReport.skippedRows.length > 0) warnings.push(`${vineyardDataTransformReport.skippedRows.length} vineyard_data row(s) skipped from proposed V2 transform`);
     if (vineyardDataTransformReport.duplicateProposedRowIds.length > 0) warnings.push(`${vineyardDataTransformReport.duplicateProposedRowIds.length} proposed V2 row id duplicate group(s) found`);

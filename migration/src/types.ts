@@ -249,6 +249,7 @@ export type VineyardDataTransformReport = {
   existingV2RowIdConflicts: VineyardDataConflictReport[];
   existingV2NaturalKeyConflicts: VineyardDataConflictReport[];
   existingV2TablesRead: Array<{ table: string; exists: boolean; rowCount: number; error?: string }>;
+  warnings: string[];
 };
 
 export type SchemaCoverageReport = {
@@ -277,6 +278,7 @@ export type Phase16CReportSummary = {
   duplicateProposedNaturalKeys: VineyardDataConflictReport[];
   existingV2RowIdConflicts: VineyardDataConflictReport[];
   existingV2NaturalKeyConflicts: VineyardDataConflictReport[];
+  warnings: string[];
 };
 
 export type ReportSummary = {
