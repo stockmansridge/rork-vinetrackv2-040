@@ -13,6 +13,7 @@ import type {
   JsonValue,
   MapsFile,
   MemberMappingReport,
+  Phase16CReportSummary,
   ProfileRecord,
   SourceSnapshot,
   TargetSnapshot,
@@ -424,6 +425,19 @@ export function buildVineyardDataTransformReport(v1: SourceSnapshot, v2: TargetS
   };
 }
 
+export function buildPhase16CSummary(report: VineyardDataTransformReport): Phase16CReportSummary {
+  return {
+    proposedRowsByTable: report.proposedRowsByTable,
+    skippedRowCount: report.skippedRows.length,
+    fallbackCreatedByCount: countFallbacksContaining(report, "created_by"),
+    fallbackCount: report.fallbackCount,
+    duplicateProposedRowIds: report.duplicateProposedRowIds,
+    duplicateProposedNaturalKeys: report.duplicateProposedNaturalKeys,
+    existingV2RowIdConflicts: report.existingV2RowIdConflicts,
+    existingV2NaturalKeyConflicts: report.existingV2NaturalKeyConflicts
+  };
+}
+
 type TransformMode = "records" | "buttonConfig";
 
 type VineyardDataTransformConfig = {
@@ -593,6 +607,11 @@ function countRowsByTable(rows: VineyardDataTransformReport["rows"]): Record<str
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.targetTable] = (counts[row.targetTable] ?? 0) + 1;
   return counts;
+}
+
+function countFallbacksContaining(report: VineyardDataTransformReport, needle: string): number {
+  return report.rows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0) +
+    report.skippedRows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0);
 }
 
 function findProposedRowIdDuplicates(rows: VineyardDataTransformReport["rows"]): VineyardDataConflictReport[] {

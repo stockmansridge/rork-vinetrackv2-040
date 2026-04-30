@@ -7,6 +7,7 @@ import {
   buildIdentityReport,
   buildInvitationReport,
   buildMemberReport,
+  buildPhase16CSummary,
   buildVineyardDataInventory,
   buildVineyardDataTransformReport,
   buildVineyardReport
@@ -114,23 +115,6 @@ async function main(): Promise<void> {
   if (warnings.length > 0) console.log(`${warnings.length} warning(s) written to report-summary.json.`);
 }
 
-function buildPhase16CSummary(report: VineyardDataTransformReport): Phase16CReportSummary {
-  return {
-    proposedRowsByTable: report.proposedRowsByTable,
-    skippedRowCount: report.skippedRows.length,
-    fallbackCreatedByCount: countFallbacksContaining(report, "created_by"),
-    fallbackCount: report.fallbackCount,
-    duplicateProposedRowIds: report.duplicateProposedRowIds,
-    duplicateProposedNaturalKeys: report.duplicateProposedNaturalKeys,
-    existingV2RowIdConflicts: report.existingV2RowIdConflicts,
-    existingV2NaturalKeyConflicts: report.existingV2NaturalKeyConflicts
-  };
-}
-
-function countFallbacksContaining(report: VineyardDataTransformReport, needle: string): number {
-  return report.rows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0) +
-    report.skippedRows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0);
-}
 
 main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
