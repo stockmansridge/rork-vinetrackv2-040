@@ -12,7 +12,7 @@ import {
   buildVineyardReport
 } from "./remap.js";
 import { writeJson } from "./report.js";
-import type { ReportSummary } from "./types.js";
+import type { Phase16CReportSummary, ReportSummary, VineyardDataTransformReport } from "./types.js";
 
 async function main(): Promise<void> {
   const config = loadConfig(process.argv.slice(2));
@@ -45,12 +45,21 @@ async function main(): Promise<void> {
     filesWritten.push(await writeJson(config.outDir, "dry-run-invitations.json", invitationReport));
   }
 
-  let vineyardDataTransformReport = null;
+  let vineyardDataTransformReport: VineyardDataTransformReport | null = null;
+  let phase16cSummary: Phase16CReportSummary | undefined;
   if (config.stage === "all") {
     const inventory = buildVineyardDataInventory(v1, config.vineyardId);
     vineyardDataTransformReport = buildVineyardDataTransformReport(v1, v2, maps, config.vineyardId);
+    phase16cSummary = buildPhase16CSummary(vineyardDataTransformReport);
     filesWritten.push(await writeJson(config.outDir, "vineyard-data-inventory.json", inventory));
-    filesWritten.push(await writeJson(config.outDir, "vineyard-data-proposed-v2-rows.json", vineyardDataTransformReport));
+    filesWritten.push(await writeJson(config.outDir, "vineyard-data-proposed-v2-rows.json", {
+      generatedAt: vineyardDataTransformReport.generatedAt,
+      sourceCount: vineyardDataTransformReport.sourceCount,
+      proposedRowCount: vineyardDataTransformReport.proposedRowCount,
+      proposedRowsByTable: vineyardDataTransformReport.proposedRowsByTable,
+      rows: vineyardDataTransformReport.rows
+    }));
+    filesWritten.push(await writeJson(config.outDir, "phase16c-transform-report.json", vineyardDataTransformReport));
   }
 
   for (const tableResult of [v1.profiles, v1.vineyards, v1.vineyardMembers, v1.invitations, v1.disclaimerAcceptances, v1.vineyardData, v2.profiles]) {
@@ -88,17 +97,39 @@ async function main(): Promise<void> {
       v1VineyardDataRows: v1.vineyardData.rows.length,
       proposedV2VineyardDataRows: vineyardDataTransformReport?.proposedRowCount ?? 0,
       vineyardDataTransformFallbacks: vineyardDataTransformReport?.fallbackCount ?? 0,
-      vineyardDataSkippedRows: vineyardDataTransformReport?.skippedRows.length ?? 0,
-      vineyardDataExistingRowIdConflicts: vineyardDataTransformReport?.existingV2RowIdConflicts.length ?? 0,
-      vineyardDataExistingNaturalKeyConflicts: vineyardDataTransformReport?.existingV2NaturalKeyConflicts.length ?? 0
+      vineyardDataSkippedRows: phase16cSummary?.skippedRowCount ?? 0,
+      vineyardDataFallbackCreatedByCount: phase16cSummary?.fallbackCreatedByCount ?? 0,
+      vineyardDataDuplicateProposedRowIds: phase16cSummary?.duplicateProposedRowIds.length ?? 0,
+      vineyardDataDuplicateNaturalKeys: phase16cSummary?.duplicateProposedNaturalKeys.length ?? 0,
+      vineyardDataExistingRowIdConflicts: phase16cSummary?.existingV2RowIdConflicts.length ?? 0,
+      vineyardDataExistingNaturalKeyConflicts: phase16cSummary?.existingV2NaturalKeyConflicts.length ?? 0
     },
     warnings,
-    schemaCoverage: v2.schemaCoverage
+    schemaCoverage: v2.schemaCoverage,
+    phase16c: phase16cSummary
   };
 
   filesWritten.push(await writeJson(config.outDir, "report-summary.json", summary));
-  console.log(`Phase 16B dry-run complete. Wrote ${filesWritten.length} files to migration/out.`);
+  console.log(`Phase 16C dry-run complete. Wrote ${filesWritten.length} files to migration/out.`);
   if (warnings.length > 0) console.log(`${warnings.length} warning(s) written to report-summary.json.`);
+}
+
+function buildPhase16CSummary(report: VineyardDataTransformReport): Phase16CReportSummary {
+  return {
+    proposedRowsByTable: report.proposedRowsByTable,
+    skippedRowCount: report.skippedRows.length,
+    fallbackCreatedByCount: countFallbacksContaining(report, "created_by"),
+    fallbackCount: report.fallbackCount,
+    duplicateProposedRowIds: report.duplicateProposedRowIds,
+    duplicateProposedNaturalKeys: report.duplicateProposedNaturalKeys,
+    existingV2RowIdConflicts: report.existingV2RowIdConflicts,
+    existingV2NaturalKeyConflicts: report.existingV2NaturalKeyConflicts
+  };
+}
+
+function countFallbacksContaining(report: VineyardDataTransformReport, needle: string): number {
+  return report.rows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0) +
+    report.skippedRows.reduce((count, row) => count + row.fallbacks.filter((fallback) => fallback.includes(needle)).length, 0);
 }
 
 main().catch((error: unknown) => {

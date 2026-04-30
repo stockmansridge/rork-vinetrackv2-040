@@ -268,6 +268,17 @@ export type MapsFile = {
   vineyardsById: Record<string, string>;
 };
 
+export type Phase16CReportSummary = {
+  proposedRowsByTable: Record<string, number>;
+  skippedRowCount: number;
+  fallbackCreatedByCount: number;
+  fallbackCount: number;
+  duplicateProposedRowIds: VineyardDataConflictReport[];
+  duplicateProposedNaturalKeys: VineyardDataConflictReport[];
+  existingV2RowIdConflicts: VineyardDataConflictReport[];
+  existingV2NaturalKeyConflicts: VineyardDataConflictReport[];
+};
+
 export type ReportSummary = {
   generatedAt: string;
   mode: "dry-run";
@@ -277,4 +288,5 @@ export type ReportSummary = {
   counts: Record<string, number>;
   warnings: string[];
   schemaCoverage?: SchemaCoverageReport;
+  phase16c?: Phase16CReportSummary;
 };
