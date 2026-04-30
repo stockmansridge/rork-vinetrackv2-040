@@ -33,79 +33,76 @@ struct NewBackendLoginView: View {
         ZStack {
             LoginVineyardBackground()
 
-            ScrollView {
-                VStack(spacing: 20) {
-                    header
+            GeometryReader { proxy in
+                let isCompactHeight = proxy.size.height < 760
+
+                VStack(spacing: isCompactHeight ? 8 : 12) {
+                    header(isCompactHeight: isCompactHeight)
                     featureChips
                     modePicker
-                    formCard
+                    formCard(isCompactHeight: isCompactHeight)
                     actionButton
                     dividerWithOr
                     appleSignInButton
                     footerLinks
                     if let errorMessage = auth.errorMessage {
                         Text(errorMessage)
-                            .font(.footnote.weight(.medium))
+                            .font(.caption.weight(.medium))
                             .foregroundStyle(.white)
                             .multilineTextAlignment(.center)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                             .background(.red.opacity(0.82), in: .rect(cornerRadius: 14))
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 54)
-                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, 18)
+                .padding(.top, isCompactHeight ? 10 : 22)
+                .padding(.bottom, isCompactHeight ? 10 : 18)
             }
-            .scrollIndicators(.hidden)
         }
         .sheet(isPresented: $showForgotPassword) {
             forgotPasswordSheet
         }
     }
 
-    private var header: some View {
-        VStack(spacing: 18) {
+    private func header(isCompactHeight: Bool) -> some View {
+        VStack(spacing: isCompactHeight ? 8 : 12) {
             Image("vinetrack_logo")
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 124, height: 124)
-                .clipShape(.rect(cornerRadius: 30))
+                .frame(width: isCompactHeight ? 82 : 102, height: isCompactHeight ? 82 : 102)
+                .clipShape(.rect(cornerRadius: isCompactHeight ? 22 : 26))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 30)
+                    RoundedRectangle(cornerRadius: isCompactHeight ? 22 : 26)
                         .stroke(.white.opacity(0.24), lineWidth: 1.2)
                 )
-                .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 12)
+                .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 8)
 
-            VStack(spacing: 10) {
+            VStack(spacing: isCompactHeight ? 4 : 6) {
                 Text("VineTrack")
-                    .font(.system(size: 58, weight: .heavy, design: .default))
+                    .font(.system(size: isCompactHeight ? 38 : 48, weight: .heavy, design: .default))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     .shadow(color: .black.opacity(0.28), radius: 2, x: 0, y: 2)
 
                 Text("Built by viticulturists to manage\n vineyard work, row by row.")
-                    .font(.title3.weight(.medium))
+                    .font(isCompactHeight ? .subheadline.weight(.medium) : .body.weight(.medium))
                     .foregroundStyle(.white.opacity(0.94))
                     .multilineTextAlignment(.center)
-                    .lineSpacing(4)
+                    .lineSpacing(isCompactHeight ? 2 : 3)
                     .shadow(color: .black.opacity(0.24), radius: 1, x: 0, y: 1)
             }
         }
-        .padding(.bottom, 2)
     }
 
     private var featureChips: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                LoginFeatureChip(title: "GPS Pins", systemImage: "mappin.circle.fill")
-                LoginFeatureChip(title: "Row Tracking", systemImage: "line.3.horizontal.decrease")
-                LoginFeatureChip(title: "Spray Records", systemImage: "leaf.fill")
-            }
+        HStack(spacing: 6) {
+            LoginFeatureChip(title: "GPS Pins", systemImage: "mappin.circle.fill")
+            LoginFeatureChip(title: "Row Tracking", systemImage: "line.3.horizontal.decrease")
+            LoginFeatureChip(title: "Spray Records", systemImage: "leaf.fill")
         }
-        .contentMargins(.horizontal, 0)
-        .scrollIndicators(.hidden)
     }
 
     private var modePicker: some View {
@@ -117,9 +114,9 @@ struct NewBackendLoginView: View {
                     }
                 } label: {
                     Text(m.rawValue)
-                        .font(.title3.weight(.bold))
+                        .font(.body.weight(.bold))
                         .frame(maxWidth: .infinity)
-                        .frame(height: 56)
+                        .frame(height: 42)
                         .foregroundStyle(mode == m ? .white : Color(red: 0.02, green: 0.22, blue: 0.10))
                         .background(mode == m ? Color(red: 0.01, green: 0.30, blue: 0.13) : .clear, in: .rect(cornerRadius: 15))
                 }
@@ -127,7 +124,7 @@ struct NewBackendLoginView: View {
                 .accessibilityAddTraits(mode == m ? .isSelected : [])
             }
         }
-        .padding(6)
+        .padding(5)
         .background(.white.opacity(0.94), in: .rect(cornerRadius: 20))
         .overlay(
             RoundedRectangle(cornerRadius: 20)
@@ -136,8 +133,8 @@ struct NewBackendLoginView: View {
         .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
     }
 
-    private var formCard: some View {
-        VStack(spacing: 14) {
+    private func formCard(isCompactHeight: Bool) -> some View {
+        VStack(spacing: isCompactHeight ? 8 : 10) {
             if mode == .signUp {
                 LoginField(
                     title: "Name",
@@ -165,7 +162,7 @@ struct NewBackendLoginView: View {
                 isSecure: true
             )
         }
-        .padding(16)
+        .padding(isCompactHeight ? 10 : 12)
         .background(.white.opacity(0.96), in: .rect(cornerRadius: 22))
         .overlay(
             RoundedRectangle(cornerRadius: 22)
@@ -192,10 +189,10 @@ struct NewBackendLoginView: View {
                     Text(mode == .signIn ? "Sign In" : "Create Account")
                 }
             }
-            .font(.title2.weight(.bold))
+            .font(.headline.weight(.bold))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 62)
+            .frame(height: 48)
             .background(
                 LinearGradient(
                     colors: [
@@ -205,7 +202,7 @@ struct NewBackendLoginView: View {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 ),
-                in: .rect(cornerRadius: 18)
+                in: .rect(cornerRadius: 15)
             )
             .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
             .opacity(auth.isLoading || !canSubmit ? 0.56 : 1)
@@ -215,12 +212,12 @@ struct NewBackendLoginView: View {
     }
 
     private var dividerWithOr: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             Rectangle()
                 .fill(.white.opacity(0.42))
                 .frame(height: 1)
             Text("or")
-                .font(.headline.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.white.opacity(0.9))
             Rectangle()
                 .fill(.white.opacity(0.42))
@@ -238,8 +235,8 @@ struct NewBackendLoginView: View {
             handleAppleResult(result)
         }
         .signInWithAppleButtonStyle(.black)
-        .frame(height: 58)
-        .clipShape(.rect(cornerRadius: 18))
+        .frame(height: 48)
+        .clipShape(.rect(cornerRadius: 15))
         .shadow(color: .black.opacity(0.25), radius: 14, x: 0, y: 8)
         .disabled(auth.isLoading)
     }
@@ -287,9 +284,8 @@ struct NewBackendLoginView: View {
                     resetLocalError = nil
                     showForgotPassword = true
                 }
-                .font(.title3.weight(.medium))
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(Color(red: 0.94, green: 0.92, blue: 0.72))
-                .padding(.top, 6)
             }
         }
     }
@@ -581,11 +577,13 @@ private struct LoginFeatureChip: View {
 
     var body: some View {
         Label(title, systemImage: systemImage)
-            .font(.subheadline.weight(.bold))
+            .font(.caption.weight(.bold))
             .foregroundStyle(.white)
             .lineLimit(1)
-            .padding(.horizontal, 12)
-            .frame(height: 42)
+            .minimumScaleFactor(0.72)
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity)
+            .frame(height: 34)
             .background(.white.opacity(0.10), in: .capsule)
             .overlay(
                 Capsule()
@@ -604,11 +602,11 @@ private struct LoginField: View {
     var isSecure: Bool = false
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Image(systemName: icon)
-                .font(.title3.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(Color(red: 0.02, green: 0.32, blue: 0.14))
-                .frame(width: 38, height: 38)
+                .frame(width: 32, height: 32)
                 .background(Color(red: 0.93, green: 0.97, blue: 0.91), in: .rect(cornerRadius: 10))
 
             Group {
@@ -618,7 +616,7 @@ private struct LoginField: View {
                     TextField(title, text: $text)
                 }
             }
-            .font(.title3)
+            .font(.body)
             .foregroundStyle(Color(red: 0.02, green: 0.20, blue: 0.10))
             .tint(Color(red: 0.02, green: 0.32, blue: 0.14))
             .textContentType(contentType)
@@ -626,9 +624,9 @@ private struct LoginField: View {
             .textInputAutocapitalization(autocapitalize ? .sentences : .never)
             .autocorrectionDisabled(!autocapitalize)
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 14)
-        .frame(minHeight: 62)
+        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 48)
         .background(.white, in: .rect(cornerRadius: 16))
         .overlay(
             RoundedRectangle(cornerRadius: 16)
