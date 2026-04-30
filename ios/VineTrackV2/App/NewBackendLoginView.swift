@@ -590,6 +590,11 @@ private struct LoginField: View {
     var autocapitalize: Bool = true
     var isSecure: Bool = false
 
+    private var fieldPrompt: Text {
+        Text(title)
+            .foregroundStyle(Color(.secondaryLabel))
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
@@ -600,9 +605,9 @@ private struct LoginField: View {
 
             Group {
                 if isSecure {
-                    SecureField(title, text: $text)
+                    SecureField(title, text: $text, prompt: fieldPrompt)
                 } else {
-                    TextField(title, text: $text)
+                    TextField(title, text: $text, prompt: fieldPrompt)
                 }
             }
             .font(.body)
