@@ -479,7 +479,7 @@ struct NewBackendLoginView: View {
     }
 }
 
-private struct LoginVineyardBackground: View {
+struct LoginVineyardBackground: View {
     var body: some View {
         ZStack {
             LinearGradient(
@@ -516,7 +516,7 @@ private struct LoginVineyardBackground: View {
     }
 }
 
-private struct VineyardSweepShape: Shape {
+struct VineyardSweepShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.move(to: CGPoint(x: -rect.width * 0.12, y: rect.height * 0.34))
@@ -536,7 +536,7 @@ private struct VineyardSweepShape: Shape {
     }
 }
 
-private struct VineyardRowsShape: Shape {
+struct VineyardRowsShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         for index in 0..<10 {

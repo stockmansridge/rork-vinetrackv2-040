@@ -178,7 +178,7 @@ private struct NewHomeTabView: View {
                 }
                 .padding(.vertical)
             }
-            .background(VineyardTheme.appBackground)
+            .background(LoginVineyardBackground())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showQuickPin) {
