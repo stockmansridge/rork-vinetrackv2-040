@@ -53,25 +53,42 @@ export const vineyardDataTypeToEntityName: Record<string, string> = {
   paddocks: "paddocks",
   trips: "trips",
   spray_records: "sprayRecords",
+  sprayRecords: "sprayRecords",
   saved_chemicals: "savedChemicals",
+  savedChemicals: "savedChemicals",
   saved_spray_presets: "savedSprayPresets",
+  savedSprayPresets: "savedSprayPresets",
   saved_equipment_options: "savedEquipmentOptions",
+  savedEquipmentOptions: "savedEquipmentOptions",
   spray_equipment: "sprayEquipment",
+  sprayEquipment: "sprayEquipment",
   tractors: "tractors",
   fuel_purchases: "fuelPurchases",
+  fuelPurchases: "fuelPurchases",
   operator_categories: "operatorCategories",
+  operatorCategories: "operatorCategories",
   button_templates: "buttonTemplates",
+  buttonTemplates: "buttonTemplates",
   repair_buttons: "repairButtons",
+  repairButtons: "repairButtons",
   growth_buttons: "growthButtons",
+  growthButtons: "growthButtons",
   custom_patterns: "savedCustomPatterns",
   saved_custom_patterns: "savedCustomPatterns",
+  savedCustomPatterns: "savedCustomPatterns",
   settings: "settings",
   yield_sessions: "yieldSessions",
+  yieldSessions: "yieldSessions",
   damage_records: "damageRecords",
+  damageRecords: "damageRecords",
   historical_yield_records: "historicalYieldRecords",
+  historicalYieldRecords: "historicalYieldRecords",
   maintenance_logs: "maintenanceLogs",
+  maintenanceLogs: "maintenanceLogs",
   work_tasks: "workTasks",
-  grape_varieties: "grapeVarieties"
+  workTasks: "workTasks",
+  grape_varieties: "grapeVarieties",
+  grapeVarieties: "grapeVarieties"
 };
 
 export function normalizeEmail(value: unknown): string | null {
@@ -345,9 +362,9 @@ function duplicateEmails(entries: Array<{ id: string; email: string | null }>): 
   return Array.from(grouped.entries()).filter(([, ids]) => ids.length > 1).map(([email, ids]) => ({ email, ids }));
 }
 
-function filterByVineyard<T extends JsonRecord & { vineyard_id?: string | null }>(rows: T[], vineyardId?: string): T[] {
+function filterByVineyard<T extends JsonRecord & { vineyard_id?: string | null; vineyardId?: string | null }>(rows: T[], vineyardId?: string): T[] {
   if (!vineyardId) return rows;
-  return rows.filter((row) => row.vineyard_id === vineyardId || row.id === vineyardId);
+  return rows.filter((row) => row.vineyard_id === vineyardId || row.vineyardId === vineyardId || row.id === vineyardId);
 }
 
 function asNullableString(value: unknown): string | null {
@@ -355,8 +372,7 @@ function asNullableString(value: unknown): string | null {
 }
 
 function extractVineyardPayload(row: JsonRecord): { value: unknown; kind: VineyardDataPayloadKind; parseError?: string } {
-  const candidates = [row.data, row.payload, row.json, row.value];
-  const candidate = candidates.find((value) => value !== undefined);
+  const candidate = row.data !== undefined ? row.data : row.payload ?? row.json ?? row.value;
   if (candidate === undefined) return { value: null, kind: "null" };
   if (typeof candidate !== "string") return { value: candidate, kind: payloadKind(candidate, false) };
 
@@ -383,8 +399,10 @@ function payloadKind(value: unknown, parsedFromString: boolean): VineyardDataPay
 
 function normalizeDataType(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const normalized = value
-    .trim()
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (vineyardDataTypeToEntityName[trimmed]) return trimmed;
+  const normalized = trimmed
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
@@ -421,7 +439,7 @@ function countPayloadRecords(value: unknown, mappedEntityName: string | null): n
   const record = value as JsonRecord;
   const list = findRecordList(record, mappedEntityName);
   if (list) return list.length;
-  return countRecordObject(record);
+  return countRecordObject(record, mappedEntityName);
 }
 
 function findRecordList(record: JsonRecord, mappedEntityName: string | null): unknown[] | null {
@@ -439,7 +457,7 @@ function findRecordList(record: JsonRecord, mappedEntityName: string | null): un
 }
 
 function preferredListKeys(mappedEntityName: string | null): string[] {
-  const keys = [
+  const commonKeys = [
     "items",
     "records",
     "data",
@@ -456,18 +474,41 @@ function preferredListKeys(mappedEntityName: string | null): string[] {
     "tasks",
     "purchases"
   ];
+  const entityKeys: Record<string, string[]> = {
+    repairButtons: ["repairButtons", "repair_buttons", "buttons", "repair_buttons_data"],
+    growthButtons: ["growthButtons", "growth_buttons", "buttons", "growth_buttons_data"],
+    buttonTemplates: ["buttonTemplates", "button_templates", "templates", "buttons"],
+    savedCustomPatterns: ["savedCustomPatterns", "saved_custom_patterns", "custom_patterns", "patterns"],
+    savedChemicals: ["savedChemicals", "saved_chemicals", "chemicals"],
+    savedSprayPresets: ["savedSprayPresets", "saved_spray_presets", "presets"],
+    savedEquipmentOptions: ["savedEquipmentOptions", "saved_equipment_options", "equipmentOptions", "equipment_options"],
+    sprayEquipment: ["sprayEquipment", "spray_equipment", "equipment"],
+    fuelPurchases: ["fuelPurchases", "fuel_purchases", "purchases"],
+    operatorCategories: ["operatorCategories", "operator_categories", "categories"],
+    yieldSessions: ["yieldSessions", "yield_sessions", "sessions"],
+    damageRecords: ["damageRecords", "damage_records", "records"],
+    historicalYieldRecords: ["historicalYieldRecords", "historical_yield_records", "records"],
+    maintenanceLogs: ["maintenanceLogs", "maintenance_logs", "logs"],
+    workTasks: ["workTasks", "work_tasks", "tasks"],
+    grapeVarieties: ["grapeVarieties", "grape_varieties", "varieties"]
+  };
 
-  if (!mappedEntityName) return keys;
-  return [mappedEntityName, toSnakeCase(mappedEntityName), ...keys];
+  if (!mappedEntityName) return commonKeys;
+  return Array.from(new Set([mappedEntityName, toSnakeCase(mappedEntityName), ...(entityKeys[mappedEntityName] ?? []), ...commonKeys]));
 }
 
-function countRecordObject(record: JsonRecord): number {
+function countRecordObject(record: JsonRecord, mappedEntityName: string | null): number {
   const entries = Object.entries(record);
   if (entries.length === 0) return 0;
+  if (mappedEntityName && hasEntityRecordShape(record)) return 1;
   const objectValueCount = entries.filter(([, value]) => value !== null && typeof value === "object" && !Array.isArray(value)).length;
   const idLikeKeyCount = entries.filter(([key]) => key.length >= 20 || isUuid(key)).length;
   if (objectValueCount === entries.length || idLikeKeyCount > 0) return entries.length;
   return 1;
+}
+
+function hasEntityRecordShape(record: JsonRecord): boolean {
+  return typeof record.id === "string" || typeof record.created_at === "string" || typeof record.updated_at === "string" || typeof record.createdAt === "string" || typeof record.updatedAt === "string";
 }
 
 function toSnakeCase(value: string): string {
