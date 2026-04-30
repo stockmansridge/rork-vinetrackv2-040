@@ -169,7 +169,6 @@ struct SprayCalculatorView: View {
                     growthStageSection
                     equipmentSelection
                     waterRateSection
-                    irrigationDataSection
                     chemicalLinesSection
                     notesSection
                     actionButtons
@@ -537,63 +536,6 @@ struct SprayCalculatorView: View {
         }
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(.rect(cornerRadius: 10))
-    }
-
-    private var irrigationDataSection: some View {
-        let paddocksWithIrrigation = selectedPaddocks.filter { $0.litresPerHaPerHour != nil }
-        return Group {
-            if !paddocksWithIrrigation.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionHeader(title: "Irrigation Data", icon: "drop.circle.fill")
-                    Text("Based on dripper spacing & flow rates")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    VStack(spacing: 0) {
-                        ForEach(paddocksWithIrrigation) { paddock in
-                            if let lPerHaHr = paddock.litresPerHaPerHour,
-                               let mlPerHaHr = paddock.mlPerHaPerHour,
-                               let mmHr = paddock.mmPerHour {
-                                VStack(spacing: 8) {
-                                    HStack {
-                                        Text(paddock.name)
-                                            .font(.subheadline.weight(.semibold))
-                                        Spacer()
-                                    }
-                                    HStack(spacing: 16) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("L/ha/hr").font(.caption2).foregroundStyle(.secondary)
-                                            Text(String(format: "%.0f", lPerHaHr))
-                                                .font(.title3.bold())
-                                                .foregroundStyle(.blue)
-                                        }
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("ML/ha/hr").font(.caption2).foregroundStyle(.secondary)
-                                            Text(String(format: "%.4f", mlPerHaHr))
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(.blue)
-                                        }
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("mm/hr").font(.caption2).foregroundStyle(.secondary)
-                                            Text(String(format: "%.2f", mmHr))
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(.teal)
-                                        }
-                                        Spacer()
-                                    }
-                                }
-                                .padding(12)
-                                if paddock.id != paddocksWithIrrigation.last?.id {
-                                    Divider().padding(.leading, 12)
-                                }
-                            }
-                        }
-                    }
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(.rect(cornerRadius: 10))
-                }
-            }
-        }
     }
 
     private var equipmentSelection: some View {
