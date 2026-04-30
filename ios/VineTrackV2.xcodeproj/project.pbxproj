@@ -419,6 +419,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "VineTrackV2-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = VineTrack;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "VineTrack uses the camera to attach photos to vineyard pins, maintenance logs, and observations.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "VineTrack uses background location only while an active trip is running to record tractor paths and row coverage when the screen is locked or the app is in the background.";
@@ -459,6 +460,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "VineTrackV2-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = VineTrack;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "VineTrack uses the camera to attach photos to vineyard pins, maintenance logs, and observations.";
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "VineTrack uses background location only while an active trip is running to record tractor paths and row coverage when the screen is locked or the app is in the background.";
