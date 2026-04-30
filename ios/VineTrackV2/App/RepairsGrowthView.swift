@@ -17,6 +17,8 @@ struct RepairsGrowthView: View {
     @State private var pinToast: PinDroppedToastInfo?
     @State private var pendingPhotoPinId: UUID?
     @State private var showPhotoPicker: Bool = false
+    @State private var showAutoPhotoConfirm: Bool = false
+    @State private var pendingShowPicker: Bool = false
 
     init(initial: Tab = .repairs) {
         _selection = State(initialValue: initial)
@@ -99,6 +101,25 @@ struct RepairsGrowthView: View {
                 attachPhoto(data: data)
             }
             .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showAutoPhotoConfirm, onDismiss: {
+            if pendingShowPicker {
+                pendingShowPicker = false
+                showPhotoPicker = true
+            } else {
+                pendingPhotoPinId = nil
+            }
+        }) {
+            AutoPhotoConfirmSheet(
+                onConfirm: {
+                    pendingShowPicker = true
+                    showAutoPhotoConfirm = false
+                },
+                onCancel: {
+                    pendingShowPicker = false
+                    showAutoPhotoConfirm = false
+                }
+            )
         }
     }
 
@@ -300,7 +321,7 @@ struct RepairsGrowthView: View {
         showPinToast(title: "\(button.name) pin dropped", subtitle: "\(sideLabel) side")
         if store.settings.autoPhotoPrompt {
             pendingPhotoPinId = createdPin.id
-            showPhotoPicker = true
+            showAutoPhotoConfirm = true
         }
     }
 
@@ -328,7 +349,7 @@ struct RepairsGrowthView: View {
         showPinToast(title: "Growth stage recorded", subtitle: "EL \(stage.code) \u{2022} \(stage.description)")
         if store.settings.autoPhotoPrompt {
             pendingPhotoPinId = createdPin.id
-            showPhotoPicker = true
+            showAutoPhotoConfirm = true
         }
     }
 

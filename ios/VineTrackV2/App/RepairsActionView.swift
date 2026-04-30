@@ -12,6 +12,8 @@ struct RepairsActionView: View {
     @State private var feedbackKind: VineyardBadgeKind = .success
     @State private var pendingPhotoPinId: UUID?
     @State private var showPhotoPicker: Bool = false
+    @State private var showAutoPhotoConfirm: Bool = false
+    @State private var pendingShowPicker: Bool = false
 
     private var canCreate: Bool { accessControl.canCreateOperationalRecords }
     private var canEdit: Bool { accessControl.canChangeSettings }
@@ -81,6 +83,25 @@ struct RepairsActionView: View {
             }
             .ignoresSafeArea()
         }
+        .sheet(isPresented: $showAutoPhotoConfirm, onDismiss: {
+            if pendingShowPicker {
+                pendingShowPicker = false
+                showPhotoPicker = true
+            } else {
+                pendingPhotoPinId = nil
+            }
+        }) {
+            AutoPhotoConfirmSheet(
+                onConfirm: {
+                    pendingShowPicker = true
+                    showAutoPhotoConfirm = false
+                },
+                onCancel: {
+                    pendingShowPicker = false
+                    showAutoPhotoConfirm = false
+                }
+            )
+        }
     }
 
     private func attachPhoto(data: Data?) {
@@ -110,7 +131,7 @@ struct RepairsActionView: View {
         showFeedback("Pin: \(button.name) (\(side == .left ? "L" : "R"))", kind: .success)
         if store.settings.autoPhotoPrompt, let pin = createdPin {
             pendingPhotoPinId = pin.id
-            showPhotoPicker = true
+            showAutoPhotoConfirm = true
         }
     }
 

@@ -15,6 +15,8 @@ struct GrowthObservationActionView: View {
     @State private var feedbackKind: VineyardBadgeKind = .success
     @State private var pendingPhotoPinId: UUID?
     @State private var showPhotoPicker: Bool = false
+    @State private var showAutoPhotoConfirm: Bool = false
+    @State private var pendingShowPicker: Bool = false
 
     private var canCreate: Bool { accessControl.canCreateOperationalRecords }
     private var canEdit: Bool { accessControl.canChangeSettings }
@@ -84,6 +86,25 @@ struct GrowthObservationActionView: View {
                 attachPhoto(data: data)
             }
             .ignoresSafeArea()
+        }
+        .sheet(isPresented: $showAutoPhotoConfirm, onDismiss: {
+            if pendingShowPicker {
+                pendingShowPicker = false
+                showPhotoPicker = true
+            } else {
+                pendingPhotoPinId = nil
+            }
+        }) {
+            AutoPhotoConfirmSheet(
+                onConfirm: {
+                    pendingShowPicker = true
+                    showAutoPhotoConfirm = false
+                },
+                onCancel: {
+                    pendingShowPicker = false
+                    showAutoPhotoConfirm = false
+                }
+            )
         }
     }
 
@@ -199,7 +220,7 @@ struct GrowthObservationActionView: View {
         showFeedback("Pin: \(button.name) (\(side == .left ? "L" : "R"))", kind: .success)
         if store.settings.autoPhotoPrompt, let pin = createdPin {
             pendingPhotoPinId = pin.id
-            showPhotoPicker = true
+            showAutoPhotoConfirm = true
         }
     }
 
@@ -223,7 +244,7 @@ struct GrowthObservationActionView: View {
         showFeedback("Growth pin: EL \(stage.code)", kind: .success)
         if store.settings.autoPhotoPrompt, let pin = createdPin {
             pendingPhotoPinId = pin.id
-            showPhotoPicker = true
+            showAutoPhotoConfirm = true
         }
     }
 
