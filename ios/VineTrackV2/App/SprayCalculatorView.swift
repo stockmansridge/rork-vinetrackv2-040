@@ -57,6 +57,7 @@ struct SprayCalculatorView: View {
     // UI
     @State private var isPaddocksExpanded: Bool = true
     @State private var isEquipmentExpanded: Bool = true
+    @State private var showAddEquipment: Bool = false
     @State private var calculationResult: SprayCalculationResult?
     @State private var showResults: Bool = false
     @State private var showSummary: Bool = false
@@ -219,6 +220,9 @@ struct SprayCalculatorView: View {
                         onContinue: summaryMode == .readyToStart ? { finalizeStartFromMixSummary() } : nil
                     )
                 }
+            }
+            .sheet(isPresented: $showAddEquipment) {
+                EquipmentFormSheet(equipment: nil)
             }
             .sheet(isPresented: $showAddChemicalToList) {
                 EditSavedChemicalSheet(chemical: nil)
@@ -613,16 +617,37 @@ struct SprayCalculatorView: View {
                         .rotationEffect(.degrees(isEquipmentExpanded ? 90 : 0))
                 }
             }
+            .overlay(alignment: .trailing) {
+                Button {
+                    showAddEquipment = true
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(VineyardTheme.olive)
+                        .padding(.trailing, 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add Equipment")
+            }
 
             if isEquipmentExpanded {
                 VStack(spacing: 0) {
                     if store.sprayEquipment.isEmpty {
-                        Text("No equipment configured — add one in Equipment Management")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
+                        Button {
+                            showAddEquipment = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(VineyardTheme.olive)
+                                Text("Add Equipment")
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                            }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                     ForEach(store.sprayEquipment) { item in
                         let isSelected = selectedEquipmentId == item.id
