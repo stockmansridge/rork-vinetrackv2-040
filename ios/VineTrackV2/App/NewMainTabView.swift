@@ -138,6 +138,8 @@ private struct NewHomeTabView: View {
     @State private var showTripChoice: Bool = false
     @State private var showStartTrip: Bool = false
     @State private var showSpraySetup: Bool = false
+    @State private var showSetupWizard: Bool = false
+    @AppStorage("setupWizardEnabled") private var setupWizardEnabled: Bool = true
     #if DEBUG
     @State private var showBackendDiagnostic: Bool = false
     @State private var showStoreDiagnostic: Bool = false
@@ -149,6 +151,9 @@ private struct NewHomeTabView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     titleHeader
+                    if shouldShowSetupWizard {
+                        setupWizardCard
+                    }
                     if tripTracking.activeTrip != nil {
                         Button {
                             selectedTab = 2
@@ -198,6 +203,9 @@ private struct NewHomeTabView: View {
             .sheet(isPresented: $showSpraySetup) {
                 SprayTripSetupSheet()
             }
+            .sheet(isPresented: $showSetupWizard) {
+                SetupWizardView()
+            }
             #if DEBUG
             .sheet(isPresented: $showBackendDiagnostic) {
                 BackendDiagnosticHostView()
@@ -207,6 +215,70 @@ private struct NewHomeTabView: View {
             }
             #endif
         }
+    }
+
+    // MARK: Setup Wizard
+
+    private var shouldShowSetupWizard: Bool {
+        guard setupWizardEnabled else { return false }
+        guard accessControl.canChangeSettings else { return false }
+        let hasBlock = !store.paddocks.isEmpty
+        let hasTractor = !store.tractors.isEmpty
+        let hasRig = !store.sprayEquipment.isEmpty
+        return !(hasBlock && hasTractor && hasRig)
+    }
+
+    private var setupWizardCard: some View {
+        Button {
+            showSetupWizard = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 48, height: 48)
+                    Image(systemName: "sparkles")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Setup Wizard")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(setupWizardSubtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(2)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(14)
+            .background(
+                LinearGradient(
+                    colors: [VineyardTheme.leafGreen, VineyardTheme.darkGreen],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: .rect(cornerRadius: 14)
+            )
+            .shadow(color: VineyardTheme.leafGreen.opacity(0.25), radius: 4, y: 2)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+    }
+
+    private var setupWizardSubtitle: String {
+        var remaining: [String] = []
+        if store.paddocks.isEmpty { remaining.append("block") }
+        if store.tractors.isEmpty { remaining.append("tractor") }
+        if store.sprayEquipment.isEmpty { remaining.append("spray rig") }
+        if remaining.isEmpty {
+            return "All set — tap to review"
+        }
+        return "Add a " + remaining.joined(separator: ", ") + " to get started"
     }
 
     // MARK: Header
