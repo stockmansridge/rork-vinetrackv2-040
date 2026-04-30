@@ -179,7 +179,53 @@ final class MigratedDataStore {
         buttonTemplates = persistence.load(key: Keys.buttonTemplates) ?? []
         grapeVarieties = persistence.load(key: Keys.grapeVarieties) ?? []
 
+        deduplicateManagementCollections()
+
         reloadCurrentVineyardData()
+    }
+
+    /// Removes duplicate rows accumulated by a previous bug in the per-vineyard
+    /// save functions. Idempotent and cheap once the data is clean.
+    private func deduplicateManagementCollections() {
+        let originalGrape = grapeVarieties.count
+        let originalOps = operatorCategories.count
+        let originalTemplates = buttonTemplates.count
+        let originalTractors = tractors.count
+        let originalFuel = fuelPurchases.count
+
+        grapeVarieties = Self.dedupById(grapeVarieties) { $0.id }
+        operatorCategories = Self.dedupById(operatorCategories) { $0.id }
+        buttonTemplates = Self.dedupById(buttonTemplates) { $0.id }
+        tractors = Self.dedupById(tractors) { $0.id }
+        fuelPurchases = Self.dedupById(fuelPurchases) { $0.id }
+
+        if grapeVarieties.count != originalGrape {
+            persistence.save(grapeVarieties, key: Keys.grapeVarieties)
+        }
+        if operatorCategories.count != originalOps {
+            persistence.save(operatorCategories, key: Keys.operatorCategories)
+        }
+        if buttonTemplates.count != originalTemplates {
+            persistence.save(buttonTemplates, key: Keys.buttonTemplates)
+        }
+        if tractors.count != originalTractors {
+            persistence.save(tractors, key: Keys.tractors)
+        }
+        if fuelPurchases.count != originalFuel {
+            persistence.save(fuelPurchases, key: Keys.fuelPurchases)
+        }
+    }
+
+    private static func dedupById<T>(_ items: [T], id: (T) -> UUID) -> [T] {
+        var seen = Set<UUID>()
+        var result: [T] = []
+        result.reserveCapacity(items.count)
+        for item in items {
+            if seen.insert(id(item)).inserted {
+                result.append(item)
+            }
+        }
+        return result
     }
 
     /// Reload all per-vineyard scoped collections from disk for the currently selected vineyard.

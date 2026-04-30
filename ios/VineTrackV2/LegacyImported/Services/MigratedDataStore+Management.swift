@@ -78,7 +78,7 @@ extension MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var all: [Tractor] = persistenceStore.load(key: MgmtKeys.tractors) ?? []
         all.removeAll { $0.vineyardId == vineyardId }
-        all.append(contentsOf: tractors)
+        all.append(contentsOf: tractors.filter { $0.vineyardId == vineyardId })
         persistenceStore.save(all, key: MgmtKeys.tractors)
     }
 
@@ -132,7 +132,7 @@ extension MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var all: [FuelPurchase] = persistenceStore.load(key: MgmtKeys.fuelPurchases) ?? []
         all.removeAll { $0.vineyardId == vineyardId }
-        all.append(contentsOf: fuelPurchases)
+        all.append(contentsOf: fuelPurchases.filter { $0.vineyardId == vineyardId })
         persistenceStore.save(all, key: MgmtKeys.fuelPurchases)
     }
 
@@ -186,7 +186,7 @@ extension MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var all: [OperatorCategory] = persistenceStore.load(key: MgmtKeys.operatorCategories) ?? []
         all.removeAll { $0.vineyardId == vineyardId }
-        all.append(contentsOf: operatorCategories)
+        all.append(contentsOf: operatorCategories.filter { $0.vineyardId == vineyardId })
         persistenceStore.save(all, key: MgmtKeys.operatorCategories)
     }
 
@@ -292,7 +292,7 @@ extension MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var all: [GrapeVariety] = persistenceStore.load(key: MgmtKeys.grapeVarieties) ?? []
         all.removeAll { $0.vineyardId == vineyardId }
-        all.append(contentsOf: grapeVarieties)
+        all.append(contentsOf: grapeVarieties.filter { $0.vineyardId == vineyardId })
         persistenceStore.save(all, key: MgmtKeys.grapeVarieties)
     }
 
@@ -321,7 +321,7 @@ extension MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var all: [ButtonTemplate] = persistenceStore.load(key: MgmtKeys.buttonTemplates) ?? []
         all.removeAll { $0.vineyardId == vineyardId }
-        all.append(contentsOf: buttonTemplates)
+        all.append(contentsOf: buttonTemplates.filter { $0.vineyardId == vineyardId })
         persistenceStore.save(all, key: MgmtKeys.buttonTemplates)
     }
 
