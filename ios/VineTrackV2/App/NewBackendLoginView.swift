@@ -173,6 +173,7 @@ struct NewBackendLoginView: View {
 
     private var actionButton: some View {
         Button {
+            guard !auth.isLoading, canSubmit else { return }
             Task {
                 switch mode {
                 case .signIn:
@@ -193,11 +194,10 @@ struct NewBackendLoginView: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .background(Color.blue, in: .rect(cornerRadius: 15))
+            .background(Color(uiColor: .systemBlue), in: .rect(cornerRadius: 15))
             .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
         }
         .buttonStyle(.plain)
-        .disabled(auth.isLoading || !canSubmit)
     }
 
     private var dividerWithOr: some View {
