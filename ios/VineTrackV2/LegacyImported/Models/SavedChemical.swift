@@ -164,7 +164,7 @@ nonisolated struct SavedChemical: Codable, Identifiable, Sendable, Hashable {
         activeIngredient = try container.decodeIfPresent(String.self, forKey: .activeIngredient) ?? ""
         rates = try container.decodeIfPresent([ChemicalRate].self, forKey: .rates) ?? []
         purchase = try container.decodeIfPresent(ChemicalPurchase.self, forKey: .purchase)
-        labelURL = try container.decodeIfPresent(String.self, forKey: .labelURL) ?? ""
+        labelURL = LabelURLValidator.sanitize(try container.decodeIfPresent(String.self, forKey: .labelURL) ?? "")
         modeOfAction = try container.decodeIfPresent(String.self, forKey: .modeOfAction) ?? ""
     }
 }

@@ -136,7 +136,7 @@ extension BackendSavedChemical {
             activeIngredient: activeIngredient ?? "",
             rates: rates ?? [],
             purchase: purchase,
-            labelURL: labelUrl ?? "",
+            labelURL: LabelURLValidator.sanitize(labelUrl ?? ""),
             modeOfAction: modeOfAction ?? ""
         )
     }

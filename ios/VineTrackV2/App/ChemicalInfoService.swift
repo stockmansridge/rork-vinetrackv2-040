@@ -1,5 +1,29 @@
 import Foundation
 
+nonisolated enum LabelURLValidator {
+    static func sanitize(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard let url = URL(string: trimmed), let host = url.host?.lowercased() else { return "" }
+        let placeholderHosts: Set<String> = [
+            "example.com", "www.example.com",
+            "example.org", "www.example.org",
+            "example.net", "www.example.net",
+            "placeholder.com", "www.placeholder.com",
+            "yourdomain.com", "www.yourdomain.com",
+            "domain.com", "www.domain.com",
+            "manufacturer.com", "www.manufacturer.com",
+            "website.com", "www.website.com",
+            "company.com", "www.company.com",
+            "test.com", "www.test.com",
+            "localhost"
+        ]
+        if placeholderHosts.contains(host) { return "" }
+        if !host.contains(".") { return "" }
+        return trimmed
+    }
+}
+
 nonisolated struct ChemicalRateInfo: Codable, Sendable, Hashable {
     let label: String
     let value: Double

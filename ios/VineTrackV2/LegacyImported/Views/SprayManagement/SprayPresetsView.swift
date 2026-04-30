@@ -471,7 +471,7 @@ struct EditSavedChemicalSheet: View {
             if activeIngredient.isEmpty { activeIngredient = info.activeIngredient }
             if manufacturer.isEmpty { manufacturer = info.brand }
             if chemicalGroup.isEmpty { chemicalGroup = info.chemicalGroup }
-            if labelURL.isEmpty { labelURL = info.labelURL }
+            if labelURL.isEmpty { labelURL = LabelURLValidator.sanitize(info.labelURL) }
             if let moa = info.modeOfAction, modeOfAction.isEmpty { modeOfAction = moa }
             if use.isEmpty { use = info.primaryUse }
             unit = info.defaultUnit

@@ -86,7 +86,7 @@ function buildInfoPrompt(productName: string, country: string): {
     ? ` IMPORTANT: The vineyard is located in ${country}. You MUST use the ${country}-registered version of this product. Provide ${country}-specific brand name, label rates, label URL, and regulatory data. If the product has a different brand name in ${country}, use the ${country} brand name.`
     : "";
   const user = `Provide details for the agricultural product "${productName}".${countryContext} Find the closest match if exact name not found. Include recommended application rates for vineyard/viticultural use where available. Return as JSON:
-{"activeIngredient":"active ingredient(s)","brand":"manufacturer","chemicalGroup":"group classification","labelURL":"URL to label/SDS or empty string","primaryUse":"primary use in vineyard e.g. Downy Mildew control, Nitrogen fertiliser, Botrytis prevention","formType":"liquid or solid","modeOfAction":"MOA classification - REQUIRED for all crop protection products. Use the official resistance management code with a short name, e.g. \"11 (QoI / Strobilurin)\", \"3 (DMI / Triazole)\", \"M5 (Multi-site / Chlorothalonil)\", \"4A (Neonicotinoid)\". Use FRAC for fungicides, HRAC for herbicides, IRAC for insecticides/miticides. Always look up and provide MOA — do NOT leave blank for crop protection products. Only return empty string for pure biostimulants, fertilisers, adjuvants, or surfactants where MOA does not apply.","ratesPerHectare":[{"label":"Standard rate","value":1.5}],"ratesPer100L":[{"label":"Standard rate","value":0.15}]}
+{"activeIngredient":"active ingredient(s)","brand":"manufacturer","chemicalGroup":"group classification","labelURL":"Direct URL to the official product label or SDS PDF on the manufacturer's or registrant's website. MUST be a real, verifiable URL you are confident exists. Return an empty string if you do not know the exact URL. NEVER use placeholder, example, or fabricated URLs (e.g. example.com, example.org, placeholder.com, yourdomain.com, manufacturer.com). If unsure, return an empty string.","primaryUse":"primary use in vineyard e.g. Downy Mildew control, Nitrogen fertiliser, Botrytis prevention","formType":"liquid or solid","modeOfAction":"MOA classification - REQUIRED for all crop protection products. Use the official resistance management code with a short name, e.g. \"11 (QoI / Strobilurin)\", \"3 (DMI / Triazole)\", \"M5 (Multi-site / Chlorothalonil)\", \"4A (Neonicotinoid)\". Use FRAC for fungicides, HRAC for herbicides, IRAC for insecticides/miticides. Always look up and provide MOA — do NOT leave blank for crop protection products. Only return empty string for pure biostimulants, fertilisers, adjuvants, or surfactants where MOA does not apply.","ratesPerHectare":[{"label":"Standard rate","value":1.5}],"ratesPer100L":[{"label":"Standard rate","value":0.15}]}
 IMPORTANT: The "formType" field must be either "liquid" or "solid". Determine this from the product's physical form. Liquid products (EC, SC, SL, SE, EW, flowables, suspension concentrates, emulsifiable concentrates, soluble liquids) should be "liquid". Solid products (WG, WDG, WP, DF, granules, wettable powders, dry flowables, water dispersible granules) should be "solid".
 The ratesPerHectare array should contain recommended rates per hectare. For liquid products, values must be in Litres (L). For solid products, values must be in Kilograms (Kg). The ratesPer100L array should contain recommended rates per 100 litres of water, using the same unit convention. Include multiple rates if the label specifies different rates for different conditions (e.g. low/medium/high disease pressure). If rates are not available for a basis, return an empty array.`;
   return { system, user };
@@ -150,6 +150,30 @@ function parseRateInfoArray(value: any): { label: string; value: number }[] {
   return out;
 }
 
+function isPlaceholderURL(url: string): boolean {
+  if (!url) return true;
+  let host = "";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  const bad = [
+    "example.com",
+    "example.org",
+    "example.net",
+    "placeholder.com",
+    "yourdomain.com",
+    "domain.com",
+    "manufacturer.com",
+    "website.com",
+    "company.com",
+    "test.com",
+    "localhost",
+  ];
+  return bad.some((b) => host === b || host.endsWith("." + b));
+}
+
 function normalizeInfo(parsed: any): any {
   const activeIngredient = String(
     parsed?.activeIngredient ?? parsed?.active_ingredient ?? "",
@@ -158,9 +182,10 @@ function normalizeInfo(parsed: any): any {
   const chemicalGroup = String(
     parsed?.chemicalGroup ?? parsed?.chemical_group ?? "",
   );
-  const labelURL = String(
+  const rawLabelURL = String(
     parsed?.labelURL ?? parsed?.label_url ?? parsed?.labelUrl ?? "",
-  );
+  ).trim();
+  const labelURL = isPlaceholderURL(rawLabelURL) ? "" : rawLabelURL;
   const primaryUse = String(parsed?.primaryUse ?? parsed?.primary_use ?? "");
   const formType = parsed?.formType ?? parsed?.form_type ?? null;
   const modeOfAction = parsed?.modeOfAction ?? parsed?.mode_of_action ?? null;
