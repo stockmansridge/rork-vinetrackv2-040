@@ -582,7 +582,7 @@ private struct NewHomeTabView: View {
                         .buttonStyle(.plain)
                     }
                     NavigationLink {
-                        BlocksHubView()
+                        VineyardSetupHubView()
                     } label: {
                         iconTile(title: "Vineyard Setup", icon: "gearshape.2.fill", tint: .gray)
                     }
