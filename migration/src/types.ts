@@ -70,6 +70,7 @@ export type VineyardDataRecord = JsonRecord & {
   id?: string;
   vineyard_id?: string | null;
   vineyardId?: string | null;
+  data_type?: string | null;
   user_id?: string | null;
   data?: JsonValue;
   payload?: JsonValue;
@@ -169,9 +170,15 @@ export type DisclaimerDryRunReport = {
   missingVersion: DisclaimerAcceptanceRecord[];
 };
 
+export type VineyardDataPayloadKind = "array" | "object" | "json_string_array" | "json_string_object" | "json_string_primitive" | "primitive" | "null";
+
 export type VineyardDataInventoryEntry = {
   vineyardId: string | null;
   rowId: string | null;
+  dataType: string | null;
+  mappedEntityName: string | null;
+  payloadKind: VineyardDataPayloadKind;
+  recordCount: number;
   keysFound: string[];
   knownCounts: Record<string, number>;
   unknownKeys: string[];

@@ -15,6 +15,7 @@ import type {
   TargetSnapshot,
   VineyardDataInventoryEntry,
   VineyardDataInventoryReport,
+  VineyardDataPayloadKind,
   VineyardMappingReport,
   VineyardMemberRecord,
   VineyardRecord
@@ -46,6 +47,31 @@ export const vineyardDataKeys = [
   "workTasks",
   "grapeVarieties"
 ];
+
+export const vineyardDataTypeToEntityName: Record<string, string> = {
+  pins: "pins",
+  paddocks: "paddocks",
+  trips: "trips",
+  spray_records: "sprayRecords",
+  saved_chemicals: "savedChemicals",
+  saved_spray_presets: "savedSprayPresets",
+  saved_equipment_options: "savedEquipmentOptions",
+  spray_equipment: "sprayEquipment",
+  tractors: "tractors",
+  fuel_purchases: "fuelPurchases",
+  operator_categories: "operatorCategories",
+  button_templates: "buttonTemplates",
+  repair_buttons: "repairButtons",
+  growth_buttons: "growthButtons",
+  custom_patterns: "savedCustomPatterns",
+  settings: "settings",
+  yield_sessions: "yieldSessions",
+  damage_records: "damageRecords",
+  historical_yield_records: "historicalYieldRecords",
+  maintenance_logs: "maintenanceLogs",
+  work_tasks: "workTasks",
+  grape_varieties: "grapeVarieties"
+};
 
 export function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -229,28 +255,40 @@ export function buildVineyardDataInventory(v1: SourceSnapshot, vineyardFilter?: 
   const entries: VineyardDataInventoryEntry[] = [];
 
   for (const row of rows) {
-    const data = extractVineyardData(row);
-    const vineyardId = asNullableString(row.vineyard_id ?? row.vineyardId ?? getValue(data, "vineyardId") ?? getValue(data, "vineyard_id"));
-    const knownCounts: Record<string, number> = {};
-    const keysFound = Object.keys(data);
-    let estimatedRecordVolume = 0;
+    const dataType = normalizeDataType(row.data_type);
+    const mappedEntityName = dataType ? vineyardDataTypeToEntityName[dataType] ?? null : null;
+    const payload = extractVineyardPayload(row);
+    const vineyardId = asNullableString(row.vineyard_id ?? row.vineyardId ?? getValueAsRecord(payload.value)?.vineyardId ?? getValueAsRecord(payload.value)?.vineyard_id);
+    const knownCounts: Record<string, number> = Object.fromEntries(vineyardDataKeys.map((key) => [key, 0]));
+    const keysFound = getPayloadKeys(payload.value);
+    const unknownKeys = buildUnknownVineyardDataKeys(dataType, mappedEntityName, payload.value);
+    const recordCount = mappedEntityName ? countPayloadRecords(payload.value, mappedEntityName) : countLegacyRecordVolume(payload.value);
+    let estimatedRecordVolume = recordCount;
 
-    for (const key of vineyardDataKeys) {
-      const count = countValue(data[key]);
-      knownCounts[key] = count;
-      totalKnownCounts[key] = (totalKnownCounts[key] ?? 0) + count;
-      estimatedRecordVolume += count;
+    if (mappedEntityName) {
+      knownCounts[mappedEntityName] = recordCount;
+      totalKnownCounts[mappedEntityName] = (totalKnownCounts[mappedEntityName] ?? 0) + recordCount;
+    } else if (!dataType) {
+      for (const key of vineyardDataKeys) {
+        const count = countPayloadRecords(getValueAsRecord(payload.value)?.[key], key);
+        knownCounts[key] = count;
+        totalKnownCounts[key] = (totalKnownCounts[key] ?? 0) + count;
+      }
+      estimatedRecordVolume = Object.values(knownCounts).reduce((sum, count) => sum + count, 0);
     }
 
-    const unknownKeys = keysFound.filter((key) => !vineyardDataKeys.includes(key));
     for (const key of unknownKeys) allUnknownKeys.add(key);
-    const invalidIds = collectInvalidIds(data);
-    const storageReferences = collectStorageReferences(data);
-    const likelyTransformBlockers = buildBlockers({ vineyardId, data, unknownKeys, invalidIds });
+    const invalidIds = collectInvalidIds(payload.value);
+    const storageReferences = collectStorageReferences(payload.value);
+    const likelyTransformBlockers = buildBlockers({ vineyardId, mappedEntityName, unknownKeys, invalidIds, recordCount, parseError: payload.parseError });
 
     entries.push({
       vineyardId,
       rowId: asNullableString(row.id),
+      dataType,
+      mappedEntityName,
+      payloadKind: payload.kind,
+      recordCount,
       keysFound,
       knownCounts,
       unknownKeys,
@@ -311,22 +349,112 @@ function asNullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function extractVineyardData(row: JsonRecord): JsonRecord {
-  const candidates = [row.data, row.payload, row.json, row.value, row];
-  for (const candidate of candidates) {
-    if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) return candidate as JsonRecord;
+function extractVineyardPayload(row: JsonRecord): { value: unknown; kind: VineyardDataPayloadKind; parseError?: string } {
+  const candidates = [row.data, row.payload, row.json, row.value];
+  const candidate = candidates.find((value) => value !== undefined);
+  if (candidate === undefined) return { value: row, kind: "object" };
+  if (typeof candidate !== "string") return { value: candidate, kind: payloadKind(candidate, false) };
+
+  const trimmed = candidate.trim();
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      return { value: parsed, kind: payloadKind(parsed, true) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { value: candidate, kind: "primitive", parseError: message };
+    }
   }
-  return {};
+
+  return { value: candidate, kind: "primitive" };
 }
 
-function countValue(value: unknown): number {
+function payloadKind(value: unknown, parsedFromString: boolean): VineyardDataPayloadKind {
+  if (value === null || value === undefined) return "null";
+  if (Array.isArray(value)) return parsedFromString ? "json_string_array" : "array";
+  if (typeof value === "object") return parsedFromString ? "json_string_object" : "object";
+  return parsedFromString ? "json_string_primitive" : "primitive";
+}
+
+function normalizeDataType(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getPayloadKeys(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value as JsonRecord);
+}
+
+function buildUnknownVineyardDataKeys(dataType: string | null, mappedEntityName: string | null, payload: unknown): string[] {
+  if (dataType) return mappedEntityName ? [] : [dataType];
+  const record = getValueAsRecord(payload);
+  if (!record) return [];
+  return Object.keys(record).filter((key) => !vineyardDataKeys.includes(key));
+}
+
+function countLegacyRecordVolume(value: unknown): number {
+  const record = getValueAsRecord(value);
+  if (!record) return countPayloadRecords(value, null);
+  return Object.entries(record).reduce((sum, [key, child]) => {
+    const mappedKey = vineyardDataKeys.includes(key) ? key : null;
+    return sum + countPayloadRecords(child, mappedKey);
+  }, 0);
+}
+
+function countPayloadRecords(value: unknown, mappedEntityName: string | null): number {
+  if (value === null || value === undefined) return 0;
   if (Array.isArray(value)) return value.length;
-  if (value && typeof value === "object") return Object.keys(value).length;
-  return value == null ? 0 : 1;
+  if (typeof value !== "object") return 1;
+  if (mappedEntityName === "settings") return 1;
+
+  const record = value as JsonRecord;
+  const list = findRecordList(record, mappedEntityName);
+  if (list) return list.length;
+  return Object.keys(record).length > 0 ? 1 : 0;
 }
 
-function getValue(record: JsonRecord, key: string): unknown {
-  return record[key];
+function findRecordList(record: JsonRecord, mappedEntityName: string | null): unknown[] | null {
+  const keys = preferredListKeys(mappedEntityName);
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+  }
+
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) return value;
+  }
+
+  return null;
+}
+
+function preferredListKeys(mappedEntityName: string | null): string[] {
+  const keys = [
+    "items",
+    "records",
+    "data",
+    "values",
+    "list",
+    "buttons",
+    "templates",
+    "patterns",
+    "chemicals",
+    "equipment",
+    "varieties"
+  ];
+
+  if (!mappedEntityName) return keys;
+  return [mappedEntityName, toSnakeCase(mappedEntityName), ...keys];
+}
+
+function toSnakeCase(value: string): string {
+  return value.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
+}
+
+function getValueAsRecord(value: unknown): JsonRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as JsonRecord;
 }
 
 function collectInvalidIds(value: unknown, path = "root"): string[] {
@@ -355,12 +483,13 @@ function collectStorageReferences(value: unknown): string[] {
   return Array.from(refs).slice(0, 100);
 }
 
-function buildBlockers(input: { vineyardId: string | null; data: JsonRecord; unknownKeys: string[]; invalidIds: string[] }): string[] {
+function buildBlockers(input: { vineyardId: string | null; mappedEntityName: string | null; unknownKeys: string[]; invalidIds: string[]; recordCount: number; parseError?: string }): string[] {
   const blockers: string[] = [];
   if (!isUuid(input.vineyardId)) blockers.push("missing or invalid vineyard_id");
-  if (input.invalidIds.length > 0) blockers.push("invalid nested IDs detected");
-  if (input.unknownKeys.length > 0) blockers.push("unknown top-level keys require Phase 16C mapping decision");
-  if (countValue(input.data.settings) > 0) blockers.push("settings blob requires explicit V2 ownership/default mapping decision");
+  if (input.parseError) blockers.push(`payload JSON parse failed: ${input.parseError}`);
+  if (input.invalidIds.length > 0) blockers.push("invalid payload IDs detected");
+  if (input.unknownKeys.length > 0) blockers.push("unknown data_type requires Phase 16C mapping decision");
+  if (input.mappedEntityName === "settings" && input.recordCount > 0) blockers.push("settings blob requires explicit V2 ownership/default mapping decision");
   return blockers;
 }
 
