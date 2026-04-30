@@ -316,7 +316,8 @@ private struct NewHomeTabView: View {
         Text(title.uppercased())
             .font(.subheadline.weight(.semibold))
             .tracking(0.5)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.white.opacity(0.95))
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
     }
