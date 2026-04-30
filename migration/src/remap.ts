@@ -365,10 +365,12 @@ export function buildVineyardDataInventory(v1: SourceSnapshot, vineyardFilter?: 
 }
 
 export function buildVineyardDataTransformReport(v1: SourceSnapshot, v2: TargetSnapshot, maps: MapsFile, vineyardFilter?: string): VineyardDataTransformReport {
-  const sourceRows = filterByVineyard(v1.vineyardData.rows, vineyardFilter);
+  const sourceRows = filterByVineyard(v1.vineyardData?.rows ?? [], vineyardFilter);
   const rows: VineyardDataTransformReport["rows"] = [];
   const skippedRows: VineyardDataTransformSkippedRow[] = [];
-  const { tables: existingByTable, warnings } = normalizeTargetTableBuckets(v2.vineyardDataTargetTables);
+  const normalizedTargetBuckets = normalizeTargetTableBuckets(v2.vineyardDataTargetTables);
+  const existingByTable = normalizedTargetBuckets.tables;
+  const warnings = [...normalizedTargetBuckets.warnings];
 
   for (const sourceRow of sourceRows) {
     const dataType = normalizeDataType(sourceRow.data_type);
@@ -421,17 +423,19 @@ export function buildVineyardDataTransformReport(v1: SourceSnapshot, v2: TargetS
     });
   }
 
-  const proposedRowsByTable = countRowsByTable(rows);
+  const proposedRowsGroupedByTable = groupProposedRowsByTable(rows);
+  const proposedRowsByTable = countRowsByTable(proposedRowsGroupedByTable);
   const duplicateProposedRowIds = findProposedRowIdDuplicates(rows);
   const duplicateProposedNaturalKeys = findProposedNaturalKeyDuplicates(rows);
+  const existingNaturalKeysByTable = buildExistingNaturalKeysByTable(existingByTable);
   const existingV2RowIdConflicts = findExistingRowIdConflicts(rows, existingByTable);
-  const existingV2NaturalKeyConflicts = findExistingNaturalKeyConflicts(rows, existingByTable);
+  const existingV2NaturalKeyConflicts = findExistingNaturalKeyConflicts(rows, existingByTable, existingNaturalKeysByTable);
   const existingV2TablesRead = phase16cDestinationTables.map((table) => {
-    const result = existingByTable[table] ?? emptyTableReadResult(table, "V2 target snapshot did not include this table; treating as empty");
+    const result = getTableReadResult(table, existingByTable);
     return {
       table,
       exists: result.exists,
-      rowCount: result.rows.length,
+      rowCount: getRows(table, existingByTable).length,
       error: result.error
     };
   });
@@ -632,14 +636,28 @@ function extractPayloadJsonList(value: unknown, mappedEntityName: string): { val
   return { values: [asJsonValue(record)], fallbacks: ["single object payload wrapped in config_data array"] };
 }
 
-function countRowsByTable(rows: VineyardDataTransformReport["rows"]): Record<string, number> {
+function groupProposedRowsByTable(rows: VineyardDataTransformReport["rows"]): Record<string, VineyardDataTransformReport["rows"]> {
+  const grouped = emptyProposedRowBuckets();
+  for (const row of rows) {
+    if (!grouped[row.targetTable]) grouped[row.targetTable] = [];
+    grouped[row.targetTable]?.push(row);
+  }
+  return grouped;
+}
+
+function countRowsByTable(proposedRowsByTable: Record<string, VineyardDataTransformReport["rows"]> | undefined): Record<string, number> {
   const counts = emptyTableCounts();
-  for (const row of rows) counts[row.targetTable] = (counts[row.targetTable] ?? 0) + 1;
+  for (const table of phase16cDestinationTables) counts[table] = getProposedRows(table, proposedRowsByTable).length;
+  for (const [table, rows] of Object.entries(proposedRowsByTable ?? {})) counts[table] = Array.isArray(rows) ? rows.length : 0;
   return counts;
 }
 
 function emptyTableCounts(): Record<string, number> {
   return Object.fromEntries(phase16cDestinationTables.map((table) => [table, 0]));
+}
+
+function emptyProposedRowBuckets(): Record<string, VineyardDataTransformReport["rows"]> {
+  return Object.fromEntries(phase16cDestinationTables.map((table) => [table, []]));
 }
 
 function countFallbacksContaining(report: VineyardDataTransformReport, needle: string): number {
@@ -675,11 +693,11 @@ function findProposedNaturalKeyDuplicates(rows: VineyardDataTransformReport["row
   }));
 }
 
-function findExistingRowIdConflicts(rows: VineyardDataTransformReport["rows"], existingByTable: Record<string, TableReadResult<JsonRecord>>): VineyardDataConflictReport[] {
+function findExistingRowIdConflicts(rows: VineyardDataTransformReport["rows"], existingByTable: Record<string, TableReadResult<JsonRecord>> | undefined): VineyardDataConflictReport[] {
   const conflicts: VineyardDataConflictReport[] = [];
   for (const row of rows) {
     if (!row.proposedId) continue;
-    const existingRows = existingByTable[row.targetTable]?.rows ?? [];
+    const existingRows = getRows(row.targetTable, existingByTable);
     const existing = existingRows.find((candidate) => candidate.id === row.proposedId);
     if (!existing) continue;
     const existingNaturalKey = naturalKeyForExistingRow(row.targetTable, existing);
@@ -697,11 +715,13 @@ function findExistingRowIdConflicts(rows: VineyardDataTransformReport["rows"], e
   return conflicts;
 }
 
-function findExistingNaturalKeyConflicts(rows: VineyardDataTransformReport["rows"], existingByTable: Record<string, TableReadResult<JsonRecord>>): VineyardDataConflictReport[] {
+function findExistingNaturalKeyConflicts(rows: VineyardDataTransformReport["rows"], existingByTable: Record<string, TableReadResult<JsonRecord>> | undefined, existingNaturalKeysByTable: Record<string, Set<string>> | undefined): VineyardDataConflictReport[] {
   const conflicts: VineyardDataConflictReport[] = [];
   for (const row of rows) {
     if (!row.naturalKey) continue;
-    const existingRows = existingByTable[row.targetTable]?.rows ?? [];
+    const naturalKeys = getNaturalKeys(row.targetTable, existingNaturalKeysByTable);
+    if (!naturalKeys.has(row.naturalKey)) continue;
+    const existingRows = getRows(row.targetTable, existingByTable);
     const matches = existingRows.filter((existing) => naturalKeyForExistingRow(row.targetTable, existing) === row.naturalKey);
     const differentIdMatches = matches.filter((existing) => asNullableString(existing.id) !== row.proposedId);
     if (differentIdMatches.length === 0) continue;
@@ -720,30 +740,67 @@ function findExistingNaturalKeyConflicts(rows: VineyardDataTransformReport["rows
 }
 
 function normalizeTargetTableBuckets(input: TargetSnapshot["vineyardDataTargetTables"] | undefined): { tables: Record<string, TableReadResult<JsonRecord>>; warnings: string[] } {
-  const tables: Record<string, TableReadResult<JsonRecord>> = {};
+  const tables = emptyTargetTableBuckets();
   const warnings: string[] = [];
 
   for (const table of phase16cDestinationTables) {
     const result = input?.[table];
     if (!result) {
-      tables[table] = emptyTableReadResult(table, "V2 target snapshot did not include this table; treating as empty");
       warnings.push(`V2 target table ${table} was missing from snapshot; treating as empty`);
       continue;
     }
     if (!Array.isArray(result.rows)) {
-      tables[table] = { ...result, rows: [], error: result.error ?? "read returned no rows array; treating as empty" };
+      tables[table] = { ...result, table, rows: [], error: result.error ?? "read returned no rows array; treating as empty" };
       warnings.push(`V2 target table ${table} read returned no rows array; treating as empty`);
       continue;
     }
     if (!result.exists || result.error) {
       warnings.push(`V2 target table ${table} read failed or was unavailable; treating rows as empty${result.error ? ` (${result.error})` : ""}`);
-      tables[table] = { ...result, rows: [] };
+      tables[table] = { ...result, table, rows: [] };
       continue;
     }
-    tables[table] = result;
+    tables[table] = { ...result, table, rows: result.rows };
   }
 
   return { tables, warnings };
+}
+
+function emptyTargetTableBuckets(): Record<string, TableReadResult<JsonRecord>> {
+  return Object.fromEntries(phase16cDestinationTables.map((table) => [table, emptyTableReadResult(table, "V2 target snapshot did not include this table; treating as empty")]));
+}
+
+function emptyNaturalKeyBuckets(): Record<string, Set<string>> {
+  return Object.fromEntries(phase16cDestinationTables.map((table) => [table, new Set<string>()]));
+}
+
+function buildExistingNaturalKeysByTable(existingByTable: Record<string, TableReadResult<JsonRecord>> | undefined): Record<string, Set<string>> {
+  const naturalKeysByTable = emptyNaturalKeyBuckets();
+  for (const table of phase16cDestinationTables) {
+    const naturalKeys = getNaturalKeys(table, naturalKeysByTable);
+    for (const row of getRows(table, existingByTable)) {
+      const naturalKey = naturalKeyForExistingRow(table, row);
+      if (naturalKey) naturalKeys.add(naturalKey);
+    }
+  }
+  return naturalKeysByTable;
+}
+
+function getRows(table: string, existingByTable?: Record<string, TableReadResult<JsonRecord>>): JsonRecord[] {
+  const rows = existingByTable?.[table]?.rows;
+  return Array.isArray(rows) ? rows : [];
+}
+
+function getNaturalKeys(table: string, existingNaturalKeysByTable?: Record<string, Set<string>>): Set<string> {
+  return existingNaturalKeysByTable?.[table] ?? new Set<string>();
+}
+
+function getProposedRows(table: string, proposedRowsByTable?: Record<string, VineyardDataTransformReport["rows"]>): VineyardDataTransformReport["rows"] {
+  const rows = proposedRowsByTable?.[table];
+  return Array.isArray(rows) ? rows : [];
+}
+
+function getTableReadResult(table: string, existingByTable?: Record<string, TableReadResult<JsonRecord>>): TableReadResult<JsonRecord> {
+  return existingByTable?.[table] ?? emptyTableReadResult(table, "V2 target snapshot did not include this table; treating as empty");
 }
 
 function emptyTableReadResult(table: string, error: string): TableReadResult<JsonRecord> {

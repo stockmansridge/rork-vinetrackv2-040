@@ -118,7 +118,10 @@ async function main(): Promise<void> {
 
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  if (error instanceof Error) {
+    console.error(error.stack ?? error.message);
+  } else {
+    console.error(String(error));
+  }
   process.exit(1);
 });
