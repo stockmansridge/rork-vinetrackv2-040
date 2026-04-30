@@ -33,13 +33,13 @@ struct BackendVineyardListView: View {
     private var visiblePendingInvitations: [BackendInvitation] {
         let userEmail = (auth.userEmail ?? "").lowercased()
         let memberIds = Set(store.vineyards.map { $0.id })
-        var seen = Set<UUID>()
+        var seenVineyards = Set<UUID>()
         return auth.pendingInvitations
             .filter { $0.status.lowercased() == "pending" }
             .filter { userEmail.isEmpty || $0.email.lowercased() == userEmail }
             .filter { !memberIds.contains($0.vineyardId) }
             .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
-            .filter { seen.insert($0.id).inserted }
+            .filter { seenVineyards.insert($0.vineyardId).inserted }
     }
 
     var body: some View {
@@ -293,9 +293,10 @@ struct BackendVineyardListView: View {
                         .foregroundStyle(.white)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Vineyard invitation")
+                    Text(invitation.vineyardName ?? "Vineyard invitation")
                         .font(.subheadline.weight(.semibold))
-                    Text(invitation.email)
+                        .lineLimit(1)
+                    Text("Invited as \(invitation.email)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

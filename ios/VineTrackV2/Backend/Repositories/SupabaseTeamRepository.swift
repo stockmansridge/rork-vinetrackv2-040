@@ -63,7 +63,7 @@ final class SupabaseTeamRepository: TeamRepositoryProtocol {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         return try await provider.client
             .from("invitations")
-            .select()
+            .select("*, vineyards(name)")
             .eq("status", value: "pending")
             .order("created_at", ascending: false)
             .execute()
