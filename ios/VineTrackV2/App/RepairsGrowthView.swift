@@ -377,7 +377,7 @@ struct FillingActionTile: View {
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 8) {
-                Image(systemName: "mappin")
+                Image(systemName: "mappin.and.ellipse")
                     .font(.title2.weight(.semibold))
                 Text(button.name)
                     .font(.headline.weight(.heavy))
