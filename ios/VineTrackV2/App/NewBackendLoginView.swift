@@ -592,7 +592,7 @@ private struct LoginField: View {
 
     private var fieldPrompt: Text {
         Text(title)
-            .foregroundStyle(Color(.secondaryLabel))
+            .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.32))
     }
 
     var body: some View {
