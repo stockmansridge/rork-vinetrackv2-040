@@ -26,12 +26,19 @@ export const expectedV2Tables = [
 ];
 
 export async function readV2Snapshot(client: SupabaseClient): Promise<TargetSnapshot> {
-  const [users, profiles, schemaCoverage] = await Promise.all([
+  const [users, profiles, schemaCoverage, vineyardDataTargetTables] = await Promise.all([
     listAuthUsers(client),
     readTable(client, "profiles"),
-    readSchemaCoverage(client)
+    readSchemaCoverage(client),
+    readVineyardDataTargetTables(client)
   ]);
-  return { users, profiles, schemaCoverage };
+  return { users, profiles, schemaCoverage, vineyardDataTargetTables };
+}
+
+async function readVineyardDataTargetTables(client: SupabaseClient): Promise<Record<string, TableReadResult<JsonRecord>>> {
+  const targetTables = expectedV2Tables.filter((table) => table !== "profiles");
+  const results = await Promise.all(targetTables.map(async (table) => readTable(client, table)));
+  return Object.fromEntries(results.map((result) => [result.table, result]));
 }
 
 export async function readSchemaCoverage(client: SupabaseClient): Promise<SchemaCoverageReport> {

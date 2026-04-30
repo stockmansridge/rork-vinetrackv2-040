@@ -8,6 +8,7 @@ import {
   buildInvitationReport,
   buildMemberReport,
   buildVineyardDataInventory,
+  buildVineyardDataTransformReport,
   buildVineyardReport
 } from "./remap.js";
 import { writeJson } from "./report.js";
@@ -44,9 +45,12 @@ async function main(): Promise<void> {
     filesWritten.push(await writeJson(config.outDir, "dry-run-invitations.json", invitationReport));
   }
 
+  let vineyardDataTransformReport = null;
   if (config.stage === "all") {
     const inventory = buildVineyardDataInventory(v1, config.vineyardId);
+    vineyardDataTransformReport = buildVineyardDataTransformReport(v1, v2, maps, config.vineyardId);
     filesWritten.push(await writeJson(config.outDir, "vineyard-data-inventory.json", inventory));
+    filesWritten.push(await writeJson(config.outDir, "vineyard-data-proposed-v2-rows.json", vineyardDataTransformReport));
   }
 
   for (const tableResult of [v1.profiles, v1.vineyards, v1.vineyardMembers, v1.invitations, v1.disclaimerAcceptances, v1.vineyardData, v2.profiles]) {
@@ -54,6 +58,14 @@ async function main(): Promise<void> {
   }
   for (const table of v2.schemaCoverage.tables) {
     if (!table.exists) warnings.push(`V2 destination table missing or inaccessible: ${table.table}${table.error ? ` (${table.error})` : ""}`);
+  }
+  if (vineyardDataTransformReport) {
+    if (vineyardDataTransformReport.fallbackCount > 0) warnings.push(`${vineyardDataTransformReport.fallbackCount} vineyard_data transform fallback(s) flagged`);
+    if (vineyardDataTransformReport.skippedRows.length > 0) warnings.push(`${vineyardDataTransformReport.skippedRows.length} vineyard_data row(s) skipped from proposed V2 transform`);
+    if (vineyardDataTransformReport.duplicateProposedRowIds.length > 0) warnings.push(`${vineyardDataTransformReport.duplicateProposedRowIds.length} proposed V2 row id duplicate group(s) found`);
+    if (vineyardDataTransformReport.duplicateProposedNaturalKeys.length > 0) warnings.push(`${vineyardDataTransformReport.duplicateProposedNaturalKeys.length} proposed V2 natural key duplicate group(s) found`);
+    if (vineyardDataTransformReport.existingV2RowIdConflicts.length > 0) warnings.push(`${vineyardDataTransformReport.existingV2RowIdConflicts.length} proposed row id conflict(s) against existing V2 rows found`);
+    if (vineyardDataTransformReport.existingV2NaturalKeyConflicts.length > 0) warnings.push(`${vineyardDataTransformReport.existingV2NaturalKeyConflicts.length} proposed natural key conflict(s) against existing V2 rows found`);
   }
 
   const summary: ReportSummary = {
@@ -73,7 +85,12 @@ async function main(): Promise<void> {
       vineyardMembers: memberReport.sourceCount,
       pendingInvitations: invitationReport.pendingCurrentCount,
       disclaimerAcceptances: disclaimerReport.sourceCount,
-      v1VineyardDataRows: v1.vineyardData.rows.length
+      v1VineyardDataRows: v1.vineyardData.rows.length,
+      proposedV2VineyardDataRows: vineyardDataTransformReport?.proposedRowCount ?? 0,
+      vineyardDataTransformFallbacks: vineyardDataTransformReport?.fallbackCount ?? 0,
+      vineyardDataSkippedRows: vineyardDataTransformReport?.skippedRows.length ?? 0,
+      vineyardDataExistingRowIdConflicts: vineyardDataTransformReport?.existingV2RowIdConflicts.length ?? 0,
+      vineyardDataExistingNaturalKeyConflicts: vineyardDataTransformReport?.existingV2NaturalKeyConflicts.length ?? 0
     },
     warnings,
     schemaCoverage: v2.schemaCoverage

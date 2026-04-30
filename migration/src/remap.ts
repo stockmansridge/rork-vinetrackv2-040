@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   AuthUserRecord,
   DisclaimerAcceptanceRecord,
@@ -8,14 +10,18 @@ import type {
   InvitationDryRunReport,
   InvitationRecord,
   JsonRecord,
+  JsonValue,
   MapsFile,
   MemberMappingReport,
   ProfileRecord,
   SourceSnapshot,
   TargetSnapshot,
+  VineyardDataConflictReport,
   VineyardDataInventoryEntry,
   VineyardDataInventoryReport,
   VineyardDataPayloadKind,
+  VineyardDataTransformReport,
+  VineyardDataTransformSkippedRow,
   VineyardMappingReport,
   VineyardMemberRecord,
   VineyardRecord
@@ -332,6 +338,414 @@ export function buildVineyardDataInventory(v1: SourceSnapshot, vineyardFilter?: 
     rowsWithInvalidIds: entries.filter((entry) => entry.invalidIds.length > 0).length,
     unknownKeys: Array.from(allUnknownKeys).sort()
   };
+}
+
+export function buildVineyardDataTransformReport(v1: SourceSnapshot, v2: TargetSnapshot, maps: MapsFile, vineyardFilter?: string): VineyardDataTransformReport {
+  const sourceRows = filterByVineyard(v1.vineyardData.rows, vineyardFilter);
+  const rows: VineyardDataTransformReport["rows"] = [];
+  const skippedRows: VineyardDataTransformSkippedRow[] = [];
+
+  for (const sourceRow of sourceRows) {
+    const dataType = normalizeDataType(sourceRow.data_type);
+    const mappedEntityName = dataType ? vineyardDataTypeToEntityName[dataType] ?? null : null;
+    const payload = extractVineyardPayload(sourceRow);
+    const vineyardId = asNullableString(sourceRow.vineyard_id ?? sourceRow.vineyardId);
+    const baseSkip = {
+      sourceRowId: asNullableString(sourceRow.id),
+      vineyardId,
+      dataType,
+      mappedEntityName,
+      payloadKind: payload.kind
+    };
+
+    if (!isUuid(vineyardId)) {
+      skippedRows.push({ ...baseSkip, reason: "missing or invalid vineyard_id", fallbacks: [] });
+      continue;
+    }
+    const targetVineyardId = maps.vineyardsById[vineyardId] ?? vineyardId;
+    const fallbackPrefix = maps.vineyardsById[vineyardId] ? [] : ["vineyard_id reused because no alternate V2 vineyard mapping exists"];
+
+    if (!dataType || !mappedEntityName) {
+      skippedRows.push({ ...baseSkip, reason: dataType ? `unknown data_type ${dataType}` : "missing data_type", fallbacks: fallbackPrefix });
+      continue;
+    }
+    const config = vineyardDataTransformConfigs[mappedEntityName];
+    if (!config) {
+      skippedRows.push({ ...baseSkip, reason: `no V2 target table mapping for ${mappedEntityName}`, fallbacks: fallbackPrefix });
+      continue;
+    }
+    if (payload.parseError) {
+      skippedRows.push({ ...baseSkip, reason: `payload JSON parse failed: ${payload.parseError}`, fallbacks: fallbackPrefix });
+      continue;
+    }
+
+    if (config.mode === "buttonConfig") {
+      const proposed = transformButtonConfigRow(sourceRow, payload.value, mappedEntityName, targetVineyardId, config, fallbackPrefix);
+      if (proposed) rows.push(proposed);
+      else skippedRows.push({ ...baseSkip, reason: "no button config payload records found", fallbacks: fallbackPrefix });
+      continue;
+    }
+
+    const extracted = extractPayloadRecordObjects(payload.value, mappedEntityName);
+    if (extracted.records.length === 0) {
+      skippedRows.push({ ...baseSkip, reason: "no object records found in payload", fallbacks: [...fallbackPrefix, ...extracted.fallbacks] });
+      continue;
+    }
+    extracted.records.forEach((record, index) => {
+      rows.push(transformRecordRow(sourceRow, record, mappedEntityName, targetVineyardId, config, index, maps, [...fallbackPrefix, ...extracted.fallbacks]));
+    });
+  }
+
+  const proposedRowsByTable = countRowsByTable(rows);
+  const duplicateProposedRowIds = findProposedRowIdDuplicates(rows);
+  const duplicateProposedNaturalKeys = findProposedNaturalKeyDuplicates(rows);
+  const existingV2RowIdConflicts = findExistingRowIdConflicts(rows, v2);
+  const existingV2NaturalKeyConflicts = findExistingNaturalKeyConflicts(rows, v2);
+  const existingV2TablesRead = Object.values(v2.vineyardDataTargetTables).map((result) => ({
+    table: result.table,
+    exists: result.exists,
+    rowCount: result.rows.length,
+    error: result.error
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    sourceCount: sourceRows.length,
+    proposedRowCount: rows.length,
+    proposedRowsByTable,
+    fallbackCount: rows.reduce((sum, row) => sum + row.fallbacks.length, 0) + skippedRows.reduce((sum, row) => sum + row.fallbacks.length, 0),
+    skippedRows,
+    rows,
+    duplicateProposedRowIds,
+    duplicateProposedNaturalKeys,
+    existingV2RowIdConflicts,
+    existingV2NaturalKeyConflicts,
+    existingV2TablesRead
+  };
+}
+
+type TransformMode = "records" | "buttonConfig";
+
+type VineyardDataTransformConfig = {
+  targetTable: string;
+  mode: TransformMode;
+  configType?: string;
+  columns: Set<string>;
+  naturalKeyGroups: string[][];
+  columnMappings?: Record<string, string>;
+  payloadColumn?: string;
+};
+
+const auditColumns = ["created_by", "updated_by", "created_at", "updated_at", "deleted_at", "client_updated_at", "sync_version"];
+
+const vineyardDataTransformConfigs: Record<string, VineyardDataTransformConfig> = {
+  pins: config("pins", ["id", "vineyard_id", "paddock_id", "trip_id", "mode", "category", "priority", "status", "button_name", "button_color", "title", "notes", "latitude", "longitude", "heading", "row_number", "side", "growth_stage_code", "is_completed", "completed_by", "completed_at", "photo_path", ...auditColumns], [["vineyard_id", "latitude", "longitude", "button_name", "created_at"], ["vineyard_id", "title", "created_at"]]),
+  paddocks: config("paddocks", ["id", "vineyard_id", "name", "row_direction", "row_width", "row_offset", "vine_spacing", "vine_count_override", "row_length_override", "flow_per_emitter", "emitter_spacing", "budburst_date", "flowering_date", "veraison_date", "harvest_date", "planting_year", "calculation_mode_override", "reset_mode_override", "polygon_points", "rows", "variety_allocations", ...auditColumns], [["vineyard_id", "name"]]),
+  trips: config("trips", ["id", "vineyard_id", "paddock_id", "paddock_ids", "paddock_name", "tracking_pattern", "start_time", "end_time", "is_active", "is_paused", "total_distance", "current_path_distance", "current_row_number", "next_row_number", "sequence_index", "row_sequence", "path_points", "completed_paths", "skipped_paths", "pin_ids", "tank_sessions", "active_tank_number", "total_tanks", "pause_timestamps", "resume_timestamps", "is_filling_tank", "filling_tank_number", "person_name", ...auditColumns], [["vineyard_id", "start_time", "person_name"], ["vineyard_id", "start_time", "tracking_pattern"]]),
+  sprayRecords: config("spray_records", ["id", "vineyard_id", "trip_id", "date", "start_time", "end_time", "temperature", "wind_speed", "wind_direction", "humidity", "spray_reference", "notes", "number_of_fans_jets", "average_speed", "equipment_type", "tractor", "tractor_gear", "is_template", "operation_type", "tanks", ...auditColumns], [["vineyard_id", "date", "spray_reference"], ["vineyard_id", "start_time", "equipment_type"]]),
+  savedChemicals: config("saved_chemicals", ["id", "vineyard_id", "name", "rate_per_ha", "unit", "chemical_group", "use", "manufacturer", "restrictions", "notes", "crop", "problem", "active_ingredient", "rates", "purchase", "label_url", "mode_of_action", ...auditColumns], [["vineyard_id", "name", "active_ingredient"], ["vineyard_id", "name", "manufacturer"]]),
+  savedSprayPresets: config("saved_spray_presets", ["id", "vineyard_id", "name", "water_volume", "spray_rate_per_ha", "concentration_factor", ...auditColumns], [["vineyard_id", "name"]]),
+  sprayEquipment: config("spray_equipment", ["id", "vineyard_id", "name", "tank_capacity_litres", ...auditColumns], [["vineyard_id", "name"]]),
+  tractors: config("tractors", ["id", "vineyard_id", "name", "brand", "model", "model_year", "fuel_usage_l_per_hour", ...auditColumns], [["vineyard_id", "name"], ["vineyard_id", "brand", "model"]]),
+  fuelPurchases: config("fuel_purchases", ["id", "vineyard_id", "volume_litres", "total_cost", "date", ...auditColumns], [["vineyard_id", "date", "volume_litres", "total_cost"]]),
+  operatorCategories: config("operator_categories", ["id", "vineyard_id", "name", "cost_per_hour", ...auditColumns], [["vineyard_id", "name"]]),
+  repairButtons: buttonConfig("repair_buttons"),
+  growthButtons: buttonConfig("growth_buttons"),
+  buttonTemplates: buttonConfig("button_templates"),
+  yieldSessions: config("yield_estimation_sessions", ["id", "vineyard_id", "payload", "is_completed", "completed_at", "session_created_at", ...auditColumns], [["vineyard_id", "session_created_at"]], { payloadColumn: "payload" }),
+  damageRecords: config("damage_records", ["id", "vineyard_id", "paddock_id", "date", "damage_type", "damage_percent", "polygon_points", "notes", ...auditColumns], [["vineyard_id", "paddock_id", "date", "damage_type"]]),
+  historicalYieldRecords: config("historical_yield_records", ["id", "vineyard_id", "season", "year", "archived_at", "total_yield_tonnes", "total_area_hectares", "notes", "block_results", ...auditColumns], [["vineyard_id", "year", "season"]]),
+  maintenanceLogs: config("maintenance_logs", ["id", "vineyard_id", "item_name", "hours", "work_completed", "parts_used", "parts_cost", "labour_cost", "date", "photo_path", "is_archived", "archived_at", "archived_by", "is_finalized", "finalized_at", "finalized_by", ...auditColumns], [["vineyard_id", "item_name", "date", "work_completed"]]),
+  workTasks: config("work_tasks", ["id", "vineyard_id", "paddock_id", "paddock_name", "date", "task_type", "duration_hours", "resources", "notes", "is_archived", "archived_at", "archived_by", "is_finalized", "finalized_at", "finalized_by", ...auditColumns], [["vineyard_id", "date", "task_type", "paddock_name"]])
+};
+
+function config(targetTable: string, columns: string[], naturalKeyGroups: string[][], options: { payloadColumn?: string } = {}): VineyardDataTransformConfig {
+  return { targetTable, mode: "records", columns: new Set(columns), naturalKeyGroups, payloadColumn: options.payloadColumn };
+}
+
+function buttonConfig(configType: string): VineyardDataTransformConfig {
+  return {
+    targetTable: "vineyard_button_configs",
+    mode: "buttonConfig",
+    configType,
+    columns: new Set(["id", "vineyard_id", "config_type", "config_data", ...auditColumns]),
+    naturalKeyGroups: [["vineyard_id", "config_type"]]
+  };
+}
+
+function transformButtonConfigRow(sourceRow: JsonRecord, payload: unknown, mappedEntityName: string, targetVineyardId: string, config: VineyardDataTransformConfig, fallbackPrefix: string[]): VineyardDataTransformReport["rows"][number] | null {
+  const extracted = extractPayloadJsonList(payload, mappedEntityName);
+  if (extracted.values.length === 0) return null;
+  const sourceRowId = asNullableString(sourceRow.id);
+  const rowId = deterministicUuid([targetVineyardId, config.configType ?? mappedEntityName]);
+  const row: JsonRecord = {
+    id: rowId,
+    vineyard_id: targetVineyardId,
+    config_type: config.configType ?? toSnakeCase(mappedEntityName),
+    config_data: extracted.values,
+    client_updated_at: jsonString(asNullableString(sourceRow.updated_at) ?? new Date(0).toISOString())
+  };
+  const naturalKey = buildNaturalKey(row, config.naturalKeyGroups);
+  return {
+    sourceRowId,
+    sourceDataType: normalizeDataType(sourceRow.data_type),
+    sourceEntityName: mappedEntityName,
+    sourceRecordIndex: 0,
+    targetTable: config.targetTable,
+    proposedId: rowId,
+    naturalKey,
+    row,
+    sourceRecord: asJsonValue(payload),
+    fallbacks: [...fallbackPrefix, "deterministic id generated for config row", ...extracted.fallbacks],
+    blockers: collectInvalidIds(payload)
+  };
+}
+
+function transformRecordRow(sourceRow: JsonRecord, record: JsonRecord, mappedEntityName: string, targetVineyardId: string, config: VineyardDataTransformConfig, sourceRecordIndex: number, maps: MapsFile, fallbackPrefix: string[]): VineyardDataTransformReport["rows"][number] {
+  const fallbacks = [...fallbackPrefix];
+  const blockers = collectInvalidIds(record);
+  const sourceRowId = asNullableString(sourceRow.id);
+  const row: JsonRecord = {};
+  const omittedKeys: string[] = [];
+
+  if (config.payloadColumn) row[config.payloadColumn] = asJsonValue(record);
+  for (const [key, value] of Object.entries(record)) {
+    const targetKey = config.columnMappings?.[key] ?? toSnakeCase(key);
+    if (!config.columns.has(targetKey)) {
+      omittedKeys.push(key);
+      continue;
+    }
+    row[targetKey] = asJsonValue(value);
+  }
+
+  const originalId = asNullableString(record.id);
+  const proposedId = isUuid(originalId) ? originalId : deterministicUuid([targetVineyardId, mappedEntityName, sourceRowId ?? "source", String(sourceRecordIndex), stableJson(record)]);
+  if (!isUuid(originalId)) fallbacks.push(originalId ? `deterministic id generated because payload id is not a UUID: ${originalId}` : "deterministic id generated because payload id is missing");
+
+  row.id = proposedId;
+  row.vineyard_id = targetVineyardId;
+  remapUserColumn(row, record, "created_by", maps, fallbacks);
+  remapUserColumn(row, record, "updated_by", maps, fallbacks);
+  const clientUpdatedAt = firstString(record.client_updated_at, record.clientUpdatedAt, record.updated_at, record.updatedAt, sourceRow.updated_at, record.created_at, record.createdAt);
+  if (clientUpdatedAt) row.client_updated_at = jsonString(clientUpdatedAt);
+  if (mappedEntityName === "yieldSessions") {
+    row.payload = asJsonValue(record);
+    row.is_completed = asJsonValue(record.is_completed ?? record.isCompleted ?? false);
+    const sessionCreatedAt = firstString(record.session_created_at, record.sessionCreatedAt, record.created_at, record.createdAt, record.date);
+    if (sessionCreatedAt) row.session_created_at = jsonString(sessionCreatedAt);
+  }
+  if (omittedKeys.length > 0) fallbacks.push(`omitted source keys with no V2 column mapping: ${omittedKeys.sort().join(",")}`);
+  const naturalKey = buildNaturalKey(row, config.naturalKeyGroups);
+  if (!naturalKey) fallbacks.push("natural key could not be derived from proposed row");
+
+  return {
+    sourceRowId,
+    sourceDataType: normalizeDataType(sourceRow.data_type),
+    sourceEntityName: mappedEntityName,
+    sourceRecordIndex,
+    targetTable: config.targetTable,
+    proposedId,
+    naturalKey,
+    row,
+    sourceRecord: asJsonValue(record),
+    fallbacks,
+    blockers
+  };
+}
+
+function remapUserColumn(row: JsonRecord, record: JsonRecord, targetKey: "created_by" | "updated_by", maps: MapsFile, fallbacks: string[]): void {
+  const sourceValue = firstString(record[targetKey], record[toCamelCase(targetKey)], targetKey === "created_by" ? record.user_id : null, targetKey === "created_by" ? record.userId : null);
+  if (!sourceValue) return;
+  const mapped = maps.v1UserIdToV2UserId[sourceValue];
+  if (mapped) row[targetKey] = jsonString(mapped);
+  else if (isUuid(sourceValue)) {
+    row[targetKey] = null;
+    fallbacks.push(`${targetKey} cleared because V1 user has no V2 mapping: ${sourceValue}`);
+  } else {
+    row[targetKey] = null;
+    fallbacks.push(`${targetKey} cleared because source value is not a UUID: ${sourceValue}`);
+  }
+}
+
+function extractPayloadRecordObjects(value: unknown, mappedEntityName: string): { records: JsonRecord[]; fallbacks: string[] } {
+  const fallbacks: string[] = [];
+  if (Array.isArray(value)) return { records: value.filter(isJsonRecord), fallbacks: value.some((item) => !isJsonRecord(item)) ? ["non-object payload array items skipped"] : [] };
+  const record = getValueAsRecord(value);
+  if (!record) return { records: [], fallbacks };
+  const list = findRecordList(record, mappedEntityName);
+  if (list) return { records: list.filter(isJsonRecord), fallbacks: list.some((item) => !isJsonRecord(item)) ? ["non-object nested list items skipped"] : [] };
+  if (hasEntityRecordShape(record)) return { records: [record], fallbacks };
+  const objectValues = Object.values(record).filter(isJsonRecord);
+  if (objectValues.length > 0 && objectValues.length === Object.keys(record).length) return { records: objectValues, fallbacks: ["object map expanded into proposed rows"] };
+  return { records: [record], fallbacks: ["single object payload treated as one proposed row"] };
+}
+
+function extractPayloadJsonList(value: unknown, mappedEntityName: string): { values: JsonValue[]; fallbacks: string[] } {
+  if (Array.isArray(value)) return { values: value.map(asJsonValue), fallbacks: [] };
+  const record = getValueAsRecord(value);
+  if (!record) return { values: [], fallbacks: [] };
+  const list = findRecordList(record, mappedEntityName);
+  if (list) return { values: list.map(asJsonValue), fallbacks: ["nested list extracted into config_data"] };
+  return { values: [asJsonValue(record)], fallbacks: ["single object payload wrapped in config_data array"] };
+}
+
+function countRowsByTable(rows: VineyardDataTransformReport["rows"]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.targetTable] = (counts[row.targetTable] ?? 0) + 1;
+  return counts;
+}
+
+function findProposedRowIdDuplicates(rows: VineyardDataTransformReport["rows"]): VineyardDataConflictReport[] {
+  const grouped = groupRows(rows.filter((row) => row.proposedId), (row) => `${row.targetTable}|${row.proposedId ?? ""}`);
+  return Array.from(grouped.values()).filter((group) => group.length > 1).map((group) => ({
+    targetTable: group[0]?.targetTable ?? "unknown",
+    conflictType: "proposed_row_id_duplicate",
+    severity: "conflict",
+    proposedIds: group.map((row) => row.proposedId).filter(isString),
+    existingIds: [],
+    sourceRowIds: group.map((row) => row.sourceRowId).filter(isString),
+    naturalKey: group[0]?.naturalKey ?? null,
+    detail: "multiple proposed rows would use the same V2 row id"
+  }));
+}
+
+function findProposedNaturalKeyDuplicates(rows: VineyardDataTransformReport["rows"]): VineyardDataConflictReport[] {
+  const grouped = groupRows(rows.filter((row) => row.naturalKey), (row) => `${row.targetTable}|${row.naturalKey ?? ""}`);
+  return Array.from(grouped.values()).filter((group) => group.length > 1).map((group) => ({
+    targetTable: group[0]?.targetTable ?? "unknown",
+    conflictType: "proposed_natural_key_duplicate",
+    severity: "duplicate",
+    proposedIds: group.map((row) => row.proposedId).filter(isString),
+    existingIds: [],
+    sourceRowIds: group.map((row) => row.sourceRowId).filter(isString),
+    naturalKey: group[0]?.naturalKey ?? null,
+    detail: "multiple proposed rows share the same natural key"
+  }));
+}
+
+function findExistingRowIdConflicts(rows: VineyardDataTransformReport["rows"], v2: TargetSnapshot): VineyardDataConflictReport[] {
+  const conflicts: VineyardDataConflictReport[] = [];
+  for (const row of rows) {
+    if (!row.proposedId) continue;
+    const existing = v2.vineyardDataTargetTables[row.targetTable]?.rows.find((candidate) => candidate.id === row.proposedId);
+    if (!existing) continue;
+    const existingNaturalKey = naturalKeyForExistingRow(row.targetTable, existing);
+    conflicts.push({
+      targetTable: row.targetTable,
+      conflictType: "existing_row_id",
+      severity: existingNaturalKey && existingNaturalKey === row.naturalKey ? "duplicate" : "conflict",
+      proposedIds: [row.proposedId],
+      existingIds: [row.proposedId],
+      sourceRowIds: row.sourceRowId ? [row.sourceRowId] : [],
+      naturalKey: row.naturalKey,
+      detail: existingNaturalKey && existingNaturalKey === row.naturalKey ? "proposed row id already exists in V2 with the same natural key" : "proposed row id already exists in V2 with different or unknown natural key"
+    });
+  }
+  return conflicts;
+}
+
+function findExistingNaturalKeyConflicts(rows: VineyardDataTransformReport["rows"], v2: TargetSnapshot): VineyardDataConflictReport[] {
+  const conflicts: VineyardDataConflictReport[] = [];
+  for (const row of rows) {
+    if (!row.naturalKey) continue;
+    const existingRows = v2.vineyardDataTargetTables[row.targetTable]?.rows ?? [];
+    const matches = existingRows.filter((existing) => naturalKeyForExistingRow(row.targetTable, existing) === row.naturalKey);
+    const differentIdMatches = matches.filter((existing) => asNullableString(existing.id) !== row.proposedId);
+    if (differentIdMatches.length === 0) continue;
+    conflicts.push({
+      targetTable: row.targetTable,
+      conflictType: "existing_natural_key",
+      severity: "duplicate",
+      proposedIds: row.proposedId ? [row.proposedId] : [],
+      existingIds: differentIdMatches.map((existing) => asNullableString(existing.id)).filter(isString),
+      sourceRowIds: row.sourceRowId ? [row.sourceRowId] : [],
+      naturalKey: row.naturalKey,
+      detail: "V2 already has row(s) with the same natural key but different id"
+    });
+  }
+  return conflicts;
+}
+
+function naturalKeyForExistingRow(targetTable: string, row: JsonRecord): string | null {
+  const config = Object.values(vineyardDataTransformConfigs).find((candidate) => candidate.targetTable === targetTable);
+  if (!config) return null;
+  return buildNaturalKey(row, config.naturalKeyGroups);
+}
+
+function buildNaturalKey(row: JsonRecord, groups: string[][]): string | null {
+  for (const group of groups) {
+    const values = group.map((key) => normalizeNaturalKeyValue(row[key]));
+    if (values.every((value) => value !== null)) return group.map((key, index) => `${key}=${values[index] ?? ""}`).join("|");
+  }
+  return null;
+}
+
+function normalizeNaturalKeyValue(value: JsonValue | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return stableJson(value).toLowerCase();
+}
+
+function groupRows<T>(rows: T[], keyForRow: (row: T) => string): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) grouped.set(keyForRow(row), [...(grouped.get(keyForRow(row)) ?? []), row]);
+  return grouped;
+}
+
+function deterministicUuid(parts: string[]): string {
+  const hash = createHash("sha256").update(parts.join("|")).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function asJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map(asJsonValue);
+  if (value && typeof value === "object") {
+    const result: Record<string, JsonValue> = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (child === undefined) continue;
+      result[key] = asJsonValue(child);
+    }
+    return result;
+  }
+  return null;
+}
+
+function jsonString(value: string): JsonValue {
+  return value;
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const stringValue = asNullableString(value);
+    if (stringValue) return stringValue;
+  }
+  return null;
+}
+
+function toCamelCase(value: string): string {
+  return value.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
 }
 
 function collectUserEmailEntries(users: AuthUserRecord[], profiles: ProfileRecord[]): Array<{ id: string; email: string | null; source: "auth_email" | "profile_email" }> {

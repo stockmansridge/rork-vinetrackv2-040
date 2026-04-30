@@ -92,6 +92,7 @@ export type TargetSnapshot = {
   users: AuthUserRecord[];
   profiles: TableReadResult<ProfileRecord>;
   schemaCoverage: SchemaCoverageReport;
+  vineyardDataTargetTables: Record<string, TableReadResult<JsonRecord>>;
 };
 
 export type DuplicateEmailReport = {
@@ -198,6 +199,56 @@ export type VineyardDataInventoryReport = {
   recordsWithMissingVineyardId: number;
   rowsWithInvalidIds: number;
   unknownKeys: string[];
+};
+
+export type ProposedV2VineyardDataRow = {
+  sourceRowId: string | null;
+  sourceDataType: string | null;
+  sourceEntityName: string | null;
+  sourceRecordIndex: number;
+  targetTable: string;
+  proposedId: string | null;
+  naturalKey: string | null;
+  row: JsonRecord;
+  sourceRecord: JsonValue;
+  fallbacks: string[];
+  blockers: string[];
+};
+
+export type VineyardDataTransformSkippedRow = {
+  sourceRowId: string | null;
+  vineyardId: string | null;
+  dataType: string | null;
+  mappedEntityName: string | null;
+  payloadKind: VineyardDataPayloadKind;
+  reason: string;
+  fallbacks: string[];
+};
+
+export type VineyardDataConflictReport = {
+  targetTable: string;
+  conflictType: "existing_row_id" | "existing_natural_key" | "proposed_row_id_duplicate" | "proposed_natural_key_duplicate";
+  severity: "duplicate" | "conflict" | "needs_review";
+  proposedIds: string[];
+  existingIds: string[];
+  sourceRowIds: string[];
+  naturalKey: string | null;
+  detail: string;
+};
+
+export type VineyardDataTransformReport = {
+  generatedAt: string;
+  sourceCount: number;
+  proposedRowCount: number;
+  proposedRowsByTable: Record<string, number>;
+  fallbackCount: number;
+  skippedRows: VineyardDataTransformSkippedRow[];
+  rows: ProposedV2VineyardDataRow[];
+  duplicateProposedRowIds: VineyardDataConflictReport[];
+  duplicateProposedNaturalKeys: VineyardDataConflictReport[];
+  existingV2RowIdConflicts: VineyardDataConflictReport[];
+  existingV2NaturalKeyConflicts: VineyardDataConflictReport[];
+  existingV2TablesRead: Array<{ table: string; exists: boolean; rowCount: number; error?: string }>;
 };
 
 export type SchemaCoverageReport = {
