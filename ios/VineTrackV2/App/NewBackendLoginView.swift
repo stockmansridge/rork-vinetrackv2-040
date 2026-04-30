@@ -193,17 +193,7 @@ struct NewBackendLoginView: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: 48)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.09, green: 0.55, blue: 1.00),
-                        Color(red: 0.01, green: 0.38, blue: 0.86)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: .rect(cornerRadius: 15)
-            )
+            .background(.blue, in: .rect(cornerRadius: 15))
             .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 8)
             .opacity(auth.isLoading || !canSubmit ? 0.56 : 1)
         }
