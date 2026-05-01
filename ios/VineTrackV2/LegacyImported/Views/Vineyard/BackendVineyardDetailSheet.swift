@@ -17,6 +17,7 @@ struct BackendVineyardDetailSheet: View {
     @State private var selectedCountry: String = ""
     @State private var showDeleteConfirm: Bool = false
     @State private var deleteConfirmationText: String = ""
+    @State private var memberCount: Int = 0
     @State private var isWorking: Bool = false
     @State private var isUploadingLogo: Bool = false
     @State private var errorMessage: String?
@@ -58,7 +59,9 @@ struct BackendVineyardDetailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 selectedCountry = vineyard.country
+                memberCount = max(memberCount, 1)
                 await ensureLogoCached()
+                await loadMemberCount()
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -73,9 +76,9 @@ struct BackendVineyardDetailSheet: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .alert("Delete Vineyard?", isPresented: $showDeleteConfirm) {
+            .alert("Archive Vineyard?", isPresented: $showDeleteConfirm) {
                 TextField("Type DELETE to confirm", text: $deleteConfirmationText)
-                Button("Delete", role: .destructive) {
+                Button("Archive", role: .destructive) {
                     Task { await deleteVineyard() }
                 }
                 .disabled(deleteConfirmationText != "DELETE")
@@ -83,7 +86,7 @@ struct BackendVineyardDetailSheet: View {
                     deleteConfirmationText = ""
                 }
             } message: {
-                Text("This will permanently delete the vineyard and all its data.")
+                Text(deleteWarningText)
             }
             .alert("Error", isPresented: errorBinding, presenting: errorMessage) { _ in
                 Button("OK", role: .cancel) { errorMessage = nil }
@@ -325,17 +328,33 @@ struct BackendVineyardDetailSheet: View {
         }
     }
 
+    private var isOwner: Bool {
+        accessControl.currentRole == .owner
+    }
+
+    private var deleteWarningText: String {
+        let others = max(0, memberCount - 1)
+        if others > 0 {
+            return "\(others) other member\(others == 1 ? "" : "s") will lose access to this vineyard. Shared blocks, pins, trips, sprays, and history will become inaccessible. This action is reversible only by support. Type DELETE to confirm."
+        }
+        return "This vineyard has no other members. It will be archived and removed from your selector. Type DELETE to confirm."
+    }
+
     private var dangerSection: some View {
         Section {
             Button(role: .destructive) {
                 deleteConfirmationText = ""
                 showDeleteConfirm = true
             } label: {
-                Label("Delete Vineyard", systemImage: "trash")
+                Label("Archive Vineyard", systemImage: "archivebox")
             }
-            .disabled(isWorking)
+            .disabled(isWorking || !isOwner)
         } footer: {
-            Text("Permanently deletes this vineyard from the backend. You'll need to type DELETE to confirm.")
+            if isOwner {
+                Text("Archiving hides this vineyard for everyone. Operational records are kept and can be restored by support if needed. Type DELETE to confirm.")
+            } else {
+                Text("Only the owner can archive this vineyard.")
+            }
         }
     }
 
@@ -393,11 +412,18 @@ struct BackendVineyardDetailSheet: View {
         }
     }
 
+    private func loadMemberCount() async {
+        let team = SupabaseTeamRepository()
+        if let members = try? await team.listMembers(vineyardId: vineyard.id) {
+            memberCount = members.count
+        }
+    }
+
     private func deleteVineyard() async {
         isWorking = true
         defer { isWorking = false }
         do {
-            try await vineyardRepository.softDeleteVineyard(id: vineyard.id)
+            try await vineyardRepository.archiveVineyard(id: vineyard.id)
             let remaining = store.vineyards.filter { $0.id != vineyard.id }
             let mapped: [BackendVineyard] = remaining.map { local in
                 BackendVineyard(

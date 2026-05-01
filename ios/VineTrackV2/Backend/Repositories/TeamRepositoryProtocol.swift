@@ -8,4 +8,5 @@ protocol TeamRepositoryProtocol: Sendable {
     func listPendingInvitations() async throws -> [BackendInvitation]
     func acceptInvitation(invitationId: UUID) async throws
     func declineInvitation(invitationId: UUID) async throws
+    func transferOwnership(vineyardId: UUID, newOwnerId: UUID, removeOldOwner: Bool) async throws
 }

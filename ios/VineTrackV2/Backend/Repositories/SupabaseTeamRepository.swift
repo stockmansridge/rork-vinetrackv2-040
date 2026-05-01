@@ -92,6 +92,29 @@ final class SupabaseTeamRepository: TeamRepositoryProtocol {
             .rpc("decline_invitation", params: DeclineInvitationRequest(invitationId: invitationId))
             .execute()
     }
+
+    func transferOwnership(vineyardId: UUID, newOwnerId: UUID, removeOldOwner: Bool) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        try await provider.client
+            .rpc("transfer_vineyard_ownership", params: TransferOwnershipRequest(
+                vineyardId: vineyardId,
+                newOwnerId: newOwnerId,
+                removeOldOwner: removeOldOwner
+            ))
+            .execute()
+    }
+}
+
+nonisolated private struct TransferOwnershipRequest: Encodable, Sendable {
+    let vineyardId: UUID
+    let newOwnerId: UUID
+    let removeOldOwner: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case vineyardId = "p_vineyard_id"
+        case newOwnerId = "p_new_owner_id"
+        case removeOldOwner = "p_remove_old_owner"
+    }
 }
 
 nonisolated private struct MemberRoleUpdate: Encodable, Sendable {

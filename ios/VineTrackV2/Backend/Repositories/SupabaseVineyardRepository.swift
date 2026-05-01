@@ -67,6 +67,47 @@ final class SupabaseVineyardRepository: VineyardRepositoryProtocol {
             .eq("id", value: id.uuidString)
             .execute()
     }
+
+    func archiveVineyard(id: UUID) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        try await provider.client
+            .rpc("archive_vineyard", params: ArchiveVineyardRequest(vineyardId: id))
+            .execute()
+    }
+
+    func accountDeletionPreflight() async throws -> AccountDeletionPreflight {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        let result: AccountDeletionPreflight = try await provider.client
+            .rpc("account_deletion_preflight")
+            .execute()
+            .value
+        return result
+    }
+
+    func submitAccountDeletionRequest(reason: String?) async throws -> AccountDeletionRequestResult {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        let result: AccountDeletionRequestResult = try await provider.client
+            .rpc("submit_account_deletion_request", params: SubmitDeletionRequest(reason: reason))
+            .execute()
+            .value
+        return result
+    }
+}
+
+nonisolated private struct ArchiveVineyardRequest: Encodable, Sendable {
+    let vineyardId: UUID
+
+    enum CodingKeys: String, CodingKey {
+        case vineyardId = "p_vineyard_id"
+    }
+}
+
+nonisolated private struct SubmitDeletionRequest: Encodable, Sendable {
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case reason = "p_reason"
+    }
 }
 
 nonisolated private struct CreateVineyardRequest: Encodable, Sendable {

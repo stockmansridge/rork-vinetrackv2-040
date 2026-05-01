@@ -12,6 +12,7 @@ struct BackendTeamAccessView: View {
     @State private var showInviteSheet: Bool = false
     @State private var memberToEdit: BackendVineyardMember?
     @State private var showEditMember: Bool = false
+    @State private var showTransferSheet: Bool = false
 
     private let teamRepository: any TeamRepositoryProtocol = SupabaseTeamRepository()
 
@@ -22,6 +23,14 @@ struct BackendTeamAccessView: View {
 
     private var canManage: Bool {
         currentUserMember?.role.canInviteMembers ?? false
+    }
+
+    private var isCurrentUserOwner: Bool {
+        currentUserMember?.role == .owner
+    }
+
+    private var transferEligibleMembers: [BackendVineyardMember] {
+        members.filter { $0.userId != auth.userId && $0.role != .owner }
     }
 
     var body: some View {
@@ -58,6 +67,23 @@ struct BackendTeamAccessView: View {
                 Section("Pending Invitations") {
                     ForEach(pendingInvitations, id: \.id) { invitation in
                         invitationRow(invitation)
+                    }
+                }
+            }
+
+            if isCurrentUserOwner {
+                Section {
+                    Button {
+                        showTransferSheet = true
+                    } label: {
+                        Label("Transfer Ownership", systemImage: "crown")
+                    }
+                    .disabled(transferEligibleMembers.isEmpty)
+                } footer: {
+                    if transferEligibleMembers.isEmpty {
+                        Text("Add another active member before you can transfer ownership.")
+                    } else {
+                        Text("Make another member the owner of this vineyard. You will become Manager.")
                     }
                 }
             }
@@ -103,6 +129,16 @@ struct BackendTeamAccessView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showTransferSheet) {
+            TransferOwnershipSheet(
+                vineyardName: vineyardName,
+                eligibleMembers: transferEligibleMembers,
+                onTransfer: { newOwnerId, removeOldOwner in
+                    showTransferSheet = false
+                    Task { await transferOwnership(newOwnerId: newOwnerId, removeOldOwner: removeOldOwner) }
+                }
+            )
         }
         .refreshable { await reload() }
         .task { await reload() }
@@ -180,8 +216,6 @@ struct BackendTeamAccessView: View {
         do {
             let all = try await teamRepository.listPendingInvitations()
             let filtered = all.filter { $0.vineyardId == vineyardId && $0.status.lowercased() == "pending" }
-            // Defensive dedupe: keep only the most recent pending invitation per email,
-            // and hide any pending invitation whose email already corresponds to a member.
             var seenEmails = Set<String>()
             var deduped: [BackendInvitation] = []
             for invitation in filtered.sorted(by: { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }) {
@@ -208,6 +242,19 @@ struct BackendTeamAccessView: View {
     private func removeMember(_ member: BackendVineyardMember) async {
         do {
             try await teamRepository.removeMember(vineyardId: vineyardId, userId: member.userId)
+            await reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func transferOwnership(newOwnerId: UUID, removeOldOwner: Bool) async {
+        do {
+            try await teamRepository.transferOwnership(
+                vineyardId: vineyardId,
+                newOwnerId: newOwnerId,
+                removeOldOwner: removeOldOwner
+            )
             await reload()
         } catch {
             errorMessage = error.localizedDescription
@@ -292,6 +339,98 @@ private struct EditMemberRoleSheet: View {
                         onSave(selectedRole)
                     }
                     .disabled(!canManage || selectedRole == member.role)
+                }
+            }
+        }
+    }
+}
+
+private struct TransferOwnershipSheet: View {
+    let vineyardName: String
+    let eligibleMembers: [BackendVineyardMember]
+    let onTransfer: (UUID, Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedMemberId: UUID?
+    @State private var removeOldOwner: Bool = false
+    @State private var showConfirm: Bool = false
+
+    private var selectedMember: BackendVineyardMember? {
+        eligibleMembers.first { $0.userId == selectedMemberId }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Transferring ownership of **\(vineyardName)** is permanent. The new owner gains full control of the vineyard, including team management and deletion.")
+                        .font(.callout)
+                } header: {
+                    Text("Transfer Ownership")
+                }
+
+                Section("New Owner") {
+                    if eligibleMembers.isEmpty {
+                        Text("No eligible members. Pending invitations cannot become owner until accepted.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(eligibleMembers, id: \.userId) { member in
+                            Button {
+                                selectedMemberId = member.userId
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(member.displayName ?? "Member")
+                                            .foregroundStyle(.primary)
+                                        Text(member.role.rawValue.capitalized)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if selectedMemberId == member.userId {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.blue)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Section {
+                    Toggle("Also remove me from this vineyard", isOn: $removeOldOwner)
+                } footer: {
+                    Text(removeOldOwner
+                         ? "You will lose access to this vineyard after the transfer."
+                         : "You will become Manager of this vineyard after the transfer.")
+                }
+            }
+            .navigationTitle("Transfer Ownership")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Transfer") {
+                        showConfirm = true
+                    }
+                    .disabled(selectedMember == nil)
+                }
+            }
+            .alert("Confirm Transfer", isPresented: $showConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Transfer", role: .destructive) {
+                    if let member = selectedMember {
+                        onTransfer(member.userId, removeOldOwner)
+                    }
+                }
+            } message: {
+                if let member = selectedMember {
+                    Text("This will make \(member.displayName ?? "this member") the owner of \(vineyardName). " +
+                         (removeOldOwner ? "You will be removed from the vineyard." : "You will become Manager."))
                 }
             }
         }
