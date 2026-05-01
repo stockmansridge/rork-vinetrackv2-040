@@ -285,6 +285,16 @@ struct BackendSettingsView: View {
                     color: .blue
                 )
             }
+            NavigationLink {
+                OperationPreferencesView()
+            } label: {
+                SettingsRow(
+                    title: "Operation Preferences",
+                    subtitle: "Season E-L, spray/tank, yield",
+                    symbol: "slider.horizontal.3",
+                    color: .orange
+                )
+            }
         } header: {
             SettingsSectionHeader(title: "Operations", symbol: "wrench.adjustable.fill", color: .orange)
         }
