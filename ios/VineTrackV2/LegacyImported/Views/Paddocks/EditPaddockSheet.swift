@@ -68,6 +68,9 @@ struct EditPaddockSheet: View {
                     .disabled(name.isEmpty)
                 }
             }
+            .sheet(isPresented: $showAddVariety) {
+                addVarietyPickerSheet
+            }
             .fullScreenCover(isPresented: $showBoundaryEditor) {
                 BoundaryMapEditor(
                     polygonPoints: $polygonPoints,
@@ -540,14 +543,8 @@ struct EditPaddockSheet: View {
             }
 
             if !availableVarieties.isEmpty {
-                Menu {
-                    ForEach(availableVarieties) { variety in
-                        Button(variety.name) {
-                            let remaining = max(0, 100 - totalVarietyPercent)
-                            let suggested = varietyAllocations.isEmpty ? 100.0 : remaining
-                            varietyAllocations.append(PaddockVarietyAllocation(varietyId: variety.id, percent: suggested))
-                        }
-                    }
+                Button {
+                    showAddVariety = true
                 } label: {
                     Label("Add Variety", systemImage: "plus.circle")
                         .foregroundStyle(VineyardTheme.info)
@@ -572,6 +569,43 @@ struct EditPaddockSheet: View {
                     .foregroundStyle(.orange)
             } else {
                 Text("Percentages total 100%.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var addVarietyPickerSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(availableVarieties) { variety in
+                    Button {
+                        let remaining = max(0, 100 - totalVarietyPercent)
+                        let suggested = varietyAllocations.isEmpty ? 100.0 : remaining
+                        varietyAllocations.append(PaddockVarietyAllocation(varietyId: variety.id, percent: suggested))
+                        showAddVariety = false
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(variety.name)
+                                    .font(.body)
+                                    .foregroundStyle(.primary)
+                                Text("Optimal: \(Int(variety.optimalGDD)) GDD")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(VineyardTheme.info)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Add Variety")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { showAddVariety = false }
+                }
             }
         }
     }
