@@ -24,9 +24,11 @@ struct AdminDashboardView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
+    @State private var path: [AdminDestination] = []
     private let repository = SupabaseAdminRepository()
 
     var body: some View {
+        NavigationStack(path: $path) {
         List {
                 if let errorMessage {
                     Section {
@@ -51,26 +53,32 @@ struct AdminDashboardView: View {
                 }
             }
         .navigationDestination(for: AdminDestination.self) { dest in
-            switch dest {
-            case .allUsers:
-                AdminUsersListView(title: "All Users", users: users)
-            case .usersFiltered(let filter, let title):
-                AdminUsersListView(title: title, users: filtered(by: filter))
-            case .allVineyards:
-                AdminVineyardsListView()
-            case .userDetail(let user):
-                AdminUserDetailView(user: user)
-            case .vineyardDetail(let v):
-                AdminVineyardDetailView(vineyard: v)
-            case .invitations:
-                AdminInvitationsListView()
-            case .pins:
-                AdminPinsListView()
-            case .sprayRecords:
-                AdminSprayRecordsListView()
-            case .workTasks:
-                AdminWorkTasksListView()
-            }
+            destinationView(for: dest)
+        }
+        }
+    }
+
+    @ViewBuilder
+    private func destinationView(for dest: AdminDestination) -> some View {
+        switch dest {
+        case .allUsers:
+            AdminUsersListView(title: "All Users", users: users)
+        case .usersFiltered(let filter, let title):
+            AdminUsersListView(title: title, users: filtered(by: filter))
+        case .allVineyards:
+            AdminVineyardsListView()
+        case .userDetail(let user):
+            AdminUserDetailView(user: user)
+        case .vineyardDetail(let v):
+            AdminVineyardDetailView(vineyard: v)
+        case .invitations:
+            AdminInvitationsListView()
+        case .pins:
+            AdminPinsListView()
+        case .sprayRecords:
+            AdminSprayRecordsListView()
+        case .workTasks:
+            AdminWorkTasksListView()
         }
     }
 
@@ -107,7 +115,9 @@ struct AdminDashboardView: View {
 
     @ViewBuilder
     private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, destination: AdminDestination) -> some View {
-        NavigationLink(value: destination) {
+        Button {
+            path.append(destination)
+        } label: {
             StatTile(title: title, value: value, symbol: symbol, color: color)
         }
         .buttonStyle(.plain)
