@@ -78,15 +78,15 @@ struct AdminDashboardView: View {
         Section {
             if let summary {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue, dest: .allUsers)
-                    tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen, dest: .allVineyards)
-                    tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange, dest: .usersFiltered(.active7, title: "Active in last 7 days"))
-                    tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo, dest: .usersFiltered(.active30, title: "Active in last 30 days"))
-                    tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink, dest: .usersFiltered(.new30, title: "New users (30d)"))
-                    tile("Pending Invites", "\(summary.pendingInvitations)", "envelope.badge.fill", .red, dest: .invitations)
-                    tile("Pins", "\(summary.totalPins)", "mappin.and.ellipse", .teal, dest: .pins)
-                    tile("Spray Records", "\(summary.totalSprayRecords)", "drop.fill", .cyan, dest: .sprayRecords)
-                    tile("Work Tasks", "\(summary.totalWorkTasks)", "checkmark.circle.fill", .green, dest: .workTasks)
+                    tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue) { AdminUsersListView(title: "All Users", users: users) }
+                    tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen) { AdminVineyardsListView() }
+                    tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange) { AdminUsersListView(title: "Active in last 7 days", users: filtered(by: .active7)) }
+                    tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo) { AdminUsersListView(title: "Active in last 30 days", users: filtered(by: .active30)) }
+                    tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink) { AdminUsersListView(title: "New users (30d)", users: filtered(by: .new30)) }
+                    tile("Pending Invites", "\(summary.pendingInvitations)", "envelope.badge.fill", .red) { AdminInvitationsListView() }
+                    tile("Pins", "\(summary.totalPins)", "mappin.and.ellipse", .teal) { AdminPinsListView() }
+                    tile("Spray Records", "\(summary.totalSprayRecords)", "drop.fill", .cyan) { AdminSprayRecordsListView() }
+                    tile("Work Tasks", "\(summary.totalWorkTasks)", "checkmark.circle.fill", .green) { AdminWorkTasksListView() }
                 }
                 .padding(.vertical, 4)
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -106,8 +106,10 @@ struct AdminDashboardView: View {
     }
 
     @ViewBuilder
-    private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, dest: AdminDestination) -> some View {
-        NavigationLink(value: dest) {
+    private func tile<Destination: View>(_ title: String, _ value: String, _ symbol: String, _ color: Color, @ViewBuilder destination: @escaping () -> Destination) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
             StatTile(title: title, value: value, symbol: symbol, color: color)
         }
         .buttonStyle(.plain)
@@ -196,10 +198,6 @@ private struct StatTile: View {
                     .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
                     .background(color.gradient, in: RoundedRectangle(cornerRadius: 7))
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.tertiary)
             }
             Text(value)
                 .font(.title2.weight(.bold))
