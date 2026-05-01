@@ -85,6 +85,22 @@ struct OperationsHubView: View {
             } header: {
                 SettingsSectionHeader(title: "Phenology", symbol: "leaf.fill", color: VineyardTheme.leafGreen)
             }
+
+            Section {
+                NavigationLink {
+                    OperationPreferencesView()
+                } label: {
+                    operationRow(
+                        title: "Operation Preferences",
+                        subtitle: "Season E-L, spray/tank, yield",
+                        icon: "slider.horizontal.3",
+                        tint: .orange,
+                        count: nil
+                    )
+                }
+            } header: {
+                SettingsSectionHeader(title: "Operation Preferences", symbol: "slider.horizontal.3", color: .orange)
+            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Operations")
