@@ -242,8 +242,8 @@ final class MigratedDataStore {
             let trimmed = item.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let isDefault: Bool
             switch item.mode {
-            case .repairs: isDefault = trimmed == "default repairs" || trimmed == "default repair"
-            case .growth: isDefault = trimmed == "default growth"
+            case .repairs: isDefault = trimmed.hasPrefix("default repair")
+            case .growth: isDefault = trimmed.hasPrefix("default growth")
             }
             if isDefault {
                 let key = "\(item.vineyardId.uuidString)|\(item.mode.rawValue)"
