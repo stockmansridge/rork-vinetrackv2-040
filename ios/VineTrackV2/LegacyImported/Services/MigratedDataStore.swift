@@ -197,6 +197,7 @@ final class MigratedDataStore {
         operatorCategories = Self.dedupById(operatorCategories) { $0.id }
         buttonTemplates = Self.dedupById(buttonTemplates) { $0.id }
         buttonTemplates = Self.dedupTemplatesByNameModeVineyard(buttonTemplates)
+        buttonTemplates = Self.collapseDefaultTemplates(buttonTemplates)
         tractors = Self.dedupById(tractors) { $0.id }
         fuelPurchases = Self.dedupById(fuelPurchases) { $0.id }
 
@@ -223,6 +224,33 @@ final class MigratedDataStore {
         result.reserveCapacity(items.count)
         for item in items {
             if seen.insert(id(item)).inserted {
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    /// Collapse legacy seeded duplicates of the canonical "Default Repairs" /
+    /// "Default Growth" templates so each vineyard ends up with at most one of
+    /// each. Non-default templates (user-created with custom names) are
+    /// preserved untouched.
+    private static func collapseDefaultTemplates(_ items: [ButtonTemplate]) -> [ButtonTemplate] {
+        var seenDefault = Set<String>()
+        var result: [ButtonTemplate] = []
+        result.reserveCapacity(items.count)
+        for item in items {
+            let trimmed = item.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let isDefault: Bool
+            switch item.mode {
+            case .repairs: isDefault = trimmed == "default repairs" || trimmed == "default repair"
+            case .growth: isDefault = trimmed == "default growth"
+            }
+            if isDefault {
+                let key = "\(item.vineyardId.uuidString)|\(item.mode.rawValue)"
+                if seenDefault.insert(key).inserted {
+                    result.append(item)
+                }
+            } else {
                 result.append(item)
             }
         }
