@@ -1,36 +1,75 @@
 import SwiftUI
 
+private enum AdminDestination: Hashable {
+    case allUsers
+    case usersFiltered(AdminUserFilter, title: String)
+    case allVineyards
+    case userDetail(AdminUserRow)
+    case vineyardDetail(AdminVineyardRow)
+    case invitations
+    case pins
+    case sprayRecords
+    case workTasks
+}
+
+private enum AdminUserFilter: Hashable {
+    case active7
+    case active30
+    case new30
+}
+
 struct AdminDashboardView: View {
     @State private var summary: AdminEngagementSummary?
     @State private var users: [AdminUserRow] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
-
     private let repository = SupabaseAdminRepository()
 
     var body: some View {
         List {
-            if let errorMessage {
-                Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.footnote)
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.footnote)
+                    }
+                }
+
+                engagementSection
+                usersSection
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Admin")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $searchText, prompt: "Search users")
+            .refreshable { await loadAll() }
+            .task { await loadAll() }
+            .overlay {
+                if isLoading && summary == nil {
+                    ProgressView()
                 }
             }
-
-            engagementSection
-            usersSection
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Admin")
-        .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "Search users")
-        .refreshable { await loadAll() }
-        .task { await loadAll() }
-        .overlay {
-            if isLoading && summary == nil {
-                ProgressView()
+        .navigationDestination(for: AdminDestination.self) { dest in
+            switch dest {
+            case .allUsers:
+                AdminUsersListView(title: "All Users", users: users)
+            case .usersFiltered(let filter, let title):
+                AdminUsersListView(title: title, users: filtered(by: filter))
+            case .allVineyards:
+                AdminVineyardsListView()
+            case .userDetail(let user):
+                AdminUserDetailView(user: user)
+            case .vineyardDetail(let v):
+                AdminVineyardDetailView(vineyard: v)
+            case .invitations:
+                AdminInvitationsListView()
+            case .pins:
+                AdminPinsListView()
+            case .sprayRecords:
+                AdminSprayRecordsListView()
+            case .workTasks:
+                AdminWorkTasksListView()
             }
         }
     }
@@ -39,15 +78,15 @@ struct AdminDashboardView: View {
         Section {
             if let summary {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    StatTile(title: "Total Users", value: "\(summary.totalUsers)", symbol: "person.3.fill", color: .blue)
-                    StatTile(title: "Vineyards", value: "\(summary.totalVineyards)", symbol: "building.2.fill", color: VineyardTheme.leafGreen)
-                    StatTile(title: "Active 7d", value: "\(summary.signedInLast7Days)", symbol: "bolt.fill", color: .orange)
-                    StatTile(title: "Active 30d", value: "\(summary.signedInLast30Days)", symbol: "calendar", color: .indigo)
-                    StatTile(title: "New 30d", value: "\(summary.newUsersLast30Days)", symbol: "person.fill.badge.plus", color: .pink)
-                    StatTile(title: "Pending Invites", value: "\(summary.pendingInvitations)", symbol: "envelope.badge.fill", color: .red)
-                    StatTile(title: "Pins", value: "\(summary.totalPins)", symbol: "mappin.and.ellipse", color: .teal)
-                    StatTile(title: "Spray Records", value: "\(summary.totalSprayRecords)", symbol: "drop.fill", color: .cyan)
-                    StatTile(title: "Work Tasks", value: "\(summary.totalWorkTasks)", symbol: "checkmark.circle.fill", color: .green)
+                    tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue, dest: .allUsers)
+                    tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen, dest: .allVineyards)
+                    tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange, dest: .usersFiltered(.active7, title: "Active in last 7 days"))
+                    tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo, dest: .usersFiltered(.active30, title: "Active in last 30 days"))
+                    tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink, dest: .usersFiltered(.new30, title: "New users (30d)"))
+                    tile("Pending Invites", "\(summary.pendingInvitations)", "envelope.badge.fill", .red, dest: .invitations)
+                    tile("Pins", "\(summary.totalPins)", "mappin.and.ellipse", .teal, dest: .pins)
+                    tile("Spray Records", "\(summary.totalSprayRecords)", "drop.fill", .cyan, dest: .sprayRecords)
+                    tile("Work Tasks", "\(summary.totalWorkTasks)", "checkmark.circle.fill", .green, dest: .workTasks)
                 }
                 .padding(.vertical, 4)
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -61,9 +100,17 @@ struct AdminDashboardView: View {
             Text("Engagement")
         } footer: {
             if summary != nil {
-                Text("Active = profile updated in the period (sign-in or app activity).")
+                Text("Tap any tile to see the underlying records. Active = signed in within the period.")
             }
         }
+    }
+
+    @ViewBuilder
+    private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, dest: AdminDestination) -> some View {
+        NavigationLink(value: dest) {
+            StatTile(title: title, value: value, symbol: symbol, color: color)
+        }
+        .buttonStyle(.plain)
     }
 
     private var filteredUsers: [AdminUserRow] {
@@ -75,6 +122,22 @@ struct AdminDashboardView: View {
         }
     }
 
+    private func filtered(by filter: AdminUserFilter) -> [AdminUserRow] {
+        let cal = Calendar.current
+        let now = Date()
+        switch filter {
+        case .active7:
+            let cutoff = cal.date(byAdding: .day, value: -7, to: now) ?? now
+            return users.filter { ($0.lastSignInAt ?? .distantPast) >= cutoff }
+        case .active30:
+            let cutoff = cal.date(byAdding: .day, value: -30, to: now) ?? now
+            return users.filter { ($0.lastSignInAt ?? .distantPast) >= cutoff }
+        case .new30:
+            let cutoff = cal.date(byAdding: .day, value: -30, to: now) ?? now
+            return users.filter { ($0.createdAt ?? .distantPast) >= cutoff }
+        }
+    }
+
     private var usersSection: some View {
         Section {
             if filteredUsers.isEmpty && !isLoading {
@@ -83,9 +146,7 @@ struct AdminDashboardView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(filteredUsers) { user in
-                NavigationLink {
-                    AdminUserDetailView(user: user)
-                } label: {
+                NavigationLink(value: AdminDestination.userDetail(user)) {
                     AdminUserRowView(user: user)
                 }
             }
@@ -119,6 +180,8 @@ struct AdminDashboardView: View {
     }
 }
 
+// MARK: - Tile
+
 private struct StatTile: View {
     let title: String
     let value: String
@@ -134,6 +197,9 @@ private struct StatTile: View {
                     .frame(width: 28, height: 28)
                     .background(color.gradient, in: RoundedRectangle(cornerRadius: 7))
                 Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
             Text(value)
                 .font(.title2.weight(.bold))
@@ -145,8 +211,11 @@ private struct StatTile: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
     }
 }
+
+// MARK: - User Row
 
 private struct AdminUserRowView: View {
     let user: AdminUserRow
@@ -177,13 +246,21 @@ private struct AdminUserRowView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(VineyardTheme.leafGreen)
                 }
-                if let created = user.createdAt {
+                if let last = user.lastSignInAt {
+                    Text(last, format: .relative(presentation: .named))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                } else if let created = user.createdAt {
                     Text(created, format: .dateTime.month(.abbreviated).day().year())
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
+        .contentShape(Rectangle())
     }
 
     private var initials: String {
@@ -194,9 +271,54 @@ private struct AdminUserRowView: View {
     }
 }
 
+// MARK: - Users list
+
+private struct AdminUsersListView: View {
+    let title: String
+    let users: [AdminUserRow]
+    @State private var query: String = ""
+
+    private var filtered: [AdminUserRow] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return users }
+        return users.filter {
+            $0.email.lowercased().contains(q) ||
+            ($0.fullName?.lowercased().contains(q) ?? false)
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                if filtered.isEmpty {
+                    Text("No users.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(filtered) { user in
+                    NavigationLink(value: AdminDestination.userDetail(user)) {
+                        AdminUserRowView(user: user)
+                    }
+                }
+            } header: {
+                Text("\(filtered.count) of \(users.count)")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Search")
+    }
+}
+
+// MARK: - User detail
+
 private struct AdminUserDetailView: View {
     let user: AdminUserRow
     @Environment(\.openURL) private var openURL
+    @State private var vineyards: [AdminUserVineyardRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+
+    private let repository = SupabaseAdminRepository()
 
     var body: some View {
         Form {
@@ -204,18 +326,73 @@ private struct AdminUserDetailView: View {
                 LabeledContent("Name", value: user.fullName ?? "—")
                 LabeledContent("Email", value: user.email)
                 LabeledContent("Vineyards", value: "\(user.vineyardCount)")
+                LabeledContent("Owned", value: "\(user.ownedCount)")
                 if let created = user.createdAt {
                     LabeledContent("Joined") {
                         Text(created, format: .dateTime.month(.abbreviated).day().year())
                     }
                 }
-                if let updated = user.updatedAt {
+                if let last = user.lastSignInAt {
+                    LabeledContent("Last Sign-In") {
+                        Text(last, format: .relative(presentation: .named))
+                    }
+                } else if let updated = user.updatedAt {
                     LabeledContent("Last Active") {
                         Text(updated, format: .relative(presentation: .named))
                     }
                 }
             } header: {
                 Text("Profile")
+            }
+
+            Section {
+                if isLoading && vineyards.isEmpty {
+                    HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
+                } else if let loadError {
+                    Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.footnote)
+                } else if vineyards.isEmpty {
+                    Text("No vineyards.").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    ForEach(vineyards) { v in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(v.name).font(.subheadline.weight(.semibold))
+                                if v.isOwner {
+                                    Text("OWNER")
+                                        .font(.caption2.weight(.bold))
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(VineyardTheme.leafGreen.opacity(0.15), in: Capsule())
+                                        .foregroundStyle(VineyardTheme.leafGreen)
+                                } else if let role = v.role {
+                                    Text(role.uppercased())
+                                        .font(.caption2.weight(.bold))
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color.blue.opacity(0.12), in: Capsule())
+                                        .foregroundStyle(.blue)
+                                }
+                                Spacer()
+                                if v.deletedAt != nil {
+                                    Text("ARCHIVED")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            HStack(spacing: 12) {
+                                Label("\(v.memberCount)", systemImage: "person.2.fill")
+                                if let c = v.country, !c.isEmpty { Text(c) }
+                                if let d = v.createdAt {
+                                    Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Vineyards (\(vineyards.count))")
             }
 
             Section {
@@ -253,6 +430,20 @@ private struct AdminUserDetailView: View {
         }
         .navigationTitle(user.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadVineyards() }
+        .refreshable { await loadVineyards() }
+    }
+
+    @MainActor
+    private func loadVineyards() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do {
+            vineyards = try await repository.fetchUserVineyards(userId: user.id)
+        } catch {
+            loadError = error.localizedDescription
+        }
     }
 
     private func sendEmail(subject: String, body: String) {
@@ -266,5 +457,365 @@ private struct AdminUserDetailView: View {
         if let url = components.url {
             openURL(url)
         }
+    }
+}
+
+// MARK: - Vineyards list
+
+private struct AdminVineyardsListView: View {
+    @State private var vineyards: [AdminVineyardRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+    @State private var query: String = ""
+
+    private let repository = SupabaseAdminRepository()
+
+    private var filtered: [AdminVineyardRow] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return vineyards }
+        return vineyards.filter {
+            $0.name.lowercased().contains(q) ||
+            ($0.ownerEmail?.lowercased().contains(q) ?? false) ||
+            ($0.ownerFullName?.lowercased().contains(q) ?? false)
+        }
+    }
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section {
+                    Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).font(.footnote)
+                }
+            }
+            Section {
+                if filtered.isEmpty && !isLoading {
+                    Text("No vineyards.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(filtered) { v in
+                    NavigationLink(value: AdminDestination.vineyardDetail(v)) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(v.name).font(.subheadline.weight(.semibold))
+                                Spacer()
+                                if v.deletedAt != nil {
+                                    Text("ARCHIVED").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(v.ownerDisplay).font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 12) {
+                                Label("\(v.memberCount)", systemImage: "person.2.fill")
+                                if v.pendingInvites > 0 {
+                                    Label("\(v.pendingInvites)", systemImage: "envelope.badge.fill")
+                                        .foregroundStyle(.orange)
+                                }
+                                if let d = v.createdAt {
+                                    Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                }
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(filtered.count) of \(vineyards.count)")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Vineyards")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Search vineyards or owners")
+        .overlay { if isLoading && vineyards.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do {
+            vineyards = try await repository.fetchAllVineyards()
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+}
+
+private struct AdminVineyardDetailView: View {
+    let vineyard: AdminVineyardRow
+
+    var body: some View {
+        Form {
+            Section("Vineyard") {
+                LabeledContent("Name", value: vineyard.name)
+                LabeledContent("Owner", value: vineyard.ownerDisplay)
+                if let email = vineyard.ownerEmail { LabeledContent("Owner Email", value: email) }
+                if let c = vineyard.country, !c.isEmpty { LabeledContent("Country", value: c) }
+                LabeledContent("Members", value: "\(vineyard.memberCount)")
+                LabeledContent("Pending Invites", value: "\(vineyard.pendingInvites)")
+                if let d = vineyard.createdAt {
+                    LabeledContent("Created") { Text(d, format: .dateTime.month(.abbreviated).day().year()) }
+                }
+                if vineyard.deletedAt != nil {
+                    LabeledContent("Status", value: "Archived")
+                }
+            }
+            Section("Vineyard ID") {
+                Text(vineyard.id.uuidString).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(vineyard.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Invitations
+
+private struct AdminInvitationsListView: View {
+    @State private var rows: [AdminInvitationRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+
+    private let repository = SupabaseAdminRepository()
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.footnote) }
+            }
+            Section {
+                if rows.isEmpty && !isLoading {
+                    Text("No invitations.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(r.email).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            statusBadge(r.status)
+                        }
+                        HStack(spacing: 8) {
+                            Text(r.role.capitalized).font(.caption.weight(.medium))
+                            if let v = r.vineyardName { Text("• \(v)").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let d = r.createdAt {
+                            Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(rows.count) invitations")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Invitations")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay { if isLoading && rows.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ status: String) -> some View {
+        let color: Color = {
+            switch status.lowercased() {
+            case "pending": return .orange
+            case "accepted": return .green
+            case "declined", "expired", "cancelled": return .gray
+            default: return .blue
+            }
+        }()
+        Text(status.uppercased())
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do { rows = try await repository.fetchInvitations() }
+        catch { loadError = error.localizedDescription }
+    }
+}
+
+// MARK: - Pins
+
+private struct AdminPinsListView: View {
+    @State private var rows: [AdminPinRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+
+    private let repository = SupabaseAdminRepository()
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.footnote) }
+            }
+            Section {
+                if rows.isEmpty && !isLoading {
+                    Text("No pins.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(r.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Spacer()
+                            if r.isCompleted {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            if let v = r.vineyardName { Text(v).font(.caption).foregroundStyle(.secondary) }
+                            if let c = r.category { Text("• \(c)").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let d = r.createdAt {
+                            Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(rows.count) pins")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Pins")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay { if isLoading && rows.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do { rows = try await repository.fetchPins() }
+        catch { loadError = error.localizedDescription }
+    }
+}
+
+// MARK: - Spray Records
+
+private struct AdminSprayRecordsListView: View {
+    @State private var rows: [AdminSprayRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+
+    private let repository = SupabaseAdminRepository()
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.footnote) }
+            }
+            Section {
+                if rows.isEmpty && !isLoading {
+                    Text("No spray records.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(r.sprayReference?.isEmpty == false ? r.sprayReference! : (r.operationType ?? "Spray"))
+                                .font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Spacer()
+                            if let op = r.operationType { Text(op).font(.caption2).foregroundStyle(.secondary) }
+                        }
+                        if let v = r.vineyardName { Text(v).font(.caption).foregroundStyle(.secondary) }
+                        if let d = r.date ?? r.createdAt {
+                            Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(rows.count) spray records")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Spray Records")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay { if isLoading && rows.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do { rows = try await repository.fetchSprayRecords() }
+        catch { loadError = error.localizedDescription }
+    }
+}
+
+// MARK: - Work Tasks
+
+private struct AdminWorkTasksListView: View {
+    @State private var rows: [AdminWorkTaskRow] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+
+    private let repository = SupabaseAdminRepository()
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.footnote) }
+            }
+            Section {
+                if rows.isEmpty && !isLoading {
+                    Text("No work tasks.").font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(rows) { r in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(r.taskType?.isEmpty == false ? r.taskType! : "Task")
+                                .font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Spacer()
+                            if let h = r.durationHours, h > 0 {
+                                Text(String(format: "%.1fh", h)).font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            if let v = r.vineyardName { Text(v).font(.caption).foregroundStyle(.secondary) }
+                            if let p = r.paddockName, !p.isEmpty { Text("• \(p)").font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let d = r.date ?? r.createdAt {
+                            Text(d, format: .dateTime.month(.abbreviated).day().year())
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(rows.count) work tasks")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Work Tasks")
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay { if isLoading && rows.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do { rows = try await repository.fetchWorkTasks() }
+        catch { loadError = error.localizedDescription }
     }
 }
