@@ -24,37 +24,34 @@ struct AdminDashboardView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
-    @State private var path: [AdminDestination] = []
     private let repository = SupabaseAdminRepository()
 
     var body: some View {
-        NavigationStack(path: $path) {
         List {
-                if let errorMessage {
-                    Section {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.footnote)
-                    }
+            if let errorMessage {
+                Section {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.footnote)
                 }
+            }
 
-                engagementSection
-                usersSection
+            engagementSection
+            usersSection
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Admin")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search users")
+        .refreshable { await loadAll() }
+        .task { await loadAll() }
+        .overlay {
+            if isLoading && summary == nil {
+                ProgressView()
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Admin")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Search users")
-            .refreshable { await loadAll() }
-            .task { await loadAll() }
-            .overlay {
-                if isLoading && summary == nil {
-                    ProgressView()
-                }
-            }
+        }
         .navigationDestination(for: AdminDestination.self) { dest in
             destinationView(for: dest)
-        }
         }
     }
 
@@ -115,9 +112,7 @@ struct AdminDashboardView: View {
 
     @ViewBuilder
     private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, destination: AdminDestination) -> some View {
-        Button {
-            path.append(destination)
-        } label: {
+        NavigationLink(value: destination) {
             StatTile(title: title, value: value, symbol: symbol, color: color)
         }
         .buttonStyle(.plain)
