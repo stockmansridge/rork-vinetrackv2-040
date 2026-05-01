@@ -196,6 +196,7 @@ final class MigratedDataStore {
         grapeVarieties = Self.dedupById(grapeVarieties) { $0.id }
         operatorCategories = Self.dedupById(operatorCategories) { $0.id }
         buttonTemplates = Self.dedupById(buttonTemplates) { $0.id }
+        buttonTemplates = Self.dedupTemplatesByNameModeVineyard(buttonTemplates)
         tractors = Self.dedupById(tractors) { $0.id }
         fuelPurchases = Self.dedupById(fuelPurchases) { $0.id }
 
@@ -222,6 +223,19 @@ final class MigratedDataStore {
         result.reserveCapacity(items.count)
         for item in items {
             if seen.insert(id(item)).inserted {
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    private static func dedupTemplatesByNameModeVineyard(_ items: [ButtonTemplate]) -> [ButtonTemplate] {
+        var seen = Set<String>()
+        var result: [ButtonTemplate] = []
+        result.reserveCapacity(items.count)
+        for item in items {
+            let key = "\(item.vineyardId.uuidString)|\(item.mode.rawValue)|\(item.name.lowercased())"
+            if seen.insert(key).inserted {
                 result.append(item)
             }
         }
