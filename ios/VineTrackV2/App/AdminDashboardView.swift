@@ -6,7 +6,7 @@ private enum AdminUserFilter: Hashable {
     case new30
 }
 
-private enum AdminDestination: Hashable {
+private enum AdminDestination: Identifiable, Hashable {
     case allUsers
     case usersFiltered(AdminUserFilter, String)
     case vineyards
@@ -16,6 +16,20 @@ private enum AdminDestination: Hashable {
     case workTasks
     case userDetail(AdminUserRow)
     case vineyardDetail(AdminVineyardRow)
+
+    var id: String {
+        switch self {
+        case .allUsers: return "allUsers"
+        case .usersFiltered(let f, _): return "usersFiltered-\(f)"
+        case .vineyards: return "vineyards"
+        case .invitations: return "invitations"
+        case .pins: return "pins"
+        case .sprayRecords: return "sprayRecords"
+        case .workTasks: return "workTasks"
+        case .userDetail(let u): return "user-\(u.id.uuidString)"
+        case .vineyardDetail(let v): return "vineyard-\(v.id.uuidString)"
+        }
+    }
 }
 
 struct AdminDashboardView: View {
@@ -24,6 +38,7 @@ struct AdminDashboardView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
+    @State private var selectedDestination: AdminDestination?
     private let repository = SupabaseAdminRepository()
 
     var body: some View {
@@ -50,7 +65,7 @@ struct AdminDashboardView: View {
                 ProgressView()
             }
         }
-        .navigationDestination(for: AdminDestination.self) { destination in
+        .navigationDestination(item: $selectedDestination) { destination in
             destinationView(for: destination)
         }
     }
@@ -59,11 +74,17 @@ struct AdminDashboardView: View {
     private func destinationView(for destination: AdminDestination) -> some View {
         switch destination {
         case .allUsers:
-            AdminUsersListView(title: "All Users", users: users)
+            AdminUsersListView(title: "All Users", users: users, onSelect: { user in
+                selectedDestination = .userDetail(user)
+            })
         case .usersFiltered(let filter, let title):
-            AdminUsersListView(title: title, users: filtered(by: filter))
+            AdminUsersListView(title: title, users: filtered(by: filter), onSelect: { user in
+                selectedDestination = .userDetail(user)
+            })
         case .vineyards:
-            AdminVineyardsListView()
+            AdminVineyardsListView(onSelect: { v in
+                selectedDestination = .vineyardDetail(v)
+            })
         case .invitations:
             AdminInvitationsListView()
         case .pins:
@@ -73,7 +94,9 @@ struct AdminDashboardView: View {
         case .workTasks:
             AdminWorkTasksListView()
         case .userDetail(let user):
-            AdminUserDetailView(user: user)
+            AdminUserDetailView(user: user, onSelectVineyard: { v in
+                selectedDestination = .vineyardDetail(v)
+            })
         case .vineyardDetail(let vineyard):
             AdminVineyardDetailView(vineyard: vineyard)
         }
@@ -112,7 +135,9 @@ struct AdminDashboardView: View {
 
     @ViewBuilder
     private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, value destination: AdminDestination) -> some View {
-        NavigationLink(value: destination) {
+        Button {
+            selectedDestination = destination
+        } label: {
             StatTile(title: title, value: value, symbol: symbol, color: color)
         }
         .buttonStyle(.plain)
@@ -151,9 +176,12 @@ struct AdminDashboardView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(filteredUsers) { user in
-                NavigationLink(value: AdminDestination.userDetail(user)) {
+                Button {
+                    selectedDestination = .userDetail(user)
+                } label: {
                     AdminUserRowView(user: user)
                 }
+                .buttonStyle(.plain)
             }
         } header: {
             HStack {
@@ -274,6 +302,7 @@ private struct AdminUserRowView: View {
 private struct AdminUsersListView: View {
     let title: String
     let users: [AdminUserRow]
+    let onSelect: (AdminUserRow) -> Void
     @State private var query: String = ""
 
     private var filtered: [AdminUserRow] {
@@ -292,9 +321,12 @@ private struct AdminUsersListView: View {
                     Text("No users.").font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(filtered) { user in
-                    NavigationLink(value: AdminDestination.userDetail(user)) {
+                    Button {
+                        onSelect(user)
+                    } label: {
                         AdminUserRowView(user: user)
                     }
+                    .buttonStyle(.plain)
                 }
             } header: {
                 Text("\(filtered.count) of \(users.count)")
@@ -311,6 +343,7 @@ private struct AdminUsersListView: View {
 
 private struct AdminUserDetailView: View {
     let user: AdminUserRow
+    var onSelectVineyard: ((AdminVineyardRow) -> Void)? = nil
     @Environment(\.openURL) private var openURL
     @State private var vineyards: [AdminUserVineyardRow] = []
     @State private var isLoading: Bool = false
@@ -461,6 +494,7 @@ private struct AdminUserDetailView: View {
 // MARK: - Vineyards list
 
 private struct AdminVineyardsListView: View {
+    let onSelect: (AdminVineyardRow) -> Void
     @State private var vineyards: [AdminVineyardRow] = []
     @State private var isLoading: Bool = false
     @State private var loadError: String?
@@ -491,7 +525,9 @@ private struct AdminVineyardsListView: View {
                     Text("No vineyards.").font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(filtered) { v in
-                    NavigationLink(value: AdminDestination.vineyardDetail(v)) {
+                    Button {
+                        onSelect(v)
+                    } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(v.name).font(.subheadline.weight(.semibold))
@@ -515,6 +551,7 @@ private struct AdminVineyardsListView: View {
                             .foregroundStyle(.secondary)
                         }
                     }
+                    .buttonStyle(.plain)
                 }
             } header: {
                 Text("\(filtered.count) of \(vineyards.count)")
