@@ -351,7 +351,7 @@ private struct NewHomeTabView: View {
         VStack(alignment: .leading, spacing: 10) {
             plainSectionHeader("Today")
             NavigationLink {
-                PinsView()
+                PinsView(initialViewMode: .list)
             } label: {
                 VineyardCard {
                     HStack(spacing: 14) {
