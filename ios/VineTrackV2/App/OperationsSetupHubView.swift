@@ -34,7 +34,79 @@ struct VineyardSetupHubView: View {
     @State private var importSummary: PaddockJSONService.ImportSummary?
     @State private var importErrorMessage: String?
 
+    @State private var blockSortOption: BlockSortOption = .rowNumber
+
+    private enum BlockSortOption: String, CaseIterable, Identifiable {
+        case rowNumber
+        case varietyAZ
+        case rowCount
+        case vineCount
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .rowNumber: return "Row Number"
+            case .varietyAZ: return "Variety A\u{2013}Z"
+            case .rowCount: return "Number of Rows"
+            case .vineCount: return "Number of Vines"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .rowNumber: return "number"
+            case .varietyAZ: return "textformat"
+            case .rowCount: return "square.grid.3x3"
+            case .vineCount: return "leaf"
+            }
+        }
+    }
+
     private var paddocks: [Paddock] { store.orderedPaddocks }
+
+    private var sortedPaddocks: [Paddock] {
+        let base = paddocks
+        switch blockSortOption {
+        case .rowNumber:
+            return base.sorted { lhs, rhs in
+                let l = lhs.rows.map { $0.number }.min() ?? Int.max
+                let r = rhs.rows.map { $0.number }.min() ?? Int.max
+                if l != r { return l < r }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .varietyAZ:
+            return base.sorted { lhs, rhs in
+                let l = dominantVarietyName(for: lhs)
+                let r = dominantVarietyName(for: rhs)
+                let cmp = l.localizedStandardCompare(r)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .rowCount:
+            return base.sorted { lhs, rhs in
+                if lhs.rows.count != rhs.rows.count { return lhs.rows.count > rhs.rows.count }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .vineCount:
+            return base.sorted { lhs, rhs in
+                if lhs.effectiveVineCount != rhs.effectiveVineCount {
+                    return lhs.effectiveVineCount > rhs.effectiveVineCount
+                }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        }
+    }
+
+    private func dominantVarietyName(for paddock: Paddock) -> String {
+        guard let allocation = paddock.varietyAllocations.max(by: { $0.percent < $1.percent }) else {
+            return "\u{FFFF}"
+        }
+        if let variety = store.grapeVarieties.first(where: { $0.id == allocation.varietyId }) {
+            return variety.name
+        }
+        return "\u{FFFF}"
+    }
 
     private var currentVineyardVarieties: Int {
         guard let vid = store.selectedVineyardId else { return 0 }
@@ -170,9 +242,32 @@ struct VineyardSetupHubView: View {
 
     private var blocksSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Blocks")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Blocks")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if paddocks.count > 1 {
+                    Menu {
+                        Picker("Sort by", selection: $blockSortOption) {
+                            ForEach(BlockSortOption.allCases) { option in
+                                Label(option.label, systemImage: option.symbol).tag(option)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.footnote.weight(.semibold))
+                            Text(blockSortOption.label)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.accentColor.opacity(0.12), in: .capsule)
+                    }
+                }
+            }
 
             cardBackground {
                 if accessControl.canCreateOperationalRecords {
@@ -196,11 +291,11 @@ struct VineyardSetupHubView: View {
                         .padding(.vertical, 14)
                     }
                     .buttonStyle(.plain)
-                    if !paddocks.isEmpty {
+                    if !sortedPaddocks.isEmpty {
                         Divider().padding(.leading, 16)
                     }
                 }
-                ForEach(Array(paddocks.enumerated()), id: \.element.id) { idx, paddock in
+                ForEach(Array(sortedPaddocks.enumerated()), id: \.element.id) { idx, paddock in
                     Button {
                         paddockToEdit = paddock
                     } label: {
@@ -209,7 +304,7 @@ struct VineyardSetupHubView: View {
                             .padding(.vertical, 12)
                     }
                     .buttonStyle(.plain)
-                    if idx < paddocks.count - 1 {
+                    if idx < sortedPaddocks.count - 1 {
                         Divider().padding(.leading, 16)
                     }
                 }
