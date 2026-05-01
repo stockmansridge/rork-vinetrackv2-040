@@ -18,6 +18,8 @@ struct IrrigationRecommendationView: View {
     @State private var manualRainOverrides: [Date: String] = [:]
     @State private var useManualInputs: Bool = false
     @State private var forecastDuration: Int = 5
+    @State private var showForecastReview: Bool = false
+    @State private var forecastConfirmed: Bool = false
 
     private let durationOptions: [Int] = [5, 7, 14, 28]
 
@@ -75,12 +77,18 @@ struct IrrigationRecommendationView: View {
             blockSection
             forecastSection
             settingsSection
-            if let result {
+            if let result, forecastConfirmed {
                 resultSection(result)
                 dailyBreakdownSection(result)
             } else if forecastService.forecast == nil, forecastService.errorMessage == nil, !forecastService.isLoading {
                 Section {
                     Text("Load a \(forecastDuration)-day forecast to see a recommendation.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            } else if forecastService.forecast != nil, !forecastConfirmed {
+                Section {
+                    Label("Review and confirm the forecast above to see your recommendation.", systemImage: "hand.tap.fill")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -91,6 +99,9 @@ struct IrrigationRecommendationView: View {
                         .foregroundStyle(.orange)
                 }
             }
+        }
+        .sheet(isPresented: $showForecastReview) {
+            forecastReviewSheet
         }
         .navigationTitle("Irrigation Advisor")
         .navigationBarTitleDisplayMode(.inline)
@@ -119,6 +130,7 @@ struct IrrigationRecommendationView: View {
             applyPaddockDefaults()
         }
         .onChange(of: forecastDuration) { _, _ in
+            forecastConfirmed = false
             if forecastService.forecast != nil || forecastService.errorMessage != nil {
                 Task { await loadForecast() }
             }
@@ -187,6 +199,13 @@ struct IrrigationRecommendationView: View {
                     Text("\(forecast.days.count)")
                         .foregroundStyle(.secondary)
                 }
+
+                Button {
+                    showForecastReview = true
+                } label: {
+                    Label(forecastConfirmed ? "Forecast Confirmed — Review Again" : "Review \(forecast.days.count)-Day Forecast", systemImage: forecastConfirmed ? "checkmark.seal.fill" : "eye.fill")
+                        .foregroundStyle(forecastConfirmed ? VineyardTheme.leafGreen : .blue)
+                }
             }
 
             Button {
@@ -195,6 +214,9 @@ struct IrrigationRecommendationView: View {
                 Label(forecastService.forecast == nil ? "Load Forecast" : "Refresh Forecast", systemImage: "arrow.clockwise")
             }
             .disabled(forecastService.isLoading || latitude == nil || longitude == nil)
+            .onChange(of: forecastService.forecast?.days.count) { _, _ in
+                forecastConfirmed = false
+            }
 
             if latitude == nil || longitude == nil {
                 Text("Set your vineyard location in Settings → Vineyard Setup to load a forecast.")
@@ -466,7 +488,54 @@ struct IrrigationRecommendationView: View {
 
     private func loadForecast() async {
         guard let lat = latitude, let lon = longitude else { return }
+        forecastConfirmed = false
         await forecastService.fetchForecast(latitude: lat, longitude: lon, days: forecastDuration)
+    }
+
+    private var forecastReviewSheet: some View {
+        NavigationStack {
+            List {
+                if let forecast = forecastService.forecast {
+                    Section {
+                        ForEach(forecast.days) { day in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(day.date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)))
+                                    .font(.subheadline.weight(.semibold))
+                                HStack(spacing: 16) {
+                                    Label(String(format: "%.1f mm ETo", day.forecastEToMm), systemImage: "sun.max.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                    Label(String(format: "%.1f mm rain", day.forecastRainMm), systemImage: "cloud.rain.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.blue)
+                                }
+                                .monospacedDigit()
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    } header: {
+                        Text("\(forecast.days.count)-Day Forecast")
+                    } footer: {
+                        Text("Source: \(forecast.source). Confirm to use this forecast for the irrigation recommendation.")
+                    }
+                }
+            }
+            .navigationTitle("Review Forecast")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { showForecastReview = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Confirm") {
+                        forecastConfirmed = true
+                        showForecastReview = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
     }
 
     private func applyPaddockDefaults() {
