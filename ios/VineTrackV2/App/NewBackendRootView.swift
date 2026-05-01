@@ -134,25 +134,7 @@ struct NewBackendRootView: View {
     }
 
     private var loadingView: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.45, green: 0.72, blue: 0.30),
-                    Color(red: 0.30, green: 0.55, blue: 0.22)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            VStack(spacing: 24) {
-                Image("vinetrack_logo")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 200, height: 200)
-                ProgressView()
-                    .tint(.white)
-            }
-        }
+        LoadingSplashView()
     }
 
     private var disclaimerLoadingView: some View {
