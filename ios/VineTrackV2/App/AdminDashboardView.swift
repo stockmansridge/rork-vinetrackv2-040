@@ -6,6 +6,18 @@ private enum AdminUserFilter: Hashable {
     case new30
 }
 
+private enum AdminDestination: Hashable {
+    case allUsers
+    case usersFiltered(AdminUserFilter, String)
+    case vineyards
+    case invitations
+    case pins
+    case sprayRecords
+    case workTasks
+    case userDetail(AdminUserRow)
+    case vineyardDetail(AdminVineyardRow)
+}
+
 struct AdminDashboardView: View {
     @State private var summary: AdminEngagementSummary?
     @State private var users: [AdminUserRow] = []
@@ -38,21 +50,48 @@ struct AdminDashboardView: View {
                 ProgressView()
             }
         }
+        .navigationDestination(for: AdminDestination.self) { destination in
+            destinationView(for: destination)
+        }
+    }
+
+    @ViewBuilder
+    private func destinationView(for destination: AdminDestination) -> some View {
+        switch destination {
+        case .allUsers:
+            AdminUsersListView(title: "All Users", users: users)
+        case .usersFiltered(let filter, let title):
+            AdminUsersListView(title: title, users: filtered(by: filter))
+        case .vineyards:
+            AdminVineyardsListView()
+        case .invitations:
+            AdminInvitationsListView()
+        case .pins:
+            AdminPinsListView()
+        case .sprayRecords:
+            AdminSprayRecordsListView()
+        case .workTasks:
+            AdminWorkTasksListView()
+        case .userDetail(let user):
+            AdminUserDetailView(user: user)
+        case .vineyardDetail(let vineyard):
+            AdminVineyardDetailView(vineyard: vineyard)
+        }
     }
 
     private var engagementSection: some View {
         Section {
             if let summary {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                    tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue) { AdminUsersListView(title: "All Users", users: users) }
-                    tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen) { AdminVineyardsListView() }
-                    tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange) { AdminUsersListView(title: "Active in last 7 days", users: filtered(by: .active7)) }
-                    tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo) { AdminUsersListView(title: "Active in last 30 days", users: filtered(by: .active30)) }
-                    tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink) { AdminUsersListView(title: "New users (30d)", users: filtered(by: .new30)) }
-                    tile("Pending Invites", "\(summary.pendingInvitations)", "envelope.badge.fill", .red) { AdminInvitationsListView() }
-                    tile("Pins", "\(summary.totalPins)", "mappin.and.ellipse", .teal) { AdminPinsListView() }
-                    tile("Spray Records", "\(summary.totalSprayRecords)", "drop.fill", .cyan) { AdminSprayRecordsListView() }
-                    tile("Work Tasks", "\(summary.totalWorkTasks)", "checkmark.circle.fill", .green) { AdminWorkTasksListView() }
+                    tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue, value: .allUsers)
+                    tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen, value: .vineyards)
+                    tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange, value: .usersFiltered(.active7, "Active in last 7 days"))
+                    tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo, value: .usersFiltered(.active30, "Active in last 30 days"))
+                    tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink, value: .usersFiltered(.new30, "New users (30d)"))
+                    tile("Pending Invites", "\(summary.pendingInvitations)", "envelope.badge.fill", .red, value: .invitations)
+                    tile("Pins", "\(summary.totalPins)", "mappin.and.ellipse", .teal, value: .pins)
+                    tile("Spray Records", "\(summary.totalSprayRecords)", "drop.fill", .cyan, value: .sprayRecords)
+                    tile("Work Tasks", "\(summary.totalWorkTasks)", "checkmark.circle.fill", .green, value: .workTasks)
                 }
                 .padding(.vertical, 4)
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -72,10 +111,8 @@ struct AdminDashboardView: View {
     }
 
     @ViewBuilder
-    private func tile<Destination: View>(_ title: String, _ value: String, _ symbol: String, _ color: Color, @ViewBuilder destination: @escaping () -> Destination) -> some View {
-        NavigationLink {
-            destination()
-        } label: {
+    private func tile(_ title: String, _ value: String, _ symbol: String, _ color: Color, value destination: AdminDestination) -> some View {
+        NavigationLink(value: destination) {
             StatTile(title: title, value: value, symbol: symbol, color: color)
         }
         .buttonStyle(.plain)
@@ -114,9 +151,7 @@ struct AdminDashboardView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(filteredUsers) { user in
-                NavigationLink {
-                    AdminUserDetailView(user: user)
-                } label: {
+                NavigationLink(value: AdminDestination.userDetail(user)) {
                     AdminUserRowView(user: user)
                 }
             }
@@ -257,9 +292,7 @@ private struct AdminUsersListView: View {
                     Text("No users.").font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(filtered) { user in
-                    NavigationLink {
-                        AdminUserDetailView(user: user)
-                    } label: {
+                    NavigationLink(value: AdminDestination.userDetail(user)) {
                         AdminUserRowView(user: user)
                     }
                 }
@@ -458,9 +491,7 @@ private struct AdminVineyardsListView: View {
                     Text("No vineyards.").font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(filtered) { v in
-                    NavigationLink {
-                        AdminVineyardDetailView(vineyard: v)
-                    } label: {
+                    NavigationLink(value: AdminDestination.vineyardDetail(v)) {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(v.name).font(.subheadline.weight(.semibold))
