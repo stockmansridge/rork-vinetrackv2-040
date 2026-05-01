@@ -18,6 +18,7 @@ struct AddEditWorkTaskView: View {
     @State private var notes: String = ""
     @State private var resources: [WorkTaskResource] = []
     @State private var showDelete: Bool = false
+    @State private var showWorkerTypes: Bool = false
 
     init(existingTask: WorkTask? = nil) {
         self.existingTask = existingTask
@@ -140,7 +141,19 @@ struct AddEditWorkTaskView: View {
                             .foregroundStyle(.secondary)
                     }
                 } header: {
-                    Text("Resources")
+                    HStack {
+                        Text("Resources")
+                        Spacer()
+                        Button {
+                            showWorkerTypes = true
+                        } label: {
+                            Label("Edit", systemImage: "square.and.pencil")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption.weight(.semibold))
+                                .textCase(nil)
+                        }
+                        .buttonStyle(.borderless)
+                    }
                 } footer: {
                     Text("Set the number of workers of each type used on this task.")
                 }
@@ -215,6 +228,16 @@ struct AddEditWorkTaskView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .onAppear(perform: loadIfEditing)
+            .sheet(isPresented: $showWorkerTypes) {
+                NavigationStack {
+                    OperatorCategoriesView()
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showWorkerTypes = false }
+                            }
+                        }
+                }
+            }
         }
     }
 

@@ -7,6 +7,7 @@ struct WorkTaskCalculatorView: View {
     @State private var hoursText: String = ""
     @State private var peopleText: String = "1"
     @State private var selectedCategoryId: UUID?
+    @State private var showWorkerTypes: Bool = false
 
     @FocusState private var focusedField: Field?
 
@@ -52,7 +53,7 @@ struct WorkTaskCalculatorView: View {
 
     private var calculatorForm: some View {
         Form {
-            Section("Worker Type") {
+            Section {
                 if store.operatorCategories.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("No worker types configured")
@@ -77,6 +78,20 @@ struct WorkTaskCalculatorView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+            } header: {
+                HStack {
+                    Text("Worker Type")
+                    Spacer()
+                    Button {
+                        showWorkerTypes = true
+                    } label: {
+                        Label("Edit", systemImage: "square.and.pencil")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption.weight(.semibold))
+                            .textCase(nil)
+                    }
+                    .buttonStyle(.borderless)
                 }
             }
 
@@ -132,6 +147,16 @@ struct WorkTaskCalculatorView: View {
         .onAppear {
             if selectedCategoryId == nil {
                 selectedCategoryId = store.operatorCategories.first?.id
+            }
+        }
+        .sheet(isPresented: $showWorkerTypes) {
+            NavigationStack {
+                OperatorCategoriesView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showWorkerTypes = false }
+                        }
+                    }
             }
         }
     }
