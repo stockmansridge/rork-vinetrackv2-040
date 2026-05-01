@@ -17,6 +17,9 @@ struct IrrigationRecommendationView: View {
     @State private var manualEToOverrides: [Date: String] = [:]
     @State private var manualRainOverrides: [Date: String] = [:]
     @State private var useManualInputs: Bool = false
+    @State private var forecastDuration: Int = 5
+
+    private let durationOptions: [Int] = [5, 7, 14, 28]
 
     @FocusState private var focusedField: Field?
 
@@ -77,7 +80,7 @@ struct IrrigationRecommendationView: View {
                 dailyBreakdownSection(result)
             } else if forecastService.forecast == nil, forecastService.errorMessage == nil, !forecastService.isLoading {
                 Section {
-                    Text("Load a 5-day forecast to see a recommendation.")
+                    Text("Load a \(forecastDuration)-day forecast to see a recommendation.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -114,6 +117,11 @@ struct IrrigationRecommendationView: View {
         .onChange(of: bufferText) { _, _ in persistParameters() }
         .onChange(of: selectedPaddockId) { _, _ in
             applyPaddockDefaults()
+        }
+        .onChange(of: forecastDuration) { _, _ in
+            if forecastService.forecast != nil || forecastService.errorMessage != nil {
+                Task { await loadForecast() }
+            }
         }
     }
 
@@ -152,10 +160,17 @@ struct IrrigationRecommendationView: View {
 
     private var forecastSection: some View {
         Section {
+            Picker("Forecast Duration", selection: $forecastDuration) {
+                ForEach(durationOptions, id: \.self) { days in
+                    Text("\(days) days").tag(days)
+                }
+            }
+            .pickerStyle(.segmented)
+
             if forecastService.isLoading {
                 HStack {
                     ProgressView()
-                    Text("Loading 5-day forecast…")
+                    Text("Loading \(forecastDuration)-day forecast…")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -189,9 +204,9 @@ struct IrrigationRecommendationView: View {
 
             Toggle("Override forecast values", isOn: $useManualInputs)
         } header: {
-            Text("5-Day Forecast")
+            Text("\(forecastDuration)-Day Forecast")
         } footer: {
-            Text("Evapotranspiration (ETo) and rainfall are fetched from Open-Meteo. You can override each day below if needed.")
+            Text("Evapotranspiration (ETo) and rainfall are fetched from Open-Meteo. Forecasts beyond 16 days are capped at the maximum Open-Meteo provides. You can override each day below if needed.")
         }
     }
 
@@ -307,7 +322,7 @@ struct IrrigationRecommendationView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                Text("over the next 5 days")
+                Text("over the next \(result.dailyBreakdown.count) days")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -451,7 +466,7 @@ struct IrrigationRecommendationView: View {
 
     private func loadForecast() async {
         guard let lat = latitude, let lon = longitude else { return }
-        await forecastService.fetchForecast(latitude: lat, longitude: lon)
+        await forecastService.fetchForecast(latitude: lat, longitude: lon, days: forecastDuration)
     }
 
     private func applyPaddockDefaults() {

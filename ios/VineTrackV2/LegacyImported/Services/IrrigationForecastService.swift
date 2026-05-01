@@ -11,12 +11,13 @@ class IrrigationForecastService {
     var errorMessage: String?
     var forecast: IrrigationForecast?
 
-    func fetchForecast(latitude: Double, longitude: Double) async {
+    func fetchForecast(latitude: Double, longitude: Double, days: Int = 5) async {
         isLoading = true
         errorMessage = nil
         forecast = nil
 
-        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&daily=et0_fao_evapotranspiration,precipitation_sum&forecast_days=5&timezone=auto"
+        let clampedDays = max(1, min(days, 16))
+        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&daily=et0_fao_evapotranspiration,precipitation_sum&forecast_days=\(clampedDays)&timezone=auto"
 
         guard let url = URL(string: urlString) else {
             errorMessage = "Invalid forecast URL."
