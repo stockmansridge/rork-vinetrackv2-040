@@ -173,17 +173,28 @@ struct WeatherStationPickerSheet: View {
     }
 
     private func stationRow(_ station: WeatherNearbyStationsService.Station) -> some View {
-        HStack {
+        let trimmedName = station.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasName = !trimmedName.isEmpty
+        return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(station.stationId)
-                    .font(.subheadline.weight(.semibold))
-                if let name = station.name, !name.isEmpty {
-                    Text(name)
+                if hasName {
+                    Text(trimmedName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                    Text(station.stationId)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospaced()
+                } else {
+                    Text(station.stationId)
+                        .font(.subheadline.weight(.semibold))
+                        .monospaced()
+                    Text("Unnamed station")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             if let d = station.distanceKm {
                 Text(String(format: "%.1f km", d))
                     .font(.caption)
