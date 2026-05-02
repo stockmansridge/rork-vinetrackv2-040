@@ -5,6 +5,8 @@
 //  Created by Rork on April 27, 2026.
 //
 
+// Touch: force fresh snapshot ref for capability sync retry.
+
 import SwiftUI
 import SwiftData
 
