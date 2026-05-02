@@ -17,7 +17,7 @@ class IrrigationForecastService {
         forecast = nil
 
         let clampedDays = max(1, min(days, 16))
-        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&daily=et0_fao_evapotranspiration,precipitation_sum&forecast_days=\(clampedDays)&timezone=auto"
+        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&daily=et0_fao_evapotranspiration,precipitation_sum,windspeed_10m_max,temperature_2m_max,temperature_2m_min&forecast_days=\(clampedDays)&timezone=auto&windspeed_unit=kmh"
 
         guard let url = URL(string: urlString) else {
             errorMessage = "Invalid forecast URL."
@@ -44,6 +44,9 @@ class IrrigationForecastService {
                 isLoading = false
                 return
             }
+            let windValues = daily["windspeed_10m_max"] as? [Any] ?? []
+            let tMaxValues = daily["temperature_2m_max"] as? [Any] ?? []
+            let tMinValues = daily["temperature_2m_min"] as? [Any] ?? []
 
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd"
@@ -55,7 +58,17 @@ class IrrigationForecastService {
                 guard let date = formatter.date(from: times[i]) else { continue }
                 let eto = Self.parseDouble(etoValues[i]) ?? 0
                 let rain = Self.parseDouble(rainValues[i]) ?? 0
-                days.append(ForecastDay(date: date, forecastEToMm: eto, forecastRainMm: rain))
+                let wind = i < windValues.count ? Self.parseDouble(windValues[i]) : nil
+                let tMax = i < tMaxValues.count ? Self.parseDouble(tMaxValues[i]) : nil
+                let tMin = i < tMinValues.count ? Self.parseDouble(tMinValues[i]) : nil
+                days.append(ForecastDay(
+                    date: date,
+                    forecastEToMm: eto,
+                    forecastRainMm: rain,
+                    forecastWindKmhMax: wind,
+                    forecastTempMaxC: tMax,
+                    forecastTempMinC: tMin
+                ))
             }
 
             forecast = IrrigationForecast(days: days, source: "Open-Meteo")

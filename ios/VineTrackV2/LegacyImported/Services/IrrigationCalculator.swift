@@ -4,8 +4,27 @@ nonisolated struct ForecastDay: Sendable, Hashable, Identifiable {
     let date: Date
     let forecastEToMm: Double
     let forecastRainMm: Double
+    let forecastWindKmhMax: Double?
+    let forecastTempMaxC: Double?
+    let forecastTempMinC: Double?
 
     var id: Date { date }
+
+    init(
+        date: Date,
+        forecastEToMm: Double,
+        forecastRainMm: Double,
+        forecastWindKmhMax: Double? = nil,
+        forecastTempMaxC: Double? = nil,
+        forecastTempMinC: Double? = nil
+    ) {
+        self.date = date
+        self.forecastEToMm = forecastEToMm
+        self.forecastRainMm = forecastRainMm
+        self.forecastWindKmhMax = forecastWindKmhMax
+        self.forecastTempMaxC = forecastTempMaxC
+        self.forecastTempMinC = forecastTempMinC
+    }
 }
 
 nonisolated struct IrrigationSettings: Sendable, Hashable {

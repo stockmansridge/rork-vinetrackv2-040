@@ -3,8 +3,10 @@ import SwiftUI
 struct AlertsCentreView: View {
     @Environment(AlertService.self) private var alertService
     @Environment(BackendAccessControl.self) private var accessControl
+    @Environment(\.dismiss) private var dismiss
 
     @State private var isRefreshing: Bool = false
+    @State private var pushDestination: AlertPushDestination?
 
     var body: some View {
         List {
@@ -71,6 +73,12 @@ struct AlertsCentreView: View {
         .task {
             await alertService.generateAndRefresh()
         }
+        .navigationDestination(item: $pushDestination) { dest in
+            switch dest {
+            case .irrigation, .weather:
+                IrrigationRecommendationView()
+            }
+        }
     }
 
     private var emptyState: some View {
@@ -90,8 +98,28 @@ struct AlertsCentreView: View {
     }
 
     private func handleAction(_ alert: BackendAlert) {
-        // Action routing kept lightweight: relies on user navigating from
-        // their main tabs. Future work: wire deep links per AlertAction.
+        guard let action = alert.typedAction else { return }
+        switch action {
+        case .openPins, .openSprayProgram, .openSprayRecord:
+            // Tab switches handled by NewMainTabView; pop back to home root.
+            alertService.pendingNavigation = action
+            dismiss()
+        case .openIrrigationAdvisor:
+            pushDestination = .irrigation
+        case .openWeather:
+            pushDestination = .weather
+        }
+    }
+}
+
+private enum AlertPushDestination: Identifiable, Hashable {
+    case irrigation
+    case weather
+    var id: String {
+        switch self {
+        case .irrigation: return "irrigation"
+        case .weather: return "weather"
+        }
     }
 }
 

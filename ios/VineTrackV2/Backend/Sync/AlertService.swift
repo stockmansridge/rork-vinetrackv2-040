@@ -21,6 +21,9 @@ final class AlertService {
     var alerts: [AlertWithStatus] = []
     var preferences: BackendAlertPreferences?
     var lastRefresh: Date?
+    /// Deep-link request from a tapped alert. Observed by the main tab view
+    /// to switch tabs / present the relevant screen, then cleared.
+    var pendingNavigation: AlertAction?
 
     private weak var store: MigratedDataStore?
     private weak var auth: NewBackendAuthService?
@@ -132,14 +135,18 @@ final class AlertService {
                 prefs: prefs,
                 userId: userId
             ))
-            if prefs.weatherAlertsEnabled {
-                generated.append(contentsOf: generateWeatherAlertsFromForecast(
-                    forecastDays: forecastService.forecast?.days ?? [],
-                    vineyardId: vineyardId,
-                    prefs: prefs,
-                    userId: userId
-                ))
-            }
+        } else if prefs.weatherAlertsEnabled {
+            // Ensure we have a forecast even if irrigation alerts are disabled.
+            await ensureForecast(store: store, vineyardId: vineyardId, prefs: prefs)
+        }
+
+        if prefs.weatherAlertsEnabled {
+            generated.append(contentsOf: generateWeatherAlertsFromForecast(
+                forecastDays: forecastService.forecast?.days ?? [],
+                vineyardId: vineyardId,
+                prefs: prefs,
+                userId: userId
+            ))
         }
 
         if !generated.isEmpty {
@@ -229,6 +236,18 @@ final class AlertService {
 
     // MARK: - Irrigation
 
+    private func ensureForecast(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        prefs: BackendAlertPreferences
+    ) async {
+        let paddocks = store.paddocks.filter { $0.vineyardId == vineyardId && !$0.polygonPoints.isEmpty }
+        guard let firstPaddock = paddocks.first else { return }
+        let lat = firstPaddock.polygonPoints.map(\.latitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+        let lon = firstPaddock.polygonPoints.map(\.longitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+        await forecastService.fetchForecast(latitude: lat, longitude: lon, days: prefs.irrigationForecastDays)
+    }
+
     private func generateIrrigationAlerts(
         store: MigratedDataStore,
         vineyardId: UUID,
@@ -290,16 +309,33 @@ final class AlertService {
         let dedupKey = "weather_risk:\(yyyymmdd(date))"
 
         var risks: [String] = []
+        var severity: AlertSeverity = .info
         if firstDay.forecastRainMm >= prefs.rainAlertThresholdMm {
             risks.append(String(format: "rain %.1f mm", firstDay.forecastRainMm))
+            if firstDay.forecastRainMm >= prefs.rainAlertThresholdMm * 2 {
+                severity = .warning
+            }
         }
-        // Open-meteo we use here doesn't include wind/temp; if added later they'll
-        // populate. We keep the alert when rain risk is forecast.
+        if let wind = firstDay.forecastWindKmhMax, wind >= prefs.windAlertThresholdKmh {
+            risks.append(String(format: "wind %.0f km/h", wind))
+            if wind >= prefs.windAlertThresholdKmh * 1.5 {
+                severity = max(severity, .warning)
+            }
+        }
+        if let tMin = firstDay.forecastTempMinC, tMin <= prefs.frostAlertThresholdC {
+            risks.append(String(format: "frost low %.1f°C", tMin))
+            severity = .critical
+        }
+        if let tMax = firstDay.forecastTempMaxC, tMax >= prefs.heatAlertThresholdC {
+            risks.append(String(format: "heat %.1f°C", tMax))
+            if tMax >= prefs.heatAlertThresholdC + 5 {
+                severity = max(severity, .warning)
+            }
+        }
         guard !risks.isEmpty else { return [] }
 
         let title = "Weather risk forecast"
         let message = "Forecast for \(date.formatted(date: .abbreviated, time: .omitted)): " + risks.joined(separator: ", ") + "."
-        let severity: AlertSeverity = firstDay.forecastRainMm >= prefs.rainAlertThresholdMm * 2 ? .warning : .info
         let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
         return [
             BackendAlertUpsert(

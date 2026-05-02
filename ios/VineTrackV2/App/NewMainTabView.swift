@@ -102,6 +102,19 @@ struct NewMainTabView: View {
             await historicalYieldSync.syncForSelectedVineyard()
             await alertService.generateAndRefresh()
         }
+        .onChange(of: alertService.pendingNavigation) { _, action in
+            guard let action else { return }
+            switch action {
+            case .openPins:
+                selectedTab = 1
+            case .openSprayProgram, .openSprayRecord:
+                selectedTab = 3
+            case .openIrrigationAdvisor, .openWeather:
+                // Handled in-place by AlertsCentreView via push.
+                break
+            }
+            alertService.pendingNavigation = nil
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task {

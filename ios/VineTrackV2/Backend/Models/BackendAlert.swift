@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum AlertSeverity: String, Codable, Sendable, CaseIterable {
+nonisolated enum AlertSeverity: String, Codable, Sendable, CaseIterable, Comparable {
     case info
     case warning
     case critical
@@ -11,6 +11,18 @@ nonisolated enum AlertSeverity: String, Codable, Sendable, CaseIterable {
         case .warning: return "Warning"
         case .critical: return "Critical"
         }
+    }
+
+    private var rank: Int {
+        switch self {
+        case .info: return 0
+        case .warning: return 1
+        case .critical: return 2
+        }
+    }
+
+    static func < (lhs: AlertSeverity, rhs: AlertSeverity) -> Bool {
+        lhs.rank < rhs.rank
     }
 }
 
