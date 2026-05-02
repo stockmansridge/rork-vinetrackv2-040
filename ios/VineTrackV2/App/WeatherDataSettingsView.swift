@@ -12,8 +12,31 @@ struct WeatherDataSettingsView: View {
     @State private var isTestingDavis: Bool = false
     @State private var davisTestMessage: String?
     @State private var showSecret: Bool = false
+    @State private var davisInfoTopic: DavisInfoTopic?
 
     private var canEdit: Bool { accessControl.canChangeSettings }
+
+    private enum DavisInfoTopic: String, Identifiable {
+        case apiKey, apiSecret, stationId
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .apiKey: return "Davis API Key"
+            case .apiSecret: return "Davis API Secret"
+            case .stationId: return "Davis Station ID"
+            }
+        }
+        var body: String {
+            switch self {
+            case .apiKey:
+                return "Davis WeatherLink v2 API details are created from your WeatherLink account page. The API Key identifies your account connection and is safe to display after saving.\n\nTo generate one:\n1. Sign in to weatherlink.com.\n2. Open Account Settings.\n3. Tap ‘Generate v2 Key’.\n4. Copy the API Key into VineTrack."
+            case .apiSecret:
+                return "The API Secret authorises access to your Davis WeatherLink data and should be kept private. VineTrack stores it securely on this device using the iOS Keychain — it is never shared with other vineyard members or uploaded in plain text.\n\nGenerate it alongside the API Key from Account Settings → Generate v2 Key on weatherlink.com."
+            case .stationId:
+                return "Most users do not need to enter a Station ID manually. After you tap Test Connection, VineTrack will load your available stations and select one automatically.\n\nOnly enter a Station ID if station discovery fails — you can find it in your WeatherLink account under your station settings."
+            }
+        }
+    }
 
     private var vineyardId: UUID? { store.selectedVineyardId }
 
@@ -29,6 +52,10 @@ struct WeatherDataSettingsView: View {
 
             if config.provider == .davis {
                 davisSection
+            }
+
+            if config.provider == .davis {
+                davisHelpSection
             }
 
             usageSection
@@ -48,6 +75,37 @@ struct WeatherDataSettingsView: View {
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
         }
+        .sheet(item: $davisInfoTopic) { topic in
+            NavigationStack {
+                ScrollView {
+                    Text(topic.body)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                }
+                .navigationTitle(topic.title)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { davisInfoTopic = nil }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    private func infoButton(_ topic: DavisInfoTopic) -> some View {
+        Button {
+            davisInfoTopic = topic
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("About \(topic.title)")
     }
 
     // MARK: - Sections
@@ -179,6 +237,7 @@ struct WeatherDataSettingsView: View {
         Section {
             HStack {
                 Text("API Key")
+                infoButton(.apiKey)
                 Spacer()
                 TextField("Davis API Key", text: $davisApiKey)
                     .textInputAutocapitalization(.never)
@@ -188,6 +247,7 @@ struct WeatherDataSettingsView: View {
             }
             HStack {
                 Text("API Secret")
+                infoButton(.apiSecret)
                 Spacer()
                 Group {
                     if showSecret {
@@ -210,8 +270,9 @@ struct WeatherDataSettingsView: View {
             }
             HStack {
                 Text("Station ID")
+                infoButton(.stationId)
                 Spacer()
-                TextField("Optional", text: $davisStationIdInput)
+                TextField("Auto-detected after Test Connection", text: $davisStationIdInput)
                     .autocorrectionDisabled()
                     .multilineTextAlignment(.trailing)
                     .frame(maxWidth: 220)
@@ -283,6 +344,48 @@ struct WeatherDataSettingsView: View {
             Text("Davis WeatherLink")
         } footer: {
             Text("Credentials are stored securely on this device using the iOS Keychain and are not shared with other vineyard members.")
+        }
+    }
+
+    private var davisHelpSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                helpStep(number: 1, text: "Sign in to your WeatherLink account at weatherlink.com.")
+                helpStep(number: 2, text: "Go to Account Settings.")
+                helpStep(number: 3, text: "Look for ‘Generate v2 Key’.")
+                helpStep(number: 4, text: "WeatherLink will provide an API Key and API Secret.")
+                helpStep(number: 5, text: "Enter both here, then tap Test Connection.")
+                helpStep(number: 6, text: "VineTrack will load your available stations so you can select the correct one.")
+            }
+            .padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Your API Secret is stored securely on this device using Keychain.", systemImage: "lock.shield")
+                Label("It is not shared with other vineyard members.", systemImage: "person.2.slash")
+                Label("Station ID is selected automatically after connection where possible.", systemImage: "antenna.radiowaves.left.and.right")
+                Label("If your station has a leaf wetness sensor, VineTrack can use measured wetness for disease risk.", systemImage: "drop.fill")
+                Label("If no leaf wetness sensor is detected, VineTrack will continue using estimated wetness.", systemImage: "drop")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .labelStyle(.titleAndIcon)
+        } header: {
+            Text("How to find your Davis API details")
+        }
+    }
+
+    private func helpStep(number: Int, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(number)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Color.accentColor, in: Circle())
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
