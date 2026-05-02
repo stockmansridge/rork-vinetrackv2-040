@@ -16,6 +16,45 @@ struct WeatherDataSettingsView: View {
 
     private var canEdit: Bool { accessControl.canChangeSettings }
 
+    enum DavisStatus: Equatable {
+        case notConfigured
+        case credentialsSavedNotTested
+        case testing
+        case connectedNoLeafWetness
+        case connectedWithLeafWetness
+        case connectionFailed(String)
+        case liveIntegrationNotAvailable
+
+        var headline: String {
+            switch self {
+            case .notConfigured: return "Not configured"
+            case .credentialsSavedNotTested: return "Davis WeatherLink credentials saved."
+            case .testing: return "Testing Davis WeatherLink…"
+            case .connectedNoLeafWetness: return "Connected — no leaf wetness sensor detected."
+            case .connectedWithLeafWetness: return "Connected — measured leaf wetness available."
+            case .connectionFailed(let msg): return msg
+            case .liveIntegrationNotAvailable: return "Davis WeatherLink credentials saved. Live station detection is not enabled yet."
+            }
+        }
+
+        var sensorsDetail: String {
+            switch self {
+            case .notConfigured:
+                return "Save Davis credentials to begin."
+            case .credentialsSavedNotTested:
+                return "Sensor detection will run once you tap Test Connection."
+            case .testing:
+                return "Detecting available sensors…"
+            case .connectedNoLeafWetness, .connectedWithLeafWetness:
+                return ""
+            case .connectionFailed:
+                return "Sensor detection unavailable until the connection succeeds."
+            case .liveIntegrationNotAvailable:
+                return "Sensor detection will be available once Davis WeatherLink live integration is enabled."
+            }
+        }
+    }
+
     private enum DavisInfoTopic: String, Identifiable {
         case apiKey, apiSecret, stationId
         var id: String { rawValue }
@@ -316,19 +355,22 @@ struct WeatherDataSettingsView: View {
                 Text("Detected sensors")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                if config.davisDetectedSensors.isEmpty {
-                    Text("No sensor data yet. Run Test Connection to detect available sensors.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(config.davisDetectedSensors, id: \.self) { sensor in
-                        Label(sensor, systemImage: "checkmark.circle.fill")
+
+                let status = davisStatus
+                switch status {
+                case .connectedNoLeafWetness, .connectedWithLeafWetness:
+                    if config.davisDetectedSensors.isEmpty {
+                        Text("No sensors detected.")
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(config.davisDetectedSensors, id: \.self) { sensor in
+                            Label(sensor, systemImage: "checkmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
                     }
-                }
-                if config.davisHasCredentials {
-                    if config.davisHasLeafWetnessSensor {
+                    if status == .connectedWithLeafWetness {
                         Label("Measured leaf wetness available", systemImage: "drop.fill")
                             .font(.caption)
                             .foregroundStyle(.blue)
@@ -337,6 +379,10 @@ struct WeatherDataSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                default:
+                    Text(status.sensorsDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
@@ -481,6 +527,14 @@ struct WeatherDataSettingsView: View {
         WeatherProviderStore.shared.save(config, for: vid)
     }
 
+    private var davisStatus: DavisStatus {
+        if !config.davisHasCredentials { return .notConfigured }
+        if isTestingDavis { return .testing }
+        // Live integration not implemented yet — once credentials are saved,
+        // surface this clearly instead of pretending we tested anything.
+        return .liveIntegrationNotAvailable
+    }
+
     private func saveDavisCredentials() {
         guard canEdit else { return }
         WeatherKeychain.set(davisApiKey, for: .apiKey)
@@ -489,11 +543,16 @@ struct WeatherDataSettingsView: View {
         c.davisHasCredentials = WeatherKeychain.hasCredentials
         let trimmed = davisStationIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
         c.davisStationId = trimmed.isEmpty ? nil : trimmed
+        // Reset any stale detection state — live integration isn't wired up yet.
+        c.davisDetectedSensors = []
+        c.davisHasLeafWetnessSensor = false
+        c.davisLastTestError = nil
+        c.davisLastTestSuccess = nil
         config = c
         persist()
         davisApiKey = ""
         davisApiSecret = ""
-        davisTestMessage = "Credentials saved. Run Test Connection to detect sensors."
+        davisTestMessage = DavisStatus.liveIntegrationNotAvailable.headline
     }
 
     private func clearDavisCredentials() {
@@ -511,19 +570,16 @@ struct WeatherDataSettingsView: View {
 
     private func testDavisConnection() async {
         guard config.davisHasCredentials else { return }
-        isTestingDavis = true
-        defer { isTestingDavis = false }
-        davisTestMessage = "Testing Davis WeatherLink…"
-        // Davis WeatherLink direct integration is not implemented yet. We
-        // record a non-blocking placeholder result so the UI reflects that
-        // credentials were saved but live data is not yet wired up.
-        try? await Task.sleep(for: .milliseconds(600))
+        // Davis WeatherLink live API integration is not implemented yet, so
+        // there's nothing to actually test. Surface that clearly rather than
+        // running a fake spinner that ends in a misleading "no sensor" state.
         var c = config
-        c.davisLastTestError = "Live Davis integration is coming soon. Credentials are saved and will be used automatically once enabled."
         c.davisDetectedSensors = []
         c.davisHasLeafWetnessSensor = false
+        c.davisLastTestError = nil
+        c.davisLastTestSuccess = nil
         config = c
         persist()
-        davisTestMessage = c.davisLastTestError
+        davisTestMessage = DavisStatus.liveIntegrationNotAvailable.headline
     }
 }
