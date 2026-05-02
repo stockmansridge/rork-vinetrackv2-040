@@ -67,6 +67,7 @@ struct SprayCalculatorView: View {
     @State private var errorMessage: String?
     @State private var showStartConfirmation: Bool = false
     @State private var isStartingJob: Bool = false
+    @State private var showWeatherDataSettings: Bool = false
 
     // Prefill (duplicate / template)
     private let prefillRecord: SprayRecord?
@@ -923,22 +924,67 @@ struct SprayCalculatorView: View {
     }
 
     private var weatherNoteSection: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "cloud.sun.fill")
-                .font(.title3)
-                .foregroundStyle(.blue)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Weather captured automatically")
-                    .font(.subheadline.weight(.semibold))
-                Text("Temperature, wind and humidity will be recorded when the job starts.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "cloud.sun.fill")
+                    .font(.title3)
+                    .foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Weather captured automatically")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Temperature, wind and humidity will be recorded when the job starts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
-            Spacer()
+
+            if let label = sprayWeatherSourceLabel {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer(minLength: 6)
+                    Button {
+                        showWeatherDataSettings = true
+                    } label: {
+                        Text("Manage")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.blue)
+                }
+            }
         }
         .padding(12)
         .background(Color.blue.opacity(0.08))
         .clipShape(.rect(cornerRadius: 10))
+        .sheet(isPresented: $showWeatherDataSettings) {
+            NavigationStack {
+                WeatherDataSettingsView()
+            }
+        }
+    }
+
+    private var sprayWeatherSourceLabel: String? {
+        guard let vid = store.selectedVineyardId else { return nil }
+        let status = WeatherProviderResolver.resolve(
+            for: vid,
+            weatherStationId: store.settings.weatherStationId
+        )
+        switch status.provider {
+        case .automatic:
+            return "Source: Automatic Forecast"
+        case .wunderground:
+            let id = status.detailLabel
+            return id.isEmpty ? "Source: Weather Underground PWS" : "Source: Weather Underground PWS — \(id)"
+        case .davis:
+            return "Source: Davis WeatherLink configured — fetch currently uses fallback"
+        }
     }
 
     @ViewBuilder
