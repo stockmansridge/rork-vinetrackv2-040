@@ -72,6 +72,16 @@ struct BackendSettingsView: View {
                         )
                     }
                     NavigationLink {
+                        AlertSettingsView()
+                    } label: {
+                        SettingsRow(
+                            title: "Alerts & Notifications",
+                            subtitle: "Irrigation, pins, weather & spray reminders",
+                            symbol: "bell.badge.fill",
+                            color: .red
+                        )
+                    }
+                    NavigationLink {
                         SyncSettingsView()
                     } label: {
                         SettingsRow(

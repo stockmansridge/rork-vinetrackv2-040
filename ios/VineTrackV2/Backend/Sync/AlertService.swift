@@ -1,0 +1,414 @@
+import Foundation
+import Observation
+import CoreLocation
+
+/// Service responsible for generating, fetching, and updating vineyard alerts.
+/// Generation runs locally based on the in-memory data store; the resulting
+/// alerts are upserted to Supabase (deduplicated via dedup_key) so they sync
+/// across devices and members. Per-user read/dismiss is tracked separately.
+@Observable
+@MainActor
+final class AlertService {
+
+    enum Status: Equatable, Sendable {
+        case idle
+        case loading
+        case success
+        case failure(String)
+    }
+
+    var status: Status = .idle
+    var alerts: [AlertWithStatus] = []
+    var preferences: BackendAlertPreferences?
+    var lastRefresh: Date?
+
+    private weak var store: MigratedDataStore?
+    private weak var auth: NewBackendAuthService?
+    private let repository: any AlertRepositoryProtocol
+    private let forecastService: IrrigationForecastService
+
+    init(repository: (any AlertRepositoryProtocol)? = nil) {
+        self.repository = repository ?? SupabaseAlertRepository()
+        self.forecastService = IrrigationForecastService()
+    }
+
+    func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
+        self.store = store
+        self.auth = auth
+    }
+
+    // MARK: - Derived
+
+    var activeAlerts: [AlertWithStatus] {
+        alerts.filter { !$0.isDismissed && !isExpired($0.alert) }
+    }
+
+    var unreadAlerts: [AlertWithStatus] {
+        activeAlerts.filter { !$0.isRead }
+    }
+
+    var highestSeverity: AlertSeverity? {
+        let severities = activeAlerts.map { $0.alert.typedSeverity }
+        if severities.contains(.critical) { return .critical }
+        if severities.contains(.warning) { return .warning }
+        if severities.contains(.info) { return .info }
+        return nil
+    }
+
+    private func isExpired(_ alert: BackendAlert) -> Bool {
+        guard let exp = alert.expiresAt else { return false }
+        return exp < Date()
+    }
+
+    // MARK: - Refresh
+
+    /// Fetch alerts and preferences for the currently selected vineyard.
+    /// Non-blocking; failures are surfaced via `status` but never thrown.
+    func refresh() async {
+        guard let store, let auth, auth.isSignedIn,
+              let vineyardId = store.selectedVineyardId,
+              SupabaseClientProvider.shared.isConfigured else {
+            return
+        }
+        status = .loading
+        do {
+            let prefs: BackendAlertPreferences
+            if let existing = try await repository.fetchPreferences(vineyardId: vineyardId) {
+                prefs = existing
+            } else {
+                prefs = BackendAlertPreferences.defaults(for: vineyardId)
+            }
+            self.preferences = prefs
+
+            let fetched = try await repository.fetchAlerts(vineyardId: vineyardId)
+            let statuses = try await repository.fetchUserStatus(alertIds: fetched.map { $0.id })
+            let statusByAlert = Dictionary(uniqueKeysWithValues: statuses.map { ($0.alertId, $0) })
+            self.alerts = fetched.map { AlertWithStatus(alert: $0, status: statusByAlert[$0.id]) }
+            self.lastRefresh = Date()
+            self.status = .success
+        } catch {
+            self.status = .failure(error.localizedDescription)
+        }
+    }
+
+    /// Run local alert generation for the selected vineyard, push generated
+    /// alerts (deduped by dedup_key), then refresh from server.
+    func generateAndRefresh() async {
+        guard let store, let auth, auth.isSignedIn,
+              let vineyardId = store.selectedVineyardId,
+              SupabaseClientProvider.shared.isConfigured else {
+            return
+        }
+
+        // Make sure we have preferences first.
+        if preferences == nil {
+            preferences = (try? await repository.fetchPreferences(vineyardId: vineyardId))
+                ?? BackendAlertPreferences.defaults(for: vineyardId)
+        }
+        let prefs = preferences ?? BackendAlertPreferences.defaults(for: vineyardId)
+        let userId = auth.userId
+
+        var generated: [BackendAlertUpsert] = []
+
+        if prefs.agedPinAlertsEnabled {
+            generated.append(contentsOf: generateAgedPinAlerts(
+                store: store,
+                vineyardId: vineyardId,
+                prefs: prefs,
+                userId: userId
+            ))
+        }
+        if prefs.sprayJobRemindersEnabled {
+            generated.append(contentsOf: generateSprayReminders(
+                store: store,
+                vineyardId: vineyardId,
+                userId: userId
+            ))
+        }
+        if prefs.irrigationAlertsEnabled {
+            generated.append(contentsOf: await generateIrrigationAlerts(
+                store: store,
+                vineyardId: vineyardId,
+                prefs: prefs,
+                userId: userId
+            ))
+            if prefs.weatherAlertsEnabled {
+                generated.append(contentsOf: generateWeatherAlertsFromForecast(
+                    forecastDays: forecastService.forecast?.days ?? [],
+                    vineyardId: vineyardId,
+                    prefs: prefs,
+                    userId: userId
+                ))
+            }
+        }
+
+        if !generated.isEmpty {
+            try? await repository.upsertAlerts(generated)
+        }
+
+        await refresh()
+    }
+
+    // MARK: - Aged pins
+
+    private func generateAgedPinAlerts(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        prefs: BackendAlertPreferences,
+        userId: UUID?
+    ) -> [BackendAlertUpsert] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -prefs.agedPinDays, to: Date()) ?? Date()
+        let aged = store.pins.filter {
+            $0.vineyardId == vineyardId && !$0.isCompleted && $0.timestamp <= cutoff
+        }
+        guard !aged.isEmpty else { return [] }
+        let count = aged.count
+        let dedupKey = "aged_pins:\(prefs.agedPinDays)"
+        let title = "\(count) aged pin\(count == 1 ? "" : "s")"
+        let message = "\(count) unresolved pin\(count == 1 ? "" : "s") older than \(prefs.agedPinDays) days. Tap to review."
+        let severity: AlertSeverity = count >= 10 ? .warning : .info
+        let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+        return [
+            BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: AlertType.agedPins.rawValue,
+                severity: severity.rawValue,
+                title: title,
+                message: message,
+                relatedTable: "pins",
+                relatedId: nil,
+                paddockId: nil,
+                action: AlertAction.openPins.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: today(),
+                expiresAt: tomorrow(),
+                createdBy: userId
+            )
+        ]
+    }
+
+    // MARK: - Spray reminders
+
+    private func generateSprayReminders(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        userId: UUID?
+    ) -> [BackendAlertUpsert] {
+        let cal = Calendar.current
+        let now = Date()
+        let tomorrowEnd = cal.date(byAdding: .day, value: 2, to: cal.startOfDay(for: now)) ?? now
+        let recordsDue = store.sprayRecords.filter {
+            $0.vineyardId == vineyardId && $0.date >= cal.startOfDay(for: now) && $0.date < tomorrowEnd
+        }
+        guard !recordsDue.isEmpty else { return [] }
+        let count = recordsDue.count
+        let dedupKey = "spray_due:\(yyyymmdd(now))"
+        let title = "\(count) spray job\(count == 1 ? "" : "s") due"
+        let message = "Scheduled spray work today or tomorrow. Tap to review the spray program."
+        let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+        return [
+            BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: AlertType.sprayJobDue.rawValue,
+                severity: AlertSeverity.warning.rawValue,
+                title: title,
+                message: message,
+                relatedTable: "spray_records",
+                relatedId: nil,
+                paddockId: nil,
+                action: AlertAction.openSprayProgram.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: today(),
+                expiresAt: cal.date(byAdding: .day, value: 2, to: now),
+                createdBy: userId
+            )
+        ]
+    }
+
+    // MARK: - Irrigation
+
+    private func generateIrrigationAlerts(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        prefs: BackendAlertPreferences,
+        userId: UUID?
+    ) async -> [BackendAlertUpsert] {
+        // Use first paddock with a valid centroid as a proxy location.
+        let paddocks = store.paddocks.filter { $0.vineyardId == vineyardId && !$0.polygonPoints.isEmpty }
+        guard let firstPaddock = paddocks.first else { return [] }
+        let lat = firstPaddock.polygonPoints.map(\.latitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+        let lon = firstPaddock.polygonPoints.map(\.longitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+
+        await forecastService.fetchForecast(latitude: lat, longitude: lon, days: prefs.irrigationForecastDays)
+        guard let forecast = forecastService.forecast, !forecast.days.isEmpty else { return [] }
+
+        let result = IrrigationCalculator.calculate(
+            forecastDays: forecast.days,
+            settings: IrrigationSettings.defaults
+        )
+        let deficit = result?.netDeficitMm ?? 0
+        guard deficit >= prefs.irrigationDeficitThresholdMm else { return [] }
+
+        let dedupKey = "irrigation_deficit:\(yyyymmdd(Date()))"
+        let title = "Irrigation may be needed"
+        let message = String(format: "Forecast deficit %.1f mm over the next %d days exceeds your threshold (%.1f mm).",
+                             deficit, prefs.irrigationForecastDays, prefs.irrigationDeficitThresholdMm)
+        let severity: AlertSeverity = deficit >= prefs.irrigationDeficitThresholdMm * 2 ? .warning : .info
+        let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+        return [
+            BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: AlertType.irrigationNeeded.rawValue,
+                severity: severity.rawValue,
+                title: title,
+                message: message,
+                relatedTable: nil,
+                relatedId: nil,
+                paddockId: firstPaddock.id,
+                action: AlertAction.openIrrigationAdvisor.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: today(),
+                expiresAt: Calendar.current.date(byAdding: .day, value: 1, to: Date()),
+                createdBy: userId
+            )
+        ]
+    }
+
+    // MARK: - Weather
+
+    private func generateWeatherAlertsFromForecast(
+        forecastDays: [ForecastDay],
+        vineyardId: UUID,
+        prefs: BackendAlertPreferences,
+        userId: UUID?
+    ) -> [BackendAlertUpsert] {
+        guard let firstDay = forecastDays.first else { return [] }
+        let date = firstDay.date
+        let dedupKey = "weather_risk:\(yyyymmdd(date))"
+
+        var risks: [String] = []
+        if firstDay.forecastRainMm >= prefs.rainAlertThresholdMm {
+            risks.append(String(format: "rain %.1f mm", firstDay.forecastRainMm))
+        }
+        // Open-meteo we use here doesn't include wind/temp; if added later they'll
+        // populate. We keep the alert when rain risk is forecast.
+        guard !risks.isEmpty else { return [] }
+
+        let title = "Weather risk forecast"
+        let message = "Forecast for \(date.formatted(date: .abbreviated, time: .omitted)): " + risks.joined(separator: ", ") + "."
+        let severity: AlertSeverity = firstDay.forecastRainMm >= prefs.rainAlertThresholdMm * 2 ? .warning : .info
+        let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+        return [
+            BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: AlertType.weatherRisk.rawValue,
+                severity: severity.rawValue,
+                title: title,
+                message: message,
+                relatedTable: nil,
+                relatedId: nil,
+                paddockId: nil,
+                action: AlertAction.openWeather.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: date,
+                expiresAt: Calendar.current.date(byAdding: .day, value: 1, to: date),
+                createdBy: userId
+            )
+        ]
+    }
+
+    // MARK: - User actions
+
+    func markRead(_ alert: AlertWithStatus) async {
+        guard !alert.isRead else { return }
+        try? await repository.markStatus(alertId: alert.alert.id, read: true, dismissed: nil)
+        if let idx = alerts.firstIndex(where: { $0.id == alert.id }) {
+            let now = Date()
+            let newStatus = BackendAlertUserStatus(
+                alertId: alert.alert.id,
+                userId: alerts[idx].status?.userId ?? UUID(),
+                readAt: now,
+                dismissedAt: alerts[idx].status?.dismissedAt
+            )
+            alerts[idx] = AlertWithStatus(alert: alert.alert, status: newStatus)
+        }
+    }
+
+    func markAllRead() async {
+        for a in unreadAlerts {
+            await markRead(a)
+        }
+    }
+
+    func dismiss(_ alert: AlertWithStatus) async {
+        try? await repository.markStatus(alertId: alert.alert.id, read: nil, dismissed: true)
+        if let idx = alerts.firstIndex(where: { $0.id == alert.id }) {
+            let now = Date()
+            let newStatus = BackendAlertUserStatus(
+                alertId: alert.alert.id,
+                userId: alerts[idx].status?.userId ?? UUID(),
+                readAt: alerts[idx].status?.readAt,
+                dismissedAt: now
+            )
+            alerts[idx] = AlertWithStatus(alert: alert.alert, status: newStatus)
+        }
+    }
+
+    // MARK: - Preferences
+
+    func savePreferences(_ prefs: BackendAlertPreferences) async {
+        do {
+            try await repository.upsertPreferences(prefs)
+            self.preferences = prefs
+        } catch {
+            self.status = .failure(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func today() -> Date {
+        Calendar.current.startOfDay(for: Date())
+    }
+
+    private func tomorrow() -> Date {
+        Calendar.current.date(byAdding: .day, value: 1, to: today()) ?? Date()
+    }
+
+    private func yyyymmdd(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    /// Deterministic UUID derived from vineyardId + dedup key. Matching
+    /// vineyard_id+dedup_key uniqueness in SQL means upserts overwrite the
+    /// same row, but we still send a stable id so client and server agree.
+    private func deterministicUUID(vineyardId: UUID, dedupKey: String) -> UUID {
+        let raw = "\(vineyardId.uuidString):\(dedupKey)"
+        var hash = UInt64(5381)
+        for byte in raw.utf8 {
+            hash = (hash &* 33) &+ UInt64(byte)
+        }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        let h1 = hash
+        let h2 = hash &* 6364136223846793005 &+ 1442695040888963407
+        for i in 0..<8 {
+            bytes[i] = UInt8((h1 >> (8 * i)) & 0xff)
+            bytes[8 + i] = UInt8((h2 >> (8 * i)) & 0xff)
+        }
+        // Set version (4) and variant (RFC4122) bits.
+        bytes[6] = (bytes[6] & 0x0f) | 0x40
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11],
+            bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+    }
+}

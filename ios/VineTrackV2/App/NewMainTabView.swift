@@ -24,6 +24,7 @@ struct NewMainTabView: View {
     @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
     @Environment(HistoricalYieldRecordSyncService.self) private var historicalYieldSync
+    @Environment(AlertService.self) private var alertService
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Int = 0
 
@@ -78,6 +79,7 @@ struct NewMainTabView: View {
             yieldSessionSync.configure(store: store, auth: auth)
             damageRecordSync.configure(store: store, auth: auth)
             historicalYieldSync.configure(store: store, auth: auth)
+            alertService.configure(store: store, auth: auth)
         }
         .task(id: store.selectedVineyardId) {
             await accessControl.refresh(for: store.selectedVineyardId, auth: auth)
@@ -98,6 +100,7 @@ struct NewMainTabView: View {
             await yieldSessionSync.syncForSelectedVineyard()
             await damageRecordSync.syncForSelectedVineyard()
             await historicalYieldSync.syncForSelectedVineyard()
+            await alertService.generateAndRefresh()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
@@ -119,6 +122,7 @@ struct NewMainTabView: View {
                     await yieldSessionSync.syncForSelectedVineyard()
                     await damageRecordSync.syncForSelectedVineyard()
                     await historicalYieldSync.syncForSelectedVineyard()
+                    await alertService.refresh()
                 }
             }
         }
@@ -154,6 +158,7 @@ private struct NewHomeTabView: View {
                     if shouldShowSetupWizard {
                         setupWizardCard
                     }
+                    HomeAlertsCard()
                     if tripTracking.activeTrip != nil {
                         Button {
                             selectedTab = 2

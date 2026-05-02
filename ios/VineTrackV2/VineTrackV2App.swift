@@ -34,6 +34,7 @@ struct VineTrackV2App: App {
     @State private var damageRecordSyncService = DamageRecordSyncService()
     @State private var historicalYieldRecordSyncService = HistoricalYieldRecordSyncService()
     @State private var subscriptionService = SubscriptionService()
+    @State private var alertService = AlertService()
 
     init() {
         VineyardTheme.applyGlobalAppearance()
@@ -78,6 +79,7 @@ struct VineTrackV2App: App {
                         .environment(damageRecordSyncService)
                         .environment(historicalYieldRecordSyncService)
                         .environment(subscriptionService)
+                        .environment(alertService)
                 } else {
                     ContentView()
                 }
