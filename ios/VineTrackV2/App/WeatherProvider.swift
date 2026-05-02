@@ -49,11 +49,14 @@ nonisolated enum WeatherProvider: String, Codable, Sendable, CaseIterable, Ident
 nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
     var provider: WeatherProvider = .automatic
     var davisStationId: String? = nil
+    var davisStationName: String? = nil
     var davisHasCredentials: Bool = false
     var davisLastTestSuccess: Date? = nil
     var davisLastTestError: String? = nil
     var davisDetectedSensors: [String] = []
     var davisHasLeafWetnessSensor: Bool = false
+    var davisConnectionTested: Bool = false
+    var davisAvailableStations: [DavisStation] = []
     var lastSuccessfulUpdate: Date? = nil
 
     static let `default` = WeatherProviderConfig()

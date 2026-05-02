@@ -26,13 +26,18 @@ nonisolated struct WeatherSourceStatus: Sendable, Equatable {
     var compactLabel: String {
         switch provider {
         case .automatic:
-            return "Forecast source: Automatic Forecast"
+            return "Source: Automatic Forecast"
         case .wunderground:
-            return "Local data: Weather Underground + forecast"
+            return "Source: Weather Underground PWS — \(detailLabel)"
         case .davis:
-            return quality == .localStationWithMeasuredWetness
-                ? "Local data: Davis WeatherLink + forecast (measured wetness)"
-                : "Local data: Davis WeatherLink + forecast"
+            switch quality {
+            case .localStationWithMeasuredWetness:
+                return "Source: Davis WeatherLink — \(detailLabel) (measured wetness)"
+            case .localStation:
+                return "Source: Davis WeatherLink — \(detailLabel)"
+            case .forecastOnly:
+                return "Source: Automatic Forecast fallback"
+            }
         }
     }
 }
@@ -47,19 +52,36 @@ enum WeatherProviderResolver {
 
         switch cfg.provider {
         case .davis:
-            if cfg.davisHasCredentials {
+            // Only count as a working local source when the user actually
+            // tested the connection AND we picked a station back.
+            if cfg.davisHasCredentials,
+               cfg.davisConnectionTested,
+               let stationId = cfg.davisStationId,
+               !stationId.isEmpty {
                 let quality: WeatherSourceStatus.Quality =
                     cfg.davisHasLeafWetnessSensor ? .localStationWithMeasuredWetness : .localStation
+                let detail = cfg.davisStationName?.isEmpty == false
+                    ? cfg.davisStationName!
+                    : stationId
                 return WeatherSourceStatus(
                     provider: .davis,
                     quality: quality,
                     primaryLabel: "Davis WeatherLink",
-                    detailLabel: cfg.davisStationId ?? "Davis station",
+                    detailLabel: detail,
                     lastUpdated: cfg.lastSuccessfulUpdate
                 )
             }
-            // Fall back to automatic if creds missing.
-            return automatic(lastUpdated: cfg.lastSuccessfulUpdate)
+            // Davis selected but not yet usable — surface a Davis-flavoured
+            // fallback status so the UI can explain the situation.
+            return WeatherSourceStatus(
+                provider: .davis,
+                quality: .forecastOnly,
+                primaryLabel: "Davis WeatherLink",
+                detailLabel: cfg.davisHasCredentials
+                    ? "Configured — using Automatic Forecast fallback"
+                    : "Not configured — using Automatic Forecast fallback",
+                lastUpdated: cfg.lastSuccessfulUpdate
+            )
 
         case .wunderground:
             if let station = weatherStationId, !station.isEmpty {

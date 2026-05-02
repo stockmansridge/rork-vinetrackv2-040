@@ -8,12 +8,14 @@ struct WeatherDataSettingsView: View {
     @State private var showStationPicker: Bool = false
     @State private var davisApiKey: String = ""
     @State private var davisApiSecret: String = ""
-    @State private var davisStationIdInput: String = ""
     @State private var isTestingDavis: Bool = false
     @State private var davisTestMessage: String?
+    @State private var davisTestSucceeded: Bool = false
     @State private var showSecret: Bool = false
     @State private var davisInfoTopic: DavisInfoTopic?
     @State private var isEditingDavisCredentials: Bool = false
+    @State private var davisStations: [DavisStation] = []
+    @State private var showDavisStationPicker: Bool = false
 
     private var canEdit: Bool { accessControl.canChangeSettings }
 
@@ -21,20 +23,20 @@ struct WeatherDataSettingsView: View {
         case notConfigured
         case credentialsSavedNotTested
         case testing
+        case connectedNoStationSelected
         case connectedNoLeafWetness
         case connectedWithLeafWetness
         case connectionFailed(String)
-        case liveIntegrationNotAvailable
 
         var headline: String {
             switch self {
             case .notConfigured: return "Not configured"
-            case .credentialsSavedNotTested: return "Davis WeatherLink credentials saved."
+            case .credentialsSavedNotTested: return "Credentials saved. Tap Test Connection to verify your WeatherLink account."
             case .testing: return "Testing Davis WeatherLink…"
+            case .connectedNoStationSelected: return "Connected — select a station to load sensors."
             case .connectedNoLeafWetness: return "Connected — no leaf wetness sensor detected."
             case .connectedWithLeafWetness: return "Connected — measured leaf wetness available."
             case .connectionFailed(let msg): return msg
-            case .liveIntegrationNotAvailable: return "Davis WeatherLink credentials saved. Live station detection is not enabled yet."
             }
         }
 
@@ -46,12 +48,12 @@ struct WeatherDataSettingsView: View {
                 return "Sensor detection will run once you tap Test Connection."
             case .testing:
                 return "Detecting available sensors…"
+            case .connectedNoStationSelected:
+                return "Pick a station to detect available sensors."
             case .connectedNoLeafWetness, .connectedWithLeafWetness:
                 return ""
             case .connectionFailed:
                 return "Sensor detection unavailable until the connection succeeds."
-            case .liveIntegrationNotAvailable:
-                return "Sensor detection will be available once Davis WeatherLink live integration is enabled."
             }
         }
     }
@@ -73,7 +75,7 @@ struct WeatherDataSettingsView: View {
             case .apiSecret:
                 return "The API Secret authorises access to your Davis WeatherLink data and should be kept private. VineTrack stores it securely on this device using the iOS Keychain — it is never shared with other vineyard members or uploaded in plain text.\n\nGenerate it alongside the API Key from Account Settings → Generate v2 Key on weatherlink.com."
             case .stationId:
-                return "Station ID selection is not available yet. Once Davis WeatherLink live integration is enabled, VineTrack will load your available stations and select one automatically based on your saved credentials."
+                return "VineTrack loads stations directly from WeatherLink after a successful Test Connection. If your account has more than one station, you can pick the correct vineyard station from the list. The Station ID is read from the API — you don't need to enter it manually."
             }
         }
     }
@@ -114,6 +116,15 @@ struct WeatherDataSettingsView: View {
         .onAppear { loadConfig() }
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
+        }
+        .sheet(isPresented: $showDavisStationPicker) {
+            DavisStationPickerSheet(
+                stations: davisStations,
+                selectedStationId: config.davisStationId
+            ) { station in
+                showDavisStationPicker = false
+                Task { await selectDavisStation(station) }
+            }
         }
         .sheet(item: $davisInfoTopic) { topic in
             NavigationStack {
@@ -347,17 +358,39 @@ struct WeatherDataSettingsView: View {
                 }
             }
 
-            // Station ID — hidden until live integration arrives
-            HStack {
-                Text("Station selection")
-                infoButton(.stationId)
-                Spacer()
-                Text("Coming soon")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.secondary.opacity(0.15), in: .capsule)
+            // Station selection — enabled once we've successfully tested
+            // the connection and have at least one station available.
+            if config.davisHasCredentials,
+               config.davisConnectionTested,
+               !(config.davisAvailableStations.isEmpty && davisStations.isEmpty) {
+                Button {
+                    showDavisStationPicker = true
+                } label: {
+                    HStack {
+                        Label("Selected station", systemImage: "antenna.radiowaves.left.and.right")
+                        Spacer()
+                        Text(currentStationLabel)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .disabled(!canEdit)
+            } else {
+                HStack {
+                    Text("Station selection")
+                    infoButton(.stationId)
+                    Spacer()
+                    Text("Run Test Connection")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.15), in: .capsule)
+                }
             }
 
             // Save / Replace / Cancel actions
@@ -385,24 +418,32 @@ struct WeatherDataSettingsView: View {
                 }
             }
 
-            // Test Connection — disabled until live integration
+            // Test Connection — live
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Label("Test Connection", systemImage: "checkmark.seal")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text("Coming soon")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.secondary.opacity(0.15), in: .capsule)
+                Button {
+                    Task { await testDavisConnection() }
+                } label: {
+                    HStack {
+                        if isTestingDavis {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark.seal")
+                        }
+                        Text(isTestingDavis ? "Testing…" : "Test Connection")
+                        Spacer()
+                    }
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Test Connection. Coming soon.")
-                Text("This will verify your WeatherLink account and detect stations once live integration is enabled.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                .disabled(!canEdit || !config.davisHasCredentials || isTestingDavis)
+                if let msg = davisTestMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundStyle(davisTestSucceeded ? .green : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Verifies your WeatherLink account and loads available stations.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if config.davisHasCredentials {
@@ -443,15 +484,19 @@ struct WeatherDataSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                case .liveIntegrationNotAvailable, .credentialsSavedNotTested:
+                case .credentialsSavedNotTested:
                     VStack(alignment: .leading, spacing: 4) {
                         Label("Not tested yet", systemImage: "questionmark.circle")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Sensor detection will run after WeatherLink live connection is enabled.")
+                        Text("Tap Test Connection to detect available sensors.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                case .connectedNoStationSelected:
+                    Label("Select a station to detect sensors", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 default:
                     Text(status.sensorsDetail)
                         .font(.caption)
@@ -494,7 +539,8 @@ struct WeatherDataSettingsView: View {
                 helpStep(number: 3, text: "Look for ‘Generate v2 Key’.")
                 helpStep(number: 4, text: "WeatherLink will provide an API Key and API Secret.")
                 helpStep(number: 5, text: "Enter both here and tap Save Credentials.")
-                helpStep(number: 6, text: "Live station detection and sensor discovery will be available in a future update.")
+                helpStep(number: 6, text: "Tap Test Connection to verify the account and load your stations.")
+                helpStep(number: 7, text: "If you have more than one station, choose the one closest to the vineyard.")
             }
             .padding(.vertical, 4)
 
@@ -611,8 +657,11 @@ struct WeatherDataSettingsView: View {
         var c = WeatherProviderStore.shared.config(for: vid)
         // Reconcile keychain state.
         c.davisHasCredentials = WeatherKeychain.hasCredentials
+        if !c.davisHasCredentials {
+            c.davisConnectionTested = false
+        }
         config = c
-        davisStationIdInput = c.davisStationId ?? ""
+        davisStations = c.davisAvailableStations
     }
 
     private func persist() {
@@ -623,9 +672,16 @@ struct WeatherDataSettingsView: View {
     private var davisStatus: DavisStatus {
         if !config.davisHasCredentials { return .notConfigured }
         if isTestingDavis { return .testing }
-        // Live integration not implemented yet — once credentials are saved,
-        // surface this clearly instead of pretending we tested anything.
-        return .liveIntegrationNotAvailable
+        if let err = config.davisLastTestError, !err.isEmpty {
+            return .connectionFailed(err)
+        }
+        if !config.davisConnectionTested { return .credentialsSavedNotTested }
+        guard let sid = config.davisStationId, !sid.isEmpty else {
+            return .connectedNoStationSelected
+        }
+        return config.davisHasLeafWetnessSensor
+            ? .connectedWithLeafWetness
+            : .connectedNoLeafWetness
     }
 
     private func saveDavisCredentials() {
@@ -634,9 +690,11 @@ struct WeatherDataSettingsView: View {
         WeatherKeychain.set(davisApiSecret, for: .apiSecret)
         var c = config
         c.davisHasCredentials = WeatherKeychain.hasCredentials
-        let trimmed = davisStationIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        c.davisStationId = trimmed.isEmpty ? nil : trimmed
-        // Reset any stale detection state — live integration isn't wired up yet.
+        // New credentials — invalidate prior test state.
+        c.davisConnectionTested = false
+        c.davisStationId = nil
+        c.davisStationName = nil
+        c.davisAvailableStations = []
         c.davisDetectedSensors = []
         c.davisHasLeafWetnessSensor = false
         c.davisLastTestError = nil
@@ -645,9 +703,11 @@ struct WeatherDataSettingsView: View {
         persist()
         davisApiKey = ""
         davisApiSecret = ""
+        davisStations = []
         showSecret = false
         isEditingDavisCredentials = false
-        davisTestMessage = "Credentials saved securely. Live WeatherLink testing and station detection are not enabled in this version."
+        davisTestSucceeded = false
+        davisTestMessage = "Credentials saved securely. Tap Test Connection to verify your WeatherLink account."
     }
 
     private func beginReplaceCredentials() {
@@ -669,28 +729,149 @@ struct WeatherDataSettingsView: View {
         WeatherKeychain.clearAll()
         var c = config
         c.davisHasCredentials = false
+        c.davisConnectionTested = false
+        c.davisStationId = nil
+        c.davisStationName = nil
+        c.davisAvailableStations = []
         c.davisDetectedSensors = []
         c.davisHasLeafWetnessSensor = false
         c.davisLastTestSuccess = nil
         c.davisLastTestError = nil
         config = c
         persist()
+        davisStations = []
+        davisTestSucceeded = false
         isEditingDavisCredentials = false
         davisTestMessage = "Davis credentials removed."
     }
 
+    private var currentStationLabel: String {
+        if let name = config.davisStationName, !name.isEmpty { return name }
+        if let sid = config.davisStationId, !sid.isEmpty { return "Station \(sid)" }
+        return "Choose station"
+    }
+
     private func testDavisConnection() async {
         guard config.davisHasCredentials else { return }
-        // Davis WeatherLink live API integration is not implemented yet, so
-        // there's nothing to actually test. Surface that clearly rather than
-        // running a fake spinner that ends in a misleading "no sensor" state.
+        guard let apiKey = WeatherKeychain.get(.apiKey),
+              let apiSecret = WeatherKeychain.get(.apiSecret),
+              !apiKey.isEmpty, !apiSecret.isEmpty else {
+            davisTestSucceeded = false
+            davisTestMessage = "Save credentials before testing."
+            return
+        }
+        isTestingDavis = true
+        davisTestMessage = nil
+        davisTestSucceeded = false
+        defer { isTestingDavis = false }
+
+        do {
+            let stations = try await DavisWeatherLinkService.fetchStations(
+                apiKey: apiKey,
+                apiSecret: apiSecret
+            )
+            davisStations = stations
+            var c = config
+            c.davisAvailableStations = stations
+            c.davisConnectionTested = true
+            c.davisLastTestSuccess = Date()
+            c.davisLastTestError = nil
+
+            // Auto-select if exactly one station, otherwise prompt user.
+            if stations.count == 1 {
+                c.davisStationId = stations[0].stationId
+                c.davisStationName = stations[0].name
+            } else if let existing = c.davisStationId,
+                      stations.contains(where: { $0.stationId == existing }) {
+                // Keep existing valid selection.
+                if let match = stations.first(where: { $0.stationId == existing }) {
+                    c.davisStationName = match.name
+                }
+            } else {
+                c.davisStationId = nil
+                c.davisStationName = nil
+            }
+
+            // If we have a selected station, fetch current to detect sensors.
+            if let sid = c.davisStationId {
+                do {
+                    let cur = try await DavisWeatherLinkService.fetchCurrentConditions(
+                        apiKey: apiKey,
+                        apiSecret: apiSecret,
+                        stationId: sid
+                    )
+                    c.davisDetectedSensors = cur.sensors.displayList
+                    c.davisHasLeafWetnessSensor = cur.sensors.hasLeafWetness
+                    c.lastSuccessfulUpdate = cur.generatedAt
+                } catch {
+                    // Station picked but current fetch failed — don't
+                    // fail the whole test; just leave sensors unknown.
+                    c.davisDetectedSensors = []
+                    c.davisHasLeafWetnessSensor = false
+                }
+            } else {
+                c.davisDetectedSensors = []
+                c.davisHasLeafWetnessSensor = false
+            }
+
+            config = c
+            persist()
+            davisTestSucceeded = true
+            if stations.count == 1 {
+                davisTestMessage = c.davisHasLeafWetnessSensor
+                    ? "Connected to WeatherLink. Measured leaf wetness available."
+                    : "Connected to WeatherLink. No leaf wetness sensor detected — using estimated wetness."
+            } else if c.davisStationId == nil {
+                davisTestMessage = "Connected. Select a station to detect sensors."
+            } else {
+                davisTestMessage = "Connected to WeatherLink."
+            }
+        } catch let e as DavisWeatherLinkError {
+            var c = config
+            c.davisLastTestError = e.errorDescription
+            c.davisLastTestSuccess = nil
+            c.davisConnectionTested = false
+            config = c
+            persist()
+            davisTestSucceeded = false
+            davisTestMessage = e.errorDescription
+        } catch {
+            davisTestSucceeded = false
+            davisTestMessage = "WeatherLink unavailable — \(error.localizedDescription)"
+        }
+    }
+
+    private func selectDavisStation(_ station: DavisStation) async {
+        guard let apiKey = WeatherKeychain.get(.apiKey),
+              let apiSecret = WeatherKeychain.get(.apiSecret) else { return }
         var c = config
-        c.davisDetectedSensors = []
-        c.davisHasLeafWetnessSensor = false
-        c.davisLastTestError = nil
-        c.davisLastTestSuccess = nil
+        c.davisStationId = station.stationId
+        c.davisStationName = station.name
         config = c
         persist()
-        davisTestMessage = DavisStatus.liveIntegrationNotAvailable.headline
+
+        do {
+            let cur = try await DavisWeatherLinkService.fetchCurrentConditions(
+                apiKey: apiKey,
+                apiSecret: apiSecret,
+                stationId: station.stationId
+            )
+            var c2 = config
+            c2.davisDetectedSensors = cur.sensors.displayList
+            c2.davisHasLeafWetnessSensor = cur.sensors.hasLeafWetness
+            c2.lastSuccessfulUpdate = cur.generatedAt
+            config = c2
+            persist()
+            davisTestSucceeded = true
+            davisTestMessage = c2.davisHasLeafWetnessSensor
+                ? "Station selected. Measured leaf wetness available."
+                : "Station selected. No leaf wetness sensor detected — using estimated wetness."
+        } catch let e as DavisWeatherLinkError {
+            davisTestSucceeded = false
+            davisTestMessage = e.errorDescription
+        } catch {
+            davisTestSucceeded = false
+            davisTestMessage = "Could not load current conditions — \(error.localizedDescription)"
+        }
     }
 }

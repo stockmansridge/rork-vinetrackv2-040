@@ -381,7 +381,13 @@ final class AlertService {
         let lat = firstPaddock.polygonPoints.map(\.latitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
         let lon = firstPaddock.polygonPoints.map(\.longitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
 
-        await hourlyService.fetch(latitude: lat, longitude: lon, pastDays: 2, forecastDays: 3)
+        await hourlyService.fetchWithDavisOverride(
+            latitude: lat,
+            longitude: lon,
+            pastDays: 2,
+            forecastDays: 3,
+            vineyardId: vineyardId
+        )
         guard let forecast = hourlyService.forecast, !forecast.hours.isEmpty else { return [] }
 
         var enabledModels: Set<DiseaseModel> = []

@@ -536,7 +536,13 @@ struct DiseaseRiskAdvisorView: View {
             dailyScores = []
             return
         }
-        await hourlyService.fetch(latitude: lat, longitude: lon, pastDays: 3, forecastDays: 5)
+        await hourlyService.fetchWithDavisOverride(
+            latitude: lat,
+            longitude: lon,
+            pastDays: 3,
+            forecastDays: 5,
+            vineyardId: store.selectedVineyardId
+        )
         guard let forecast = hourlyService.forecast else {
             assessments = []
             dailyScores = []
