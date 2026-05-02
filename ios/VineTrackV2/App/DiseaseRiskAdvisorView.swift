@@ -161,7 +161,7 @@ struct DiseaseRiskAdvisorView: View {
                     Text("Score \(score)")
                         .font(.caption2.monospacedDigit().weight(.semibold))
                         .foregroundStyle(.secondary)
-                    wetnessBadge(measured: assessment.usedMeasuredWetness)
+                    sourceBadge(for: assessment)
                 }
             }
         }
@@ -180,6 +180,25 @@ struct DiseaseRiskAdvisorView: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Capsule().fill(Color.secondary.opacity(0.12)))
+    }
+
+    @ViewBuilder
+    private func sourceBadge(for assessment: DiseaseRiskAssessment) -> some View {
+        switch assessment.model {
+        case .powderyMildew:
+            HStack(spacing: 3) {
+                Image(systemName: "thermometer.sun")
+                    .font(.caption2)
+                Text("Temp + RH model")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.secondary.opacity(0.12)))
+        case .downyMildew, .botrytis:
+            wetnessBadge(measured: assessment.usedMeasuredWetness)
+        }
     }
 
     // MARK: - Chart
@@ -305,7 +324,7 @@ struct DiseaseRiskAdvisorView: View {
                 .font(.caption)
                 .foregroundStyle(.primary.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
-            if !assessment.usedMeasuredWetness {
+            if assessment.model != .powderyMildew, !assessment.usedMeasuredWetness {
                 Text("Based on estimated wetness (no measured leaf wetness sensor).")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
@@ -324,7 +343,7 @@ struct DiseaseRiskAdvisorView: View {
                         .foregroundStyle(.tertiary)
                 }
                 Spacer()
-                wetnessBadge(measured: assessment.usedMeasuredWetness)
+                sourceBadge(for: assessment)
             }
         }
         .padding(12)

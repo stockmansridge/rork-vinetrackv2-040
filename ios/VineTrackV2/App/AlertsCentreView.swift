@@ -177,11 +177,11 @@ private struct AlertRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
-                if let wetness = wetnessBadge {
+                if let badge = sourceBadge {
                     HStack(spacing: 4) {
-                        Image(systemName: "drop.degreesign")
+                        Image(systemName: badge.icon)
                             .font(.caption2)
-                        Text(wetness)
+                        Text(badge.label)
                             .font(.caption2)
                     }
                     .foregroundStyle(.secondary)
@@ -190,7 +190,7 @@ private struct AlertRow: View {
                     .background(
                         Capsule().fill(Color.secondary.opacity(0.12))
                     )
-                    .help("Estimated wetness uses rain, humidity and dew point spread as a proxy.")
+                    .help(badge.help)
                 }
                 HStack(spacing: 8) {
                     if let label = actionLabel {
@@ -217,14 +217,34 @@ private struct AlertRow: View {
         .padding(.vertical, 4)
     }
 
-    private var wetnessBadge: String? {
+    private struct SourceBadge {
+        let icon: String
+        let label: String
+        let help: String
+    }
+
+    private var sourceBadge: SourceBadge? {
         switch item.alert.typedAlertType {
-        case .diseaseDownyMildew, .diseasePowderyMildew, .diseaseBotrytis:
+        case .diseaseDownyMildew, .diseaseBotrytis:
             let msg = item.alert.message.lowercased()
             if msg.contains("measured leaf wetness") && !msg.contains("no measured") {
-                return "Measured wetness"
+                return SourceBadge(
+                    icon: "drop.degreesign",
+                    label: "Measured wetness",
+                    help: "Risk uses measured leaf wetness from a connected station."
+                )
             }
-            return "Estimated wetness"
+            return SourceBadge(
+                icon: "drop.degreesign",
+                label: "Estimated wetness",
+                help: "Estimated wetness uses rain, humidity and dew point spread as a proxy."
+            )
+        case .diseasePowderyMildew:
+            return SourceBadge(
+                icon: "thermometer.sun",
+                label: "Temp + RH model",
+                help: "Powdery risk is driven by 21–30°C hours and humidity ≥ 60%."
+            )
         default:
             return nil
         }
