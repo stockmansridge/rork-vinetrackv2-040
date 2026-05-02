@@ -13,6 +13,7 @@ struct WeatherDataSettingsView: View {
     @State private var davisTestMessage: String?
     @State private var showSecret: Bool = false
     @State private var davisInfoTopic: DavisInfoTopic?
+    @State private var isEditingDavisCredentials: Bool = false
 
     private var canEdit: Bool { accessControl.canChangeSettings }
 
@@ -273,61 +274,83 @@ struct WeatherDataSettingsView: View {
     }
 
     private var davisSection: some View {
-        Section {
+        let savedAndNotEditing = config.davisHasCredentials && !isEditingDavisCredentials
+
+        return Section {
+            // 1. Saved status card on top
+            if savedAndNotEditing {
+                savedStatusCard
+            }
+
+            // API Key row
             HStack {
                 Text("API Key")
                 infoButton(.apiKey)
                 Spacer()
-                TextField("Davis API Key", text: $davisApiKey)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 220)
+                if savedAndNotEditing {
+                    HStack(spacing: 6) {
+                        Text("••••••••")
+                            .font(.subheadline.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text("Saved")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.15), in: .capsule)
+                            .foregroundStyle(.green)
+                    }
+                } else {
+                    TextField("Davis API Key", text: $davisApiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .multilineTextAlignment(.trailing)
+                        .frame(maxWidth: 220)
+                }
             }
+
+            // API Secret row
             HStack {
                 Text("API Secret")
                 infoButton(.apiSecret)
                 Spacer()
-                Group {
-                    if showSecret {
-                        TextField("Davis API Secret", text: $davisApiSecret)
-                    } else {
-                        SecureField("Davis API Secret", text: $davisApiSecret)
+                if savedAndNotEditing {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Saved securely")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.green.opacity(0.15), in: .capsule)
+                            .foregroundStyle(.green)
                     }
+                } else {
+                    Group {
+                        if showSecret {
+                            TextField("Davis API Secret", text: $davisApiSecret)
+                        } else {
+                            SecureField("Davis API Secret", text: $davisApiSecret)
+                        }
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 220)
+                    Button {
+                        showSecret.toggle()
+                    } label: {
+                        Image(systemName: showSecret ? "eye.slash" : "eye")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .multilineTextAlignment(.trailing)
-                .frame(maxWidth: 220)
-                Button {
-                    showSecret.toggle()
-                } label: {
-                    Image(systemName: showSecret ? "eye.slash" : "eye")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
             }
+
+            // Station ID — hidden until live integration arrives
             HStack {
-                Text("Station ID")
+                Text("Station selection")
                 infoButton(.stationId)
-                Spacer()
-                Text("Available after Davis integration")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button {
-                saveDavisCredentials()
-            } label: {
-                Label("Save Credentials", systemImage: "lock.shield")
-            }
-            .disabled(!canEdit || davisApiKey.isEmpty || davisApiSecret.isEmpty)
-
-            // Live Davis integration is not implemented yet; show a disabled
-            // "Coming soon" row so users don't expect a working test.
-            HStack {
-                Label("Test Connection", systemImage: "checkmark.seal")
-                    .foregroundStyle(.secondary)
                 Spacer()
                 Text("Coming soon")
                     .font(.caption.weight(.semibold))
@@ -336,16 +359,49 @@ struct WeatherDataSettingsView: View {
                     .padding(.vertical, 3)
                     .background(Color.secondary.opacity(0.15), in: .capsule)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Test Connection. Coming soon.")
 
-            if let msg = davisTestMessage {
-                Text(msg)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if config.davisHasCredentials {
-                Text("Credentials saved. Davis station detection will be available in a future update.")
-                    .font(.caption)
+            // Save / Replace / Cancel actions
+            if savedAndNotEditing {
+                Button {
+                    beginReplaceCredentials()
+                } label: {
+                    Label("Replace Credentials", systemImage: "square.and.pencil")
+                }
+                .disabled(!canEdit)
+            } else {
+                Button {
+                    saveDavisCredentials()
+                } label: {
+                    Label("Save Credentials", systemImage: "lock.shield")
+                }
+                .disabled(!canEdit || davisApiKey.isEmpty || davisApiSecret.isEmpty)
+
+                if isEditingDavisCredentials {
+                    Button {
+                        cancelReplaceCredentials()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                }
+            }
+
+            // Test Connection — disabled until live integration
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Test Connection", systemImage: "checkmark.seal")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Coming soon")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.15), in: .capsule)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Test Connection. Coming soon.")
+                Text("This will verify your WeatherLink account and detect stations once live integration is enabled.")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
@@ -387,6 +443,15 @@ struct WeatherDataSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                case .liveIntegrationNotAvailable, .credentialsSavedNotTested:
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Not tested yet", systemImage: "questionmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Sensor detection will run after WeatherLink live connection is enabled.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 default:
                     Text(status.sensorsDetail)
                         .font(.caption)
@@ -399,6 +464,26 @@ struct WeatherDataSettingsView: View {
         } footer: {
             Text("Credentials are stored securely on this device using the iOS Keychain and are not shared with other vineyard members.")
         }
+    }
+
+    private var savedStatusCard: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.shield.fill")
+                .font(.title3)
+                .foregroundStyle(.green)
+                .frame(width: 32, height: 32)
+                .background(Color.green.opacity(0.12), in: .rect(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Credentials saved securely on this device")
+                    .font(.subheadline.weight(.semibold))
+                Text("Live WeatherLink connection is not enabled yet, so these credentials have not been tested.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
     }
 
     private var davisHelpSection: some View {
@@ -560,7 +645,24 @@ struct WeatherDataSettingsView: View {
         persist()
         davisApiKey = ""
         davisApiSecret = ""
-        davisTestMessage = "Credentials saved. Davis station detection will be available in a future update."
+        showSecret = false
+        isEditingDavisCredentials = false
+        davisTestMessage = "Credentials saved securely. Live WeatherLink testing and station detection are not enabled in this version."
+    }
+
+    private func beginReplaceCredentials() {
+        davisApiKey = ""
+        davisApiSecret = ""
+        showSecret = false
+        isEditingDavisCredentials = true
+        davisTestMessage = nil
+    }
+
+    private func cancelReplaceCredentials() {
+        davisApiKey = ""
+        davisApiSecret = ""
+        showSecret = false
+        isEditingDavisCredentials = false
     }
 
     private func clearDavisCredentials() {
@@ -573,6 +675,7 @@ struct WeatherDataSettingsView: View {
         c.davisLastTestError = nil
         config = c
         persist()
+        isEditingDavisCredentials = false
         davisTestMessage = "Davis credentials removed."
     }
 
