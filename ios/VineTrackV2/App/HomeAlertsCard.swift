@@ -99,7 +99,10 @@ struct HomeAlertsCard: View {
             guard let t = item.alert.typedAlertType else { continue }
             counts[t, default: 0] += 1
         }
-        let order: [AlertType] = [.weatherRisk, .irrigationNeeded, .agedPins, .sprayJobDue, .syncIssue]
+        let order: [AlertType] = [
+            .weatherRisk, .irrigationNeeded, .agedPins, .sprayJobDue,
+            .diseaseDownyMildew, .diseasePowderyMildew, .diseaseBotrytis, .syncIssue
+        ]
         return order.compactMap { type in
             guard let n = counts[type], n > 0 else { return nil }
             switch type {
@@ -108,6 +111,9 @@ struct HomeAlertsCard: View {
             case .agedPins: return "Aged pins"
             case .sprayJobDue: return "Spray job"
             case .syncIssue: return "Sync"
+            case .diseaseDownyMildew: return "Downy mildew"
+            case .diseasePowderyMildew: return "Powdery mildew"
+            case .diseaseBotrytis: return "Botrytis"
             }
         }
     }

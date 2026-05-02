@@ -141,6 +141,21 @@ struct AlertSettingsView: View {
         }
 
         Section {
+            Toggle("Disease risk alerts", isOn: binding.diseaseAlertsEnabled)
+                .disabled(!canEdit)
+            Toggle("Downy mildew", isOn: binding.diseaseDownyEnabled)
+                .disabled(!canEdit || !binding.wrappedValue.diseaseAlertsEnabled)
+            Toggle("Powdery mildew", isOn: binding.diseasePowderyEnabled)
+                .disabled(!canEdit || !binding.wrappedValue.diseaseAlertsEnabled)
+            Toggle("Botrytis", isOn: binding.diseaseBotrytisEnabled)
+                .disabled(!canEdit || !binding.wrappedValue.diseaseAlertsEnabled)
+        } header: {
+            Text("Disease risk")
+        } footer: {
+            Text("Disease alerts use forecast humidity, dew point, rainfall and temperature with an estimated wetness proxy (rain, RH ≥ 90%, or temperature within 2°C of dew point). They are not a substitute for measured leaf wetness; if a measured sensor is added later, it can override the proxy per vineyard.")
+        }
+
+        Section {
             Toggle("Push notifications", isOn: binding.pushEnabled)
                 .disabled(true)
         } header: {

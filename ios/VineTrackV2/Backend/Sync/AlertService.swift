@@ -29,10 +29,12 @@ final class AlertService {
     private weak var auth: NewBackendAuthService?
     private let repository: any AlertRepositoryProtocol
     private let forecastService: IrrigationForecastService
+    private let hourlyService: WeatherHourlyService
 
     init(repository: (any AlertRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseAlertRepository()
         self.forecastService = IrrigationForecastService()
+        self.hourlyService = WeatherHourlyService()
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -143,6 +145,15 @@ final class AlertService {
         if prefs.weatherAlertsEnabled {
             generated.append(contentsOf: generateWeatherAlertsFromForecast(
                 forecastDays: forecastService.forecast?.days ?? [],
+                vineyardId: vineyardId,
+                prefs: prefs,
+                userId: userId
+            ))
+        }
+
+        if prefs.diseaseAlertsEnabled {
+            generated.append(contentsOf: await generateDiseaseAlerts(
+                store: store,
                 vineyardId: vineyardId,
                 prefs: prefs,
                 userId: userId
@@ -355,6 +366,66 @@ final class AlertService {
                 createdBy: userId
             )
         ]
+    }
+
+    // MARK: - Disease risk
+
+    private func generateDiseaseAlerts(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        prefs: BackendAlertPreferences,
+        userId: UUID?
+    ) async -> [BackendAlertUpsert] {
+        let paddocks = store.paddocks.filter { $0.vineyardId == vineyardId && !$0.polygonPoints.isEmpty }
+        guard let firstPaddock = paddocks.first else { return [] }
+        let lat = firstPaddock.polygonPoints.map(\.latitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+        let lon = firstPaddock.polygonPoints.map(\.longitude).reduce(0, +) / Double(firstPaddock.polygonPoints.count)
+
+        await hourlyService.fetch(latitude: lat, longitude: lon, pastDays: 2, forecastDays: 3)
+        guard let forecast = hourlyService.forecast, !forecast.hours.isEmpty else { return [] }
+
+        var enabledModels: Set<DiseaseModel> = []
+        if prefs.diseaseDownyEnabled { enabledModels.insert(.downyMildew) }
+        if prefs.diseasePowderyEnabled { enabledModels.insert(.powderyMildew) }
+        if prefs.diseaseBotrytisEnabled { enabledModels.insert(.botrytis) }
+        guard !enabledModels.isEmpty else { return [] }
+
+        let assessments = DiseaseRiskCalculator.assess(hours: forecast.hours, models: enabledModels)
+        let today = today()
+        let tomorrow = tomorrow()
+        var upserts: [BackendAlertUpsert] = []
+
+        for assessment in assessments {
+            guard let severity = assessment.severity else { continue }
+            let alertType: AlertType
+            switch assessment.model {
+            case .downyMildew: alertType = .diseaseDownyMildew
+            case .powderyMildew: alertType = .diseasePowderyMildew
+            case .botrytis: alertType = .diseaseBotrytis
+            }
+            let dedupKey = "disease:\(assessment.model.rawValue):\(yyyymmdd(Date()))"
+            let wetnessNote = assessment.usedMeasuredWetness
+                ? ""
+                : " Based on estimated wetness (no measured leaf wetness sensor)."
+            let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+            upserts.append(BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: alertType.rawValue,
+                severity: severity.rawValue,
+                title: assessment.title,
+                message: assessment.summary + wetnessNote,
+                relatedTable: nil,
+                relatedId: nil,
+                paddockId: firstPaddock.id,
+                action: AlertAction.openDiseaseRisk.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: today,
+                expiresAt: tomorrow,
+                createdBy: userId
+            ))
+        }
+        return upserts
     }
 
     // MARK: - User actions

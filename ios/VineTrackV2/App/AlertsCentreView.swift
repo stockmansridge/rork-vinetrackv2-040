@@ -125,9 +125,10 @@ struct AlertsCentreView: View {
             // Tab switches handled by NewMainTabView; pop back to home root.
             alertService.pendingNavigation = action
             dismiss()
-        case .openIrrigationAdvisor, .openWeather:
-            // Weather alerts route to Irrigation Advisor (where the data
-            // turns into an action) until a dedicated weather hub exists.
+        case .openIrrigationAdvisor, .openWeather, .openDiseaseRisk:
+            // Weather and disease alerts route to Irrigation Advisor (where
+            // the data turns into an action) until a dedicated weather/disease
+            // hub exists.
             pushDestination = .irrigation
         }
     }
@@ -202,6 +203,7 @@ private struct AlertRow: View {
         case .openPins: return "View Pins"
         case .openSprayProgram: return "Open Spray Program"
         case .openSprayRecord: return "Open Spray Record"
+        case .openDiseaseRisk: return "Open Advisor"
         case .none: return nil
         }
     }
@@ -221,6 +223,9 @@ private struct AlertRow: View {
         case .weatherRisk: return "cloud.rain.fill"
         case .sprayJobDue: return "sprinkler.and.droplets.fill"
         case .syncIssue: return "exclamationmark.icloud"
+        case .diseaseDownyMildew: return "leaf.fill"
+        case .diseasePowderyMildew: return "aqi.medium"
+        case .diseaseBotrytis: return "allergens"
         case .none: return "bell.fill"
         }
     }

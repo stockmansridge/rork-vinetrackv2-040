@@ -109,7 +109,7 @@ struct NewMainTabView: View {
                 selectedTab = 1
             case .openSprayProgram, .openSprayRecord:
                 selectedTab = 3
-            case .openIrrigationAdvisor, .openWeather:
+            case .openIrrigationAdvisor, .openWeather, .openDiseaseRisk:
                 // Handled in-place by AlertsCentreView via push.
                 break
             }

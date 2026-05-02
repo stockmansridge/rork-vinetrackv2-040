@@ -1,0 +1,145 @@
+import Foundation
+
+/// A single hourly weather observation/forecast used by disease risk models.
+///
+/// The wetness signal is deliberately a *proxy*. Weather Underground and
+/// Open-Meteo do not provide measured leaf wetness; we estimate it from
+/// rainfall, relative humidity and the temperature/dew-point spread.
+///
+/// If a future ag-weather provider supplies a measured leaf wetness flag,
+/// populate `measuredLeafWetness`; the proxy is then bypassed.
+nonisolated struct WeatherHour: Sendable, Hashable, Identifiable {
+    let date: Date
+    let temperatureC: Double
+    let dewPointC: Double?
+    let humidityPercent: Double?
+    let precipitationMm: Double
+    /// Optional measured leaf wetness from an ag-weather provider.
+    /// When non-nil this overrides the proxy computation.
+    let measuredLeafWetness: Bool?
+
+    var id: Date { date }
+
+    /// `true` when the hour is considered wet.
+    /// Returns the measured value when provided; otherwise the estimated
+    /// proxy: rain > 0 mm OR RH >= 90% OR (T - dewPoint) <= 2°C.
+    var isWetHour: Bool {
+        if let measured = measuredLeafWetness { return measured }
+        if precipitationMm > 0 { return true }
+        if let h = humidityPercent, h >= 90 { return true }
+        if let dp = dewPointC, (temperatureC - dp) <= 2 { return true }
+        return false
+    }
+
+    /// Whether this hour's wetness comes from a measured sensor (true) or
+    /// the humidity/dew-point proxy (false).
+    var isWetnessMeasured: Bool { measuredLeafWetness != nil }
+}
+
+nonisolated struct HourlyForecast: Sendable, Hashable {
+    let hours: [WeatherHour]
+    let source: String
+    /// `true` if any hour reports measured leaf wetness from an ag-weather
+    /// provider. Currently always false — we use an estimated proxy.
+    let hasMeasuredLeafWetness: Bool
+}
+
+/// Fetches hourly weather (temperature, dew point, RH, precipitation) used
+/// for disease-risk modelling. Uses Open-Meteo today; structured so a future
+/// ag-weather provider can supply measured leaf wetness.
+@Observable
+class WeatherHourlyService {
+    var isLoading: Bool = false
+    var errorMessage: String?
+    var forecast: HourlyForecast?
+
+    func fetch(
+        latitude: Double,
+        longitude: Double,
+        pastDays: Int = 2,
+        forecastDays: Int = 3
+    ) async {
+        isLoading = true
+        errorMessage = nil
+
+        let past = max(0, min(pastDays, 5))
+        let ahead = max(1, min(forecastDays, 7))
+        let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&hourly=temperature_2m,dew_point_2m,relative_humidity_2m,precipitation&past_days=\(past)&forecast_days=\(ahead)&timezone=auto"
+
+        guard let url = URL(string: urlString) else {
+            errorMessage = "Invalid hourly forecast URL."
+            isLoading = false
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                errorMessage = "Failed to fetch hourly forecast (HTTP \(code))."
+                isLoading = false
+                return
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let hourly = json["hourly"] as? [String: Any],
+                  let times = hourly["time"] as? [String],
+                  let temps = hourly["temperature_2m"] as? [Any] else {
+                errorMessage = "Hourly forecast response could not be parsed."
+                isLoading = false
+                return
+            }
+
+            let dews = hourly["dew_point_2m"] as? [Any] ?? []
+            let rhs = hourly["relative_humidity_2m"] as? [Any] ?? []
+            let precs = hourly["precipitation"] as? [Any] ?? []
+
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate,
+                                       .withColonSeparatorInTime]
+            // Open-Meteo returns local "yyyy-MM-ddTHH:mm" without timezone
+            let local = DateFormatter()
+            local.dateFormat = "yyyy-MM-dd'T'HH:mm"
+            local.timeZone = TimeZone.current
+            local.locale = Locale(identifier: "en_US_POSIX")
+
+            var hours: [WeatherHour] = []
+            let count = min(times.count, temps.count)
+            for i in 0..<count {
+                let timeString = times[i]
+                let date = local.date(from: timeString) ?? formatter.date(from: timeString)
+                guard let date else { continue }
+                guard let t = Self.parseDouble(temps[i]) else { continue }
+                let dp = i < dews.count ? Self.parseDouble(dews[i]) : nil
+                let rh = i < rhs.count ? Self.parseDouble(rhs[i]) : nil
+                let p = i < precs.count ? (Self.parseDouble(precs[i]) ?? 0) : 0
+                hours.append(WeatherHour(
+                    date: date,
+                    temperatureC: t,
+                    dewPointC: dp,
+                    humidityPercent: rh,
+                    precipitationMm: p,
+                    measuredLeafWetness: nil
+                ))
+            }
+
+            forecast = HourlyForecast(
+                hours: hours,
+                source: "Open-Meteo",
+                hasMeasuredLeafWetness: false
+            )
+        } catch {
+            errorMessage = "Could not load hourly forecast: \(error.localizedDescription)"
+        }
+
+        isLoading = false
+    }
+
+    private static func parseDouble(_ value: Any) -> Double? {
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        if let n = value as? NSNumber { return n.doubleValue }
+        if let s = value as? String { return Double(s) }
+        return nil
+    }
+}
