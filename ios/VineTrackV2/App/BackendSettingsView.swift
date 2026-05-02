@@ -82,6 +82,16 @@ struct BackendSettingsView: View {
                         )
                     }
                     NavigationLink {
+                        WeatherDataSettingsView()
+                    } label: {
+                        SettingsRow(
+                            title: "Weather Data & Forecasting",
+                            subtitle: "Forecast source, station & sensors",
+                            symbol: "cloud.sun.fill",
+                            color: .orange
+                        )
+                    }
+                    NavigationLink {
                         SyncSettingsView()
                     } label: {
                         SettingsRow(

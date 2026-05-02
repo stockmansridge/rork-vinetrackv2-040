@@ -195,6 +195,18 @@ struct IrrigationRecommendationView: View {
                     Text(forecast.source)
                         .foregroundStyle(.secondary)
                 }
+                if let vid = store.selectedVineyardId {
+                    let status = WeatherProviderResolver.resolve(
+                        for: vid,
+                        weatherStationId: store.settings.weatherStationId
+                    )
+                    LabeledContent("Provider") {
+                        Text(status.compactLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
                 LabeledContent("Days") {
                     Text("\(forecast.days.count)")
                         .foregroundStyle(.secondary)

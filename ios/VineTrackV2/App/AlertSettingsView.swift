@@ -149,6 +149,7 @@ struct AlertSettingsView: View {
                 .disabled(!canEdit || !binding.wrappedValue.diseaseAlertsEnabled)
             Toggle("Botrytis", isOn: binding.diseaseBotrytisEnabled)
                 .disabled(!canEdit || !binding.wrappedValue.diseaseAlertsEnabled)
+            weatherSourceLink
         } header: {
             Text("Disease risk")
         } footer: {
@@ -169,6 +170,36 @@ struct AlertSettingsView: View {
                 Text("Only the vineyard owner or manager can change alert preferences.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var weatherSourceLink: some View {
+        let label: String = {
+            guard let vid = store.selectedVineyardId else { return "Automatic Forecast" }
+            return WeatherProviderResolver.resolve(
+                for: vid,
+                weatherStationId: store.settings.weatherStationId
+            ).primaryLabel
+        }()
+        NavigationLink {
+            WeatherDataSettingsView()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "cloud.sun.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Weather source")
+                        .font(.subheadline)
+                    Text(label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Manage")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tint)
             }
         }
     }
