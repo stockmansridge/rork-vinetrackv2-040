@@ -72,7 +72,7 @@ struct WeatherDataSettingsView: View {
             case .apiSecret:
                 return "The API Secret authorises access to your Davis WeatherLink data and should be kept private. VineTrack stores it securely on this device using the iOS Keychain — it is never shared with other vineyard members or uploaded in plain text.\n\nGenerate it alongside the API Key from Account Settings → Generate v2 Key on weatherlink.com."
             case .stationId:
-                return "Most users do not need to enter a Station ID manually. After you tap Test Connection, VineTrack will load your available stations and select one automatically.\n\nOnly enter a Station ID if station discovery fails — you can find it in your WeatherLink account under your station settings."
+                return "Station ID selection is not available yet. Once Davis WeatherLink live integration is enabled, VineTrack will load your available stations and select one automatically based on your saved credentials."
             }
         }
     }
@@ -311,10 +311,9 @@ struct WeatherDataSettingsView: View {
                 Text("Station ID")
                 infoButton(.stationId)
                 Spacer()
-                TextField("Auto-detected after Test Connection", text: $davisStationIdInput)
-                    .autocorrectionDisabled()
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 220)
+                Text("Available after Davis integration")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
 
             Button {
@@ -324,19 +323,28 @@ struct WeatherDataSettingsView: View {
             }
             .disabled(!canEdit || davisApiKey.isEmpty || davisApiSecret.isEmpty)
 
-            Button {
-                Task { await testDavisConnection() }
-            } label: {
-                HStack {
-                    Label("Test Connection", systemImage: "checkmark.seal")
-                    Spacer()
-                    if isTestingDavis { ProgressView() }
-                }
+            // Live Davis integration is not implemented yet; show a disabled
+            // "Coming soon" row so users don't expect a working test.
+            HStack {
+                Label("Test Connection", systemImage: "checkmark.seal")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("Coming soon")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.15), in: .capsule)
             }
-            .disabled(!canEdit || isTestingDavis || !config.davisHasCredentials)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Test Connection. Coming soon.")
 
             if let msg = davisTestMessage {
                 Text(msg)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if config.davisHasCredentials {
+                Text("Credentials saved. Davis station detection will be available in a future update.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -400,8 +408,8 @@ struct WeatherDataSettingsView: View {
                 helpStep(number: 2, text: "Go to Account Settings.")
                 helpStep(number: 3, text: "Look for ‘Generate v2 Key’.")
                 helpStep(number: 4, text: "WeatherLink will provide an API Key and API Secret.")
-                helpStep(number: 5, text: "Enter both here, then tap Test Connection.")
-                helpStep(number: 6, text: "VineTrack will load your available stations so you can select the correct one.")
+                helpStep(number: 5, text: "Enter both here and tap Save Credentials.")
+                helpStep(number: 6, text: "Live station detection and sensor discovery will be available in a future update.")
             }
             .padding(.vertical, 4)
 
@@ -552,7 +560,7 @@ struct WeatherDataSettingsView: View {
         persist()
         davisApiKey = ""
         davisApiSecret = ""
-        davisTestMessage = DavisStatus.liveIntegrationNotAvailable.headline
+        davisTestMessage = "Credentials saved. Davis station detection will be available in a future update."
     }
 
     private func clearDavisCredentials() {
