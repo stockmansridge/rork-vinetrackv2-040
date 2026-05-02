@@ -594,6 +594,12 @@ private struct NewHomeTabView: View {
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
+                    DiseaseRiskAdvisorView()
+                } label: {
+                    iconTile(title: "Disease Risk", icon: "leaf.arrow.triangle.circlepath", tint: .green)
+                }
+                .buttonStyle(.plain)
+                NavigationLink {
                     YieldHubView()
                 } label: {
                     iconTile(title: "Yield Determination", icon: "scalemass.fill", tint: .purple)
@@ -615,6 +621,7 @@ private struct NewHomeTabView: View {
         case "Growth Stage Report": return "E-L tracking"
         case "Yield Estimation": return "Forecast crop"
         case "Irrigation Advisor": return "Water planning"
+        case "Disease Risk": return "Downy/Powdery/Botrytis"
         case "Yield Determination": return "Final weights"
         case "Manage Users": return "Team & roles"
         case "Vineyard Setup": return "Blocks & rows"

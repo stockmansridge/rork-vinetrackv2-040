@@ -55,8 +55,19 @@ struct OperationsHubView: View {
                         count: nil
                     )
                 }
+                NavigationLink {
+                    DiseaseRiskAdvisorView()
+                } label: {
+                    operationRow(
+                        title: "Disease Risk Advisor",
+                        subtitle: "Downy, Powdery & Botrytis forecast",
+                        icon: "leaf.arrow.triangle.circlepath",
+                        tint: .green,
+                        count: nil
+                    )
+                }
             } header: {
-                SettingsSectionHeader(title: "Irrigation", symbol: "drop.fill", color: .cyan)
+                SettingsSectionHeader(title: "Advisors", symbol: "drop.fill", color: .cyan)
             }
 
             Section {

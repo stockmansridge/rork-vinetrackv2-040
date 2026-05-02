@@ -81,6 +81,8 @@ struct AlertsCentreView: View {
             switch dest {
             case .irrigation, .weather:
                 IrrigationRecommendationView()
+            case .disease:
+                DiseaseRiskAdvisorView()
             }
         }
     }
@@ -125,11 +127,12 @@ struct AlertsCentreView: View {
             // Tab switches handled by NewMainTabView; pop back to home root.
             alertService.pendingNavigation = action
             dismiss()
-        case .openIrrigationAdvisor, .openWeather, .openDiseaseRisk:
-            // Weather and disease alerts route to Irrigation Advisor (where
-            // the data turns into an action) until a dedicated weather/disease
-            // hub exists.
+        case .openIrrigationAdvisor, .openWeather:
+            // Weather alerts route to Irrigation Advisor (where the
+            // data turns into an action) until a dedicated weather hub exists.
             pushDestination = .irrigation
+        case .openDiseaseRisk:
+            pushDestination = .disease
         }
     }
 }
@@ -137,10 +140,12 @@ struct AlertsCentreView: View {
 private enum AlertPushDestination: Identifiable, Hashable {
     case irrigation
     case weather
+    case disease
     var id: String {
         switch self {
         case .irrigation: return "irrigation"
         case .weather: return "weather"
+        case .disease: return "disease"
         }
     }
 }
@@ -231,7 +236,7 @@ private struct AlertRow: View {
         case .openPins: return "View Pins"
         case .openSprayProgram: return "Open Spray Program"
         case .openSprayRecord: return "Open Spray Record"
-        case .openDiseaseRisk: return "Open Advisor"
+        case .openDiseaseRisk: return "Open Disease Risk"
         case .none: return nil
         }
     }
