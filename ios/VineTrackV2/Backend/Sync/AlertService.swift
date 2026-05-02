@@ -405,7 +405,7 @@ final class AlertService {
             }
             let dedupKey = "disease:\(assessment.model.rawValue):\(yyyymmdd(Date()))"
             let wetnessNote = assessment.usedMeasuredWetness
-                ? ""
+                ? " Based on measured leaf wetness."
                 : " Based on estimated wetness (no measured leaf wetness sensor)."
             let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
             upserts.append(BackendAlertUpsert(

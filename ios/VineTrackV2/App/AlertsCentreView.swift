@@ -172,6 +172,21 @@ private struct AlertRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
+                if let wetness = wetnessBadge {
+                    HStack(spacing: 4) {
+                        Image(systemName: "drop.degreesign")
+                            .font(.caption2)
+                        Text(wetness)
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(Color.secondary.opacity(0.12))
+                    )
+                    .help("Estimated wetness uses rain, humidity and dew point spread as a proxy.")
+                }
                 HStack(spacing: 8) {
                     if let label = actionLabel {
                         HStack(spacing: 4) {
@@ -195,6 +210,19 @@ private struct AlertRow: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
+    }
+
+    private var wetnessBadge: String? {
+        switch item.alert.typedAlertType {
+        case .diseaseDownyMildew, .diseasePowderyMildew, .diseaseBotrytis:
+            let msg = item.alert.message.lowercased()
+            if msg.contains("measured leaf wetness") && !msg.contains("no measured") {
+                return "Measured wetness"
+            }
+            return "Estimated wetness"
+        default:
+            return nil
+        }
     }
 
     private var actionLabel: String? {
