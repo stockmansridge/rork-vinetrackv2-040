@@ -171,7 +171,6 @@ private struct NewHomeTabView: View {
                     if shouldShowSetupWizard {
                         setupWizardCard
                     }
-                    HomeAlertsCard()
                     if tripTracking.activeTrip != nil {
                         Button {
                             selectedTab = 2
@@ -368,6 +367,7 @@ private struct NewHomeTabView: View {
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             plainSectionHeader("Today")
+            HomeAlertsCard()
             NavigationLink {
                 PinsView(initialViewMode: .list)
             } label: {
