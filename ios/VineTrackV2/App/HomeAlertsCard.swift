@@ -7,72 +7,90 @@ struct HomeAlertsCard: View {
         NavigationLink {
             AlertsCentreView()
         } label: {
-            VineyardCard {
-                HStack(spacing: 14) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(tint.opacity(0.15))
-                            .frame(width: 48, height: 48)
-                        Image(systemName: "bell.badge.fill")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(tint)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(headlineText)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        Text(subText)
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tint.opacity(0.15))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: iconName)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(tint)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primaryText)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let secondary = secondaryText {
+                        Text(secondary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
                     }
-                    .accessibilityElement(children: .combine)
-                    Spacer()
-                    if alertService.unreadAlerts.count > 0 {
-                        Text("\(alertService.unreadAlerts.count)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.red, in: Capsule())
-                    }
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
                 }
+                Spacer(minLength: 8)
+                if alertService.unreadAlerts.count > 1 {
+                    Text("\(alertService.unreadAlerts.count)")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(tint.opacity(0.15), in: Capsule())
+                }
+                Text("View")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: hasAlerts ? 64 : 48, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(tint.opacity(hasAlerts ? 0.25 : 0.12), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
     }
+
+    private var hasAlerts: Bool { alertService.activeAlerts.count > 0 }
 
     private var tint: Color {
         switch alertService.highestSeverity {
         case .critical: return .red
         case .warning: return .orange
         case .info: return .blue
-        case .none: return .gray
+        case .none: return .green
         }
     }
 
-    private var headlineText: String {
-        let active = alertService.activeAlerts.count
-        if active == 0 { return "Your vineyard is up to date" }
-        if active == 1 { return "1 vineyard alert needs attention" }
-        return "\(active) vineyard alerts need attention"
+    private var iconName: String {
+        hasAlerts ? "bell.badge.fill" : "checkmark.seal.fill"
     }
 
-    private var subText: String {
+    private var primaryText: String {
         let active = alertService.activeAlerts
-        if active.isEmpty {
-            return "We'll flag irrigation, pins, spray jobs and weather risks here."
+        if active.isEmpty { return "Vineyard up to date" }
+        if active.count == 1 {
+            return active.first?.alert.title ?? "1 alert needs attention"
         }
-        // Group by severity & dedupe weather risks for the same day.
+        return "\(active.count) alerts need attention"
+    }
+
+    private var secondaryText: String? {
+        let active = alertService.activeAlerts
+        if active.isEmpty { return nil }
         let summary = summaryByType(active)
-        if summary.count == 1, let only = summary.first {
-            return only
-        }
-        return summary.prefix(2).joined(separator: " • ")
+        if active.count == 1 { return nil }
+        if summary.isEmpty { return nil }
+        return summary.prefix(2).joined(separator: " · ")
     }
 
     private func summaryByType(_ items: [AlertWithStatus]) -> [String] {
@@ -85,11 +103,11 @@ struct HomeAlertsCard: View {
         return order.compactMap { type in
             guard let n = counts[type], n > 0 else { return nil }
             switch type {
-            case .weatherRisk: return "Weather risk"
-            case .irrigationNeeded: return "Irrigation needed"
-            case .agedPins: return n == 1 ? "1 aged pin" : "\(n) aged pins"
-            case .sprayJobDue: return n == 1 ? "1 spray job due" : "\(n) spray jobs due"
-            case .syncIssue: return "Sync issue"
+            case .weatherRisk: return "Weather"
+            case .irrigationNeeded: return "Irrigation"
+            case .agedPins: return "Aged pins"
+            case .sprayJobDue: return "Spray job"
+            case .syncIssue: return "Sync"
             }
         }
     }
