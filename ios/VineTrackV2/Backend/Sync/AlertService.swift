@@ -410,9 +410,17 @@ final class AlertService {
             case .botrytis: alertType = .diseaseBotrytis
             }
             let dedupKey = "disease:\(assessment.model.rawValue):\(yyyymmdd(Date()))"
-            let wetnessNote = assessment.usedMeasuredWetness
-                ? " Based on measured leaf wetness."
-                : " Based on estimated wetness (no measured leaf wetness sensor)."
+            // Powdery is driven by temperature + RH, not wetness, so don't
+            // append a wetness-source note for it.
+            let wetnessNote: String
+            switch assessment.model {
+            case .powderyMildew:
+                wetnessNote = ""
+            case .downyMildew, .botrytis:
+                wetnessNote = assessment.usedMeasuredWetness
+                    ? " Based on measured leaf wetness."
+                    : " Based on estimated wetness (no measured leaf wetness sensor)."
+            }
             let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
             upserts.append(BackendAlertUpsert(
                 id: alertId,

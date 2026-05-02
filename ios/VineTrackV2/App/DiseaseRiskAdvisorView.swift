@@ -11,6 +11,8 @@ struct DiseaseRiskAdvisorView: View {
     @State private var dailyScores: [DailyDiseaseScore] = []
     @State private var lastCalculated: Date?
     @State private var hasLoadedOnce: Bool = false
+    @State private var hours: [WeatherHour] = []
+    @State private var showInfo: Bool = false
 
     private var latitude: Double? {
         store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
@@ -40,6 +42,7 @@ struct DiseaseRiskAdvisorView: View {
                 } else if assessments.isEmpty && hasLoadedOnce {
                     emptyState
                 } else if !assessments.isEmpty {
+                    dataQualityCard
                     summaryCardsSection
                     chartSection
                     detailSection
@@ -55,13 +58,23 @@ struct DiseaseRiskAdvisorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                HStack(spacing: 8) {
+                    Button {
+                        showInfo = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    Button {
+                        Task { await refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(hourlyService.isLoading)
                 }
-                .disabled(hourlyService.isLoading)
             }
+        }
+        .sheet(isPresented: $showInfo) {
+            NavigationStack { aboutDiseaseRiskView }
         }
         .refreshable {
             await refresh()
@@ -324,6 +337,8 @@ struct DiseaseRiskAdvisorView: View {
                 .font(.caption)
                 .foregroundStyle(.primary.opacity(0.85))
                 .fixedSize(horizontal: false, vertical: true)
+            breakdownView(for: assessment.model, level: level)
+            nextStepView(for: level)
             if assessment.model != .powderyMildew, !assessment.usedMeasuredWetness {
                 Text("Based on estimated wetness (no measured leaf wetness sensor).")
                     .font(.caption2)
@@ -567,8 +582,221 @@ struct DiseaseRiskAdvisorView: View {
             dailyScores = []
             return
         }
+        hours = forecast.hours
         assessments = DiseaseRiskCalculator.assess(hours: forecast.hours)
         dailyScores = computeDailyScores(hours: forecast.hours)
         lastCalculated = Date()
+    }
+
+    // MARK: - Data quality / source
+
+    private var dataQualityCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: weatherStatus?.quality == .localStationWithMeasuredWetness
+                      ? "sensor.tag.radiowaves.forward.fill"
+                      : "cloud.sun.fill")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+                Text(weatherStatus?.primaryLabel ?? "Automatic Forecast")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                if let q = weatherStatus?.quality {
+                    Text(q.displayName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(q == .localStationWithMeasuredWetness ? .green : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(
+                                (q == .localStationWithMeasuredWetness ? Color.green : Color.secondary)
+                                    .opacity(0.15)
+                            )
+                        )
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "clock").font(.caption2)
+                Text("Last updated: \(lastCalculated?.formatted(.relative(presentation: .named)) ?? "—")")
+                    .font(.caption2)
+                Spacer()
+                Image(systemName: "leaf").font(.caption2)
+                Text("Growth stage adjustment: Not applied")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+    }
+
+    // MARK: - Why this risk / breakdown
+
+    private struct BreakdownItem: Identifiable {
+        let id = UUID()
+        let label: String
+        let value: String
+    }
+
+    private func breakdown(for model: DiseaseModel) -> [BreakdownItem] {
+        guard !hours.isEmpty else { return [] }
+        let now = Date()
+        switch model {
+        case .downyMildew:
+            let window = hours.filter { $0.date <= now && $0.date >= now.addingTimeInterval(-48 * 3600) }
+            let rain = window.map(\.precipitationMm).reduce(0, +)
+            let minTemp = window.map(\.temperatureC).min() ?? 0
+            let wet = window.filter { $0.isWetHour }.count
+            let measured = window.contains { $0.isWetnessMeasured }
+            return [
+                BreakdownItem(label: "Rain past 48h", value: String(format: "%.1f mm", rain)),
+                BreakdownItem(label: "Min temperature", value: String(format: "%.1f°C", minTemp)),
+                BreakdownItem(label: "Wet hours", value: "\(wet) h"),
+                BreakdownItem(label: "Wetness source", value: measured ? "Measured" : "Estimated")
+            ]
+        case .powderyMildew:
+            let window = hours.filter { $0.date <= now && $0.date >= now.addingTimeInterval(-72 * 3600) }
+            let cal = Calendar.current
+            let byDay = Dictionary(grouping: window) { cal.startOfDay(for: $0.date) }
+            var favourableDays = 0
+            for (_, dayHours) in byDay {
+                let sorted = dayHours.sorted { $0.date < $1.date }
+                var run = 0, maxRun = 0
+                for h in sorted {
+                    let humidOK = (h.humidityPercent ?? 0) >= 60
+                    let tempOK = h.temperatureC >= 21 && h.temperatureC <= 30
+                    if humidOK && tempOK { run += 1; maxRun = max(maxRun, run) } else { run = 0 }
+                }
+                if maxRun >= 6 { favourableDays += 1 }
+            }
+            return [
+                BreakdownItem(label: "Days with 6+ favourable hours", value: "\(favourableDays) of last 3"),
+                BreakdownItem(label: "Favourable temperature", value: "21–30°C"),
+                BreakdownItem(label: "RH threshold", value: "≥ 60%")
+            ]
+        case .botrytis:
+            let window = hours.filter { $0.date <= now && $0.date >= now.addingTimeInterval(-36 * 3600) }
+            let qualifying = window.filter { $0.isWetHour && $0.temperatureC >= 15 && $0.temperatureC <= 25 }
+            let measured = window.contains { $0.isWetnessMeasured }
+            return [
+                BreakdownItem(label: "Wet hours past 36h", value: "\(qualifying.count) h (15–25°C)"),
+                BreakdownItem(label: "Favourable temperature", value: "15–25°C"),
+                BreakdownItem(label: "Wetness source", value: measured ? "Measured" : "Estimated")
+            ]
+        }
+    }
+
+    private func breakdownView(for model: DiseaseModel, level: RiskLevel) -> some View {
+        let items = breakdown(for: model)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Why this risk?")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(items) { item in
+                HStack {
+                    Text(item.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(item.value)
+                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+            HStack {
+                Text("Resulting level")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(level.label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(level.color)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06), in: .rect(cornerRadius: 8))
+    }
+
+    // MARK: - Next steps
+
+    private func nextStepText(for level: RiskLevel) -> String {
+        switch level.label {
+        case "High":
+            return "Prioritise vineyard inspection and check whether protection is current. Conditions may favour disease development."
+        case "Medium":
+            return "Inspect susceptible blocks and review protection status."
+        default:
+            return "Continue monitoring."
+        }
+    }
+
+    private func nextStepIcon(for level: RiskLevel) -> String {
+        switch level.label {
+        case "High": return "exclamationmark.triangle.fill"
+        case "Medium": return "eye.fill"
+        default: return "checkmark.circle.fill"
+        }
+    }
+
+    private func nextStepView(for level: RiskLevel) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: nextStepIcon(for: level))
+                .font(.caption)
+                .foregroundStyle(level.color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("What to do next")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(nextStepText(for: level))
+                    .font(.caption)
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(level.color.opacity(0.08), in: .rect(cornerRadius: 8))
+    }
+
+    // MARK: - Info screen
+
+    private var aboutDiseaseRiskView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("This is a forecast risk tool, not a diagnosis. Always inspect the vineyard and follow local agronomic advice and product labels.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                infoBlock(title: "Downy mildew",
+                          body: "Risk uses rainfall, temperature and wetness over the past 48 hours.")
+                infoBlock(title: "Powdery mildew",
+                          body: "Risk uses favourable temperature (21–30°C) and humidity (≥ 60%) periods over the past 3 days. Leaf wetness is not used.")
+                infoBlock(title: "Botrytis",
+                          body: "Risk uses wet hours within the 15–25°C window over the past 36 hours.")
+                infoBlock(title: "Wetness source",
+                          body: "Wetness may be measured from a Davis WeatherLink leaf wetness sensor when available, or estimated from rainfall, humidity and dew-point spread.")
+                infoBlock(title: "Important",
+                          body: "This tool does not recommend chemicals or claim that infection has occurred. Always inspect the vineyard and follow local agronomic advice and product labels.")
+            }
+            .padding()
+        }
+        .navigationTitle("About disease risk")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { showInfo = false }
+            }
+        }
+    }
+
+    private func infoBlock(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(body).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
     }
 }
