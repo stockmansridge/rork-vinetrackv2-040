@@ -14,6 +14,9 @@ struct AlertsCentreView: View {
                 Section {
                     emptyState
                 }
+                if alertService.lastRefresh != nil {
+                    lastCheckedSection
+                }
             } else {
                 Section {
                     ForEach(alertService.activeAlerts) { item in
@@ -52,6 +55,7 @@ struct AlertsCentreView: View {
                         }
                     }
                 }
+                lastCheckedSection
             }
         }
         .navigationTitle("Alerts")
@@ -83,18 +87,35 @@ struct AlertsCentreView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Image(systemName: "bell.slash")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("No alerts")
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.green)
+            Text("Your vineyard is up to date")
                 .font(.headline)
-            Text("You're all caught up. Pull to refresh and regenerate alerts.")
+            Text("We'll flag irrigation needs, aged pins, spray jobs and weather risks here.")
                 .font(.caption)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 30)
+    }
+
+    @ViewBuilder
+    private var lastCheckedSection: some View {
+        if let last = alertService.lastRefresh {
+            Section {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.tertiary)
+                    Text("Last checked \(last.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+            }
+            .listRowBackground(Color.clear)
+        }
     }
 
     private func handleAction(_ alert: BackendAlert) {
@@ -104,10 +125,10 @@ struct AlertsCentreView: View {
             // Tab switches handled by NewMainTabView; pop back to home root.
             alertService.pendingNavigation = action
             dismiss()
-        case .openIrrigationAdvisor:
+        case .openIrrigationAdvisor, .openWeather:
+            // Weather alerts route to Irrigation Advisor (where the data
+            // turns into an action) until a dedicated weather hub exists.
             pushDestination = .irrigation
-        case .openWeather:
-            pushDestination = .weather
         }
     }
 }
@@ -130,7 +151,7 @@ private struct AlertRow: View {
         HStack(alignment: .top, spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(severityColor.opacity(0.15))
+                    .fill(severityColor.opacity(0.18))
                     .frame(width: 36, height: 36)
                 Image(systemName: severityIcon)
                     .foregroundStyle(severityColor)
@@ -150,15 +171,39 @@ private struct AlertRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
-                if let date = item.alert.createdAt {
-                    Text(date.formatted(.relative(presentation: .named)))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                HStack(spacing: 8) {
+                    if let label = actionLabel {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.caption2)
+                            Text(label)
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(severityColor)
+                    }
+                    if let date = item.alert.createdAt {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(date.formatted(.relative(presentation: .named)))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
+    }
+
+    private var actionLabel: String? {
+        switch item.alert.typedAction {
+        case .openIrrigationAdvisor, .openWeather: return "Open Irrigation Advisor"
+        case .openPins: return "View Pins"
+        case .openSprayProgram: return "Open Spray Program"
+        case .openSprayRecord: return "Open Spray Record"
+        case .none: return nil
+        }
     }
 
     private var severityColor: Color {

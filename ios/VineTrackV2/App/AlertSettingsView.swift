@@ -59,7 +59,7 @@ struct AlertSettingsView: View {
         } header: {
             Text("Pins")
         } footer: {
-            Text("Notify when unresolved pins are older than this threshold.")
+            Text("Aged pin alerts track unresolved repair and growth pins. Notified when pins remain unresolved longer than the threshold.")
         }
 
         Section {
@@ -83,7 +83,7 @@ struct AlertSettingsView: View {
         } header: {
             Text("Irrigation")
         } footer: {
-            Text("Trigger when calculated deficit over the forecast window exceeds this amount.")
+            Text("Irrigation alerts use forecast ET, forecast rain and your configured irrigation data to estimate deficit over the forecast window.")
         }
 
         Section {
@@ -127,6 +127,8 @@ struct AlertSettingsView: View {
             }
         } header: {
             Text("Weather")
+        } footer: {
+            Text("Weather alerts use forecast rain, wind, heat and frost thresholds. Tapping a weather alert opens the Irrigation Advisor.")
         }
 
         Section {
@@ -144,7 +146,7 @@ struct AlertSettingsView: View {
         } header: {
             Text("Push")
         } footer: {
-            Text("Push notifications coming soon. In-app alerts are active.")
+            Text("Push notifications are coming later. In-app alerts are active and update on app launch and pull to refresh.")
         }
 
         if !canEdit {
