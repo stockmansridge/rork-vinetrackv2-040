@@ -655,7 +655,7 @@ private struct NewHomeTabView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 124, maxHeight: 124, alignment: .topLeading)
         .padding(14)
         .background(VineyardTheme.cardBackground, in: .rect(cornerRadius: 14))
         .overlay(
