@@ -26,6 +26,7 @@ struct IrrigationRecommendationView: View {
     @State private var recentRainDays: Int = 7
     @State private var includeRecentActualRain: Bool = true
     @State private var isLoadingRecentRain: Bool = false
+    @State private var showWeatherSettings: Bool = false
 
     private let durationOptions: [Int] = [3, 5, 7, 14]
 
@@ -210,8 +211,27 @@ struct IrrigationRecommendationView: View {
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
+
+                Button {
+                    showWeatherSettings = true
+                } label: {
+                    Label("Manage Weather Data", systemImage: "antenna.radiowaves.left.and.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
             }
             .padding(.vertical, 4)
+        }
+        .sheet(isPresented: $showWeatherSettings) {
+            NavigationStack {
+                WeatherDataSettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showWeatherSettings = false }
+                        }
+                    }
+            }
         }
     }
 
