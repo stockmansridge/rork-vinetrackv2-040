@@ -75,4 +75,22 @@ nonisolated enum DavisRainfallCache {
         UserDefaults.standard.removeObject(forKey: k)
         UserDefaults.standard.removeObject(forKey: k + lastFetchedSuffix)
     }
+
+    /// Removes all cached Davis rainfall entries for the given station
+    /// across every year.
+    static func clearAll(stationId: String) {
+        let stationPrefix = "\(prefix).\(stationId)."
+        let defaults = UserDefaults.standard
+        for k in defaults.dictionaryRepresentation().keys where k.hasPrefix(stationPrefix) {
+            defaults.removeObject(forKey: k)
+        }
+    }
+
+    /// Removes every cached Davis rainfall entry on this device.
+    static func clearAll() {
+        let defaults = UserDefaults.standard
+        for k in defaults.dictionaryRepresentation().keys where k.hasPrefix(prefix) {
+            defaults.removeObject(forKey: k)
+        }
+    }
 }

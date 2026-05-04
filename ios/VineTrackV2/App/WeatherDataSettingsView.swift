@@ -16,6 +16,8 @@ struct WeatherDataSettingsView: View {
     @State private var isEditingDavisCredentials: Bool = false
     @State private var davisStations: [DavisStation] = []
     @State private var showDavisStationPicker: Bool = false
+    @State private var showClearDavisCacheConfirm: Bool = false
+    @State private var davisCacheClearedMessage: String?
 
     private var canEdit: Bool { accessControl.canChangeSettings }
 
@@ -126,6 +128,18 @@ struct WeatherDataSettingsView: View {
                 showDavisStationPicker = false
                 Task { await selectDavisStation(station) }
             }
+        }
+        .confirmationDialog(
+            "Clear cached Davis rainfall data?",
+            isPresented: $showClearDavisCacheConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Cache", role: .destructive) {
+                clearDavisRainfallCache()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove saved rainfall totals from this device. The Rainfall Calendar will refetch local station data next time it loads.")
         }
         .sheet(item: $davisInfoTopic) { topic in
             NavigationStack {
@@ -537,6 +551,18 @@ struct WeatherDataSettingsView: View {
             }
 
             if config.davisHasCredentials {
+                Button {
+                    showClearDavisCacheConfirm = true
+                } label: {
+                    Label("Clear Davis rainfall cache", systemImage: "arrow.clockwise.icloud")
+                }
+                .disabled(!canEdit)
+                if let msg = davisCacheClearedMessage, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundStyle(.green)
+                }
+
                 Button(role: .destructive) {
                     clearDavisCredentials()
                 } label: {
@@ -808,6 +834,20 @@ struct WeatherDataSettingsView: View {
         davisApiSecret = ""
         showSecret = false
         isEditingDavisCredentials = false
+    }
+
+    private func clearDavisRainfallCache() {
+        guard canEdit else { return }
+        if let sid = config.davisStationId, !sid.isEmpty {
+            DavisRainfallCache.clearAll(stationId: sid)
+        } else {
+            DavisRainfallCache.clearAll()
+        }
+        davisCacheClearedMessage = "Davis rainfall cache cleared."
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            davisCacheClearedMessage = nil
+        }
     }
 
     private func clearDavisCredentials() {
