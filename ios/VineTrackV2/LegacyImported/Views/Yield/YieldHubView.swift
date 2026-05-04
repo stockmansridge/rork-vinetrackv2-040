@@ -55,7 +55,7 @@ struct YieldHubView: View {
                             icon: "exclamationmark.triangle.fill",
                             iconGradient: [.red, .orange],
                             title: "Record Damage",
-                            subtitle: "Frost, hail, wind & crop loss",
+                            subtitle: "Adjust yield estimates for seasonal damage.",
                             detail: damageDetail
                         )
                     }
