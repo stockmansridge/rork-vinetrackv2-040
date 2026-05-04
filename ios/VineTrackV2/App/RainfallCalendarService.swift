@@ -7,16 +7,29 @@ import Foundation
 @Observable
 final class RainfallCalendarService {
     var isLoading: Bool = false
+    var isRefreshingRecent: Bool = false
     var errorMessage: String?
     var year: Int = Calendar.current.component(.year, from: Date())
     /// Daily rainfall keyed by start-of-day date.
     var dailyRainMm: [Date: Double] = [:]
+    /// Per-day source (start-of-day → provenance).
+    var sources: [Date: RainfallSource] = [:]
     var providerLabel: String = "Source: Automatic Forecast / Historical Weather"
     var fallbackNote: String = "Daily history via Open-Meteo Archive"
+    var coverageSummary: String?
     var lastUpdated: Date?
     var fallbackUsed: Bool = false
+    var rateLimited: Bool = false
     var stationName: String?
     var isMeasured: Bool = false
+    var davisDaysCovered: Int = 0
+    var wuDaysCovered: Int = 0
+    var archiveDaysCovered: Int = 0
+
+    private var lastVineyardId: UUID?
+    private var lastLatitude: Double?
+    private var lastLongitude: Double?
+    private var lastWeatherStationId: String?
 
     func load(year: Int,
               vineyardId: UUID?,
@@ -28,6 +41,10 @@ final class RainfallCalendarService {
         defer { isLoading = false }
 
         self.year = year
+        self.lastVineyardId = vineyardId
+        self.lastLatitude = latitude
+        self.lastLongitude = longitude
+        self.lastWeatherStationId = weatherStationId
 
         let cal = Calendar.current
         var comps = DateComponents()
@@ -46,6 +63,7 @@ final class RainfallCalendarService {
 
         if end < jan1 {
             self.dailyRainMm = [:]
+            self.sources = [:]
             self.lastUpdated = Date()
             return
         }
@@ -59,16 +77,80 @@ final class RainfallCalendarService {
             weatherStationId: weatherStationId
         )
 
+        apply(result)
+    }
+
+    /// Refresh only the most recent `days` days from Davis (or the active local
+    /// provider). Existing cached/archive values for older dates are kept.
+    func refreshRecent(days: Int = 30) async {
+        guard let lat = lastLatitude, let lon = lastLongitude else { return }
+        isRefreshingRecent = true
+        defer { isRefreshingRecent = false }
+
+        let cal = Calendar.current
+        let to = cal.startOfDay(for: Date())
+        let from = cal.date(byAdding: .day, value: -max(1, days), to: to) ?? to
+
+        let recent = await RainfallHistoryService.fetchDailyRainfall(
+            vineyardId: lastVineyardId,
+            latitude: lat,
+            longitude: lon,
+            from: from,
+            to: Date(),
+            weatherStationId: lastWeatherStationId,
+            davisRecentOnlyDays: days
+        )
+
+        // Merge recent results into the existing yearly dataset so older
+        // dates remain unchanged.
+        var merged = dailyRainMm
+        var mergedSources = sources
+        for (k, v) in recent.dailyMm {
+            merged[k] = v
+        }
+        for (k, v) in recent.sources {
+            mergedSources[k] = v
+        }
+        dailyRainMm = merged
+        sources = mergedSources
+        providerLabel = recent.providerLabel
+        stationName = recent.stationName
+        isMeasured = recent.isMeasured || isMeasured
+        fallbackUsed = recent.fallbackUsed || fallbackUsed
+        rateLimited = recent.rateLimited
+        fallbackNote = recent.fallbackReason ?? fallbackNote
+        davisDaysCovered = mergedSources.values.filter { $0 == .davis }.count
+        wuDaysCovered = mergedSources.values.filter { $0 == .wunderground }.count
+        archiveDaysCovered = mergedSources.values.filter { $0 == .archive }.count
+        coverageSummary = coverageSummaryString(davis: davisDaysCovered, wu: wuDaysCovered, archive: archiveDaysCovered)
+        lastUpdated = Date()
+    }
+
+    private func apply(_ result: RainfallHistoryResult) {
         self.dailyRainMm = result.dailyMm
+        self.sources = result.sources
         self.providerLabel = result.providerLabel
         self.stationName = result.stationName
         self.isMeasured = result.isMeasured
         self.fallbackUsed = result.fallbackUsed
+        self.rateLimited = result.rateLimited
+        self.davisDaysCovered = result.davisDaysCovered
+        self.wuDaysCovered = result.wuDaysCovered
+        self.archiveDaysCovered = result.archiveDaysCovered
+        self.coverageSummary = result.coverageSummary
         self.fallbackNote = result.fallbackReason
             ?? (result.isMeasured
                 ? "Daily totals from station archive"
                 : "Daily history via Open-Meteo Archive")
         self.lastUpdated = Date()
+    }
+
+    private func coverageSummaryString(davis: Int, wu: Int, archive: Int) -> String? {
+        var parts: [String] = []
+        if davis > 0 { parts.append("Davis: \(davis) day\(davis == 1 ? "" : "s")") }
+        if wu > 0 { parts.append("WU: \(wu) day\(wu == 1 ? "" : "s")") }
+        if archive > 0 { parts.append("Archive: \(archive) day\(archive == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 

@@ -37,6 +37,7 @@ struct RainfallCalendarView: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
+                legend
                 Text("mm")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -112,31 +113,77 @@ struct RainfallCalendarView: View {
 
     private var sourceCard: some View {
         VStack(alignment: .leading, spacing: 6) {
-            calendarSourceRow(
-                label: "Recent actual",
-                value: actualRainValue,
-                icon: service.isMeasured ? "sensor.tag.radiowaves.forward.fill" : "cloud.sun.fill",
-                tint: service.isMeasured ? VineyardTheme.leafGreen : .secondary
-            )
-            calendarSourceRow(
-                label: "Older / fallback",
-                value: "Open-Meteo Archive",
-                icon: "tray.full.fill",
-                tint: .secondary
-            )
-            if service.fallbackUsed {
+            if service.davisDaysCovered > 0 {
+                calendarSourceRow(
+                    label: "Recent actual",
+                    value: "Davis WeatherLink — \(service.stationName ?? "station")",
+                    icon: "sensor.tag.radiowaves.forward.fill",
+                    tint: VineyardTheme.leafGreen
+                )
+            } else if service.wuDaysCovered > 0 {
+                calendarSourceRow(
+                    label: "Recent actual",
+                    value: "Weather Underground — \(service.stationName ?? "station")",
+                    icon: "sensor.tag.radiowaves.forward.fill",
+                    tint: VineyardTheme.leafGreen
+                )
+            } else {
+                calendarSourceRow(
+                    label: "Recent actual",
+                    value: actualRainValue,
+                    icon: "cloud.sun.fill",
+                    tint: .secondary
+                )
+            }
+            if service.archiveDaysCovered > 0 {
+                calendarSourceRow(
+                    label: "Older / fallback",
+                    value: "Open-Meteo Archive",
+                    icon: "tray.full.fill",
+                    tint: .secondary
+                )
+            }
+            if let coverage = service.coverageSummary {
+                Text(coverage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if service.rateLimited {
+                Label(service.fallbackNote, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            } else if service.fallbackUsed {
                 Text(service.fallbackNote)
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
-            if let updated = service.lastUpdated {
-                Text("Updated \(updated.formatted(.relative(presentation: .named)))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else if service.isLoading {
-                Text("Loading rainfall…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                if let updated = service.lastUpdated {
+                    Text("Updated \(updated.formatted(.relative(presentation: .named)))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if service.isLoading {
+                    Text("Loading rainfall…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    Task { await service.refreshRecent(days: 30) }
+                } label: {
+                    HStack(spacing: 4) {
+                        if service.isRefreshingRecent {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise.circle")
+                        }
+                        Text("Refresh recent")
+                    }
+                    .font(.caption2.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(service.isLoading || service.isRefreshingRecent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -169,6 +216,32 @@ struct RainfallCalendarView: View {
                 .multilineTextAlignment(.leading)
             Spacer(minLength: 0)
         }
+    }
+
+    private var legend: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(VineyardTheme.leafGreen.opacity(0.8))
+                    .frame(width: 10, height: 10)
+                Text("Local station")
+            }
+            HStack(spacing: 4) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(width: 10, height: 10)
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 10, height: 1)
+                        .offset(y: 4)
+                }
+                Text("Archive fallback")
+            }
+            Spacer()
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
     }
 
     private var locationMissing: some View {
@@ -234,6 +307,10 @@ struct RainfallCalendarView: View {
     private func cell(month: Int, day: Int) -> some View {
         let info = cellInfo(month: month, day: day)
         ZStack {
+            // Subtle marker for fallback (archive) cells: a dotted lower edge.
+            if info.source == .archive {
+                Color.gray.opacity(0.06)
+            }
             if let mm = info.mm {
                 if mm > 0 {
                     Color.blue.opacity(min(0.55, mm / 30.0))
@@ -247,23 +324,31 @@ struct RainfallCalendarView: View {
                     .font(.system(size: 10, weight: .regular, design: .rounded))
                     .foregroundStyle(.tertiary)
             }
+            if info.source == .archive {
+                VStack {
+                    Spacer()
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.35))
+                        .frame(height: 1)
+                }
+            }
         }
     }
 
-    private func cellInfo(month: Int, day: Int) -> (valid: Bool, mm: Double?) {
+    private func cellInfo(month: Int, day: Int) -> (valid: Bool, mm: Double?, source: RainfallSource?) {
         let cal = Calendar.current
         var comps = DateComponents()
         comps.year = year; comps.month = month; comps.day = day
-        guard let date = cal.date(from: comps) else { return (false, nil) }
+        guard let date = cal.date(from: comps) else { return (false, nil, nil) }
         // Check the constructed day actually matches (catches Feb 30 etc.)
         let real = cal.dateComponents([.year, .month, .day], from: date)
         if real.year != year || real.month != month || real.day != day {
-            return (false, nil)
+            return (false, nil, nil)
         }
         let today = cal.startOfDay(for: Date())
-        if date > today { return (true, nil) }
+        if date > today { return (true, nil, nil) }
         let key = cal.startOfDay(for: date)
-        return (true, service.dailyRainMm[key])
+        return (true, service.dailyRainMm[key], service.sources[key])
     }
 
     private func formatMm(_ mm: Double) -> String {

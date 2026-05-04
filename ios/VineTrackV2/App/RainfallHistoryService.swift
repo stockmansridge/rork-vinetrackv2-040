@@ -1,5 +1,13 @@
 import Foundation
 
+/// Provenance for a single daily rainfall value.
+nonisolated enum RainfallSource: String, Sendable, Hashable, Codable {
+    case davis
+    case wunderground
+    case archive
+    case missing
+}
+
 /// A single daily rainfall observation with provenance.
 nonisolated struct RainfallObservation: Sendable, Hashable, Identifiable {
     let date: Date
@@ -7,6 +15,7 @@ nonisolated struct RainfallObservation: Sendable, Hashable, Identifiable {
     let isMeasured: Bool
     let provider: WeatherProvider
     let stationName: String?
+    let source: RainfallSource
 
     var id: Date { date }
 }
@@ -15,6 +24,9 @@ nonisolated struct RainfallObservation: Sendable, Hashable, Identifiable {
 /// any fallback warning text the UI should surface.
 nonisolated struct RainfallHistoryResult: Sendable, Hashable {
     let dailyMm: [Date: Double]
+    /// Per-day provenance (start-of-day → source). Days that returned no
+    /// data are marked `.missing` and excluded from `dailyMm`.
+    let sources: [Date: RainfallSource]
     /// The provider the user *configured*. May differ from where data came
     /// from when fallback occurred.
     let configuredProvider: WeatherProvider
@@ -22,16 +34,25 @@ nonisolated struct RainfallHistoryResult: Sendable, Hashable {
     let effectiveProvider: WeatherProvider
     let providerLabel: String
     let stationName: String?
-    /// `true` when the values are measured station observations.
+    /// `true` when at least some of the values are measured station observations.
     let isMeasured: Bool
     let fallbackUsed: Bool
     let fallbackReason: String?
     let coveredFrom: Date
     let coveredTo: Date
     let recordCount: Int
+    let davisDaysCovered: Int
+    let wuDaysCovered: Int
+    let archiveDaysCovered: Int
+    /// Short coverage breakdown for the UI, e.g. "Davis: 87 days · Archive: 245 days".
+    let coverageSummary: String?
+    /// `true` when WeatherLink returned HTTP 429 during this fetch. The UI
+    /// should surface a friendly message and back off.
+    let rateLimited: Bool
 
     static let empty = RainfallHistoryResult(
         dailyMm: [:],
+        sources: [:],
         configuredProvider: .automatic,
         effectiveProvider: .automatic,
         providerLabel: "Source: Automatic Forecast / Historical Weather",
@@ -41,7 +62,12 @@ nonisolated struct RainfallHistoryResult: Sendable, Hashable {
         fallbackReason: nil,
         coveredFrom: Date(),
         coveredTo: Date(),
-        recordCount: 0
+        recordCount: 0,
+        davisDaysCovered: 0,
+        wuDaysCovered: 0,
+        archiveDaysCovered: 0,
+        coverageSummary: nil,
+        rateLimited: false
     )
 }
 
@@ -51,9 +77,7 @@ nonisolated struct RainfallHistoryResult: Sendable, Hashable {
 /// Provider priority (for actual / historical rainfall):
 /// A. Davis WeatherLink — selected, credentials saved, connection tested,
 ///    station selected.
-/// B. Weather Underground (selected) — currently relies on Open-Meteo Archive
-///    for historical daily totals (WU history requires its own per-station
-///    history endpoint).
+/// B. Weather Underground (selected) — uses WU per-day history endpoint.
 /// C. Automatic — Open-Meteo Archive.
 @MainActor
 enum RainfallHistoryService {
@@ -75,7 +99,8 @@ enum RainfallHistoryService {
         longitude: Double,
         from: Date,
         to: Date,
-        weatherStationId: String?
+        weatherStationId: String?,
+        davisRecentOnlyDays: Int? = nil
     ) async -> RainfallHistoryResult {
         let cal = Calendar.current
         let safeFrom = cal.startOfDay(for: from)
@@ -84,6 +109,7 @@ enum RainfallHistoryService {
         guard safeFrom <= safeTo else {
             return RainfallHistoryResult(
                 dailyMm: [:],
+                sources: [:],
                 configuredProvider: .automatic,
                 effectiveProvider: .automatic,
                 providerLabel: "Source: Automatic Forecast / Historical Weather",
@@ -93,7 +119,12 @@ enum RainfallHistoryService {
                 fallbackReason: nil,
                 coveredFrom: safeFrom,
                 coveredTo: safeTo,
-                recordCount: 0
+                recordCount: 0,
+                davisDaysCovered: 0,
+                wuDaysCovered: 0,
+                archiveDaysCovered: 0,
+                coverageSummary: nil,
+                rateLimited: false
             )
         }
 
@@ -102,87 +133,43 @@ enum RainfallHistoryService {
         }
         let configuredProvider: WeatherProvider = status?.provider ?? .automatic
 
+        // Whether the requested window ends in the current calendar year.
+        let currentYear = cal.component(.year, from: Date())
+        let endYear = cal.component(.year, from: safeTo)
+        let isPastYearOnly = endYear < currentYear
+
         // MARK: Davis path
         if let vid = vineyardId,
            let s = status,
            s.provider == .davis,
-           s.quality != .forecastOnly {
+           s.quality != .forecastOnly,
+           !isPastYearOnly {
             let cfg = WeatherProviderStore.shared.config(for: vid)
             let stationLabel = (cfg.davisStationName?.isEmpty == false ? cfg.davisStationName! : (cfg.davisStationId ?? ""))
             if let stationId = cfg.davisStationId, !stationId.isEmpty,
                let apiKey = WeatherKeychain.get(.apiKey),
                let apiSecret = WeatherKeychain.get(.apiSecret) {
 
-                // Limit Davis fetch window to last `davisMaxDaysWindow` days.
-                let earliestDavis = cal.date(byAdding: .day, value: -davisMaxDaysWindow, to: safeTo) ?? safeFrom
+                // Limit Davis fetch window to last `davisMaxDaysWindow` days,
+                // or to the explicit `davisRecentOnlyDays` window when the
+                // caller is doing a "refresh recent" pass.
+                let windowDays = max(1, min(davisRecentOnlyDays ?? davisMaxDaysWindow, davisMaxDaysWindow))
+                let earliestDavis = cal.date(byAdding: .day, value: -windowDays, to: safeTo) ?? safeFrom
                 let davisStart = max(safeFrom, earliestDavis)
 
-                do {
-                    let davis = try await DavisWeatherLinkService.fetchDailyRainfall(
-                        apiKey: apiKey,
-                        apiSecret: apiSecret,
-                        stationId: stationId,
-                        from: davisStart,
-                        to: safeTo
-                    )
-
-                    var merged = davis.dailyMm
-                    var fallbackUsed = false
-                    var fallbackReason: String?
-
-                    // Fill earlier portion from Open-Meteo Archive when range
-                    // exceeds the Davis window.
-                    if davisStart > safeFrom {
-                        let priorEnd = cal.date(byAdding: .day, value: -1, to: davisStart) ?? safeFrom
-                        if let archive = try? await OpenMeteoRainfallArchive.fetchDaily(
-                            latitude: latitude,
-                            longitude: longitude,
-                            from: safeFrom,
-                            to: priorEnd
-                        ) {
-                            for (k, v) in archive where merged[k] == nil {
-                                merged[k] = v
-                            }
-                        }
-                        fallbackUsed = true
-                        fallbackReason = "Recent rainfall from Davis. Older dates filled from automatic archive."
-                    }
-
-                    let label = "Source: Davis WeatherLink — \(stationLabel)"
-                    return RainfallHistoryResult(
-                        dailyMm: merged,
-                        configuredProvider: .davis,
-                        effectiveProvider: .davis,
-                        providerLabel: label,
-                        stationName: cfg.davisStationName,
-                        isMeasured: true,
-                        fallbackUsed: fallbackUsed,
-                        fallbackReason: fallbackReason,
-                        coveredFrom: safeFrom,
-                        coveredTo: safeTo,
-                        recordCount: davis.recordCount
-                    )
-                } catch {
-                    let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
-                        latitude: latitude,
-                        longitude: longitude,
-                        from: safeFrom,
-                        to: safeTo
-                    )) ?? [:]
-                    return RainfallHistoryResult(
-                        dailyMm: archive,
-                        configuredProvider: .davis,
-                        effectiveProvider: .automatic,
-                        providerLabel: "Source: Davis WeatherLink — \(stationLabel)",
-                        stationName: cfg.davisStationName,
-                        isMeasured: false,
-                        fallbackUsed: true,
-                        fallbackReason: "Davis data unavailable for this period — using fallback. (\(error.localizedDescription))",
-                        coveredFrom: safeFrom,
-                        coveredTo: safeTo,
-                        recordCount: archive.count
-                    )
-                }
+                return await runDavisPath(
+                    vineyardId: vid,
+                    apiKey: apiKey,
+                    apiSecret: apiSecret,
+                    stationId: stationId,
+                    stationLabel: stationLabel,
+                    stationName: cfg.davisStationName,
+                    safeFrom: safeFrom,
+                    safeTo: safeTo,
+                    davisStart: davisStart,
+                    latitude: latitude,
+                    longitude: longitude
+                )
             }
         }
 
@@ -190,7 +177,8 @@ enum RainfallHistoryService {
         if let s = status,
            s.provider == .wunderground,
            let stationId = weatherStationId,
-           !stationId.isEmpty {
+           !stationId.isEmpty,
+           !isPastYearOnly {
             let apiKey = AppConfig.wundergroundAPIKey
             if !apiKey.isEmpty {
                 let earliestWU = cal.date(byAdding: .day, value: -wuMaxDaysWindow, to: safeTo) ?? safeFrom
@@ -204,8 +192,11 @@ enum RainfallHistoryService {
                     )
 
                     var merged = wu.dailyMm
+                    var sources: [Date: RainfallSource] = [:]
+                    for (k, _) in wu.dailyMm { sources[k] = .wunderground }
                     var fallbackUsed = false
                     var fallbackReason: String?
+                    var archiveCount = 0
 
                     if wuStart > safeFrom {
                         let priorEnd = cal.date(byAdding: .day, value: -1, to: wuStart) ?? safeFrom
@@ -217,24 +208,42 @@ enum RainfallHistoryService {
                         ) {
                             for (k, v) in archive where merged[k] == nil {
                                 merged[k] = v
+                                sources[k] = .archive
+                                archiveCount += 1
                             }
                         }
                         fallbackUsed = true
-                        fallbackReason = "Recent rainfall from WU. Older dates filled from automatic archive."
+                        fallbackReason = "Recent rainfall from Weather Underground. Older dates filled from automatic archive."
+                    }
+
+                    let wuCount = wu.dailyMm.count
+                    let label: String
+                    if wuCount == 0 {
+                        label = "Source: Open-Meteo Archive (WU returned no data)"
+                    } else if archiveCount > 0 {
+                        label = "Source: Mixed — Weather Underground (\(stationId)) + Open-Meteo Archive"
+                    } else {
+                        label = "Source: Weather Underground — \(stationId)"
                     }
 
                     return RainfallHistoryResult(
                         dailyMm: merged,
+                        sources: sources,
                         configuredProvider: .wunderground,
-                        effectiveProvider: .wunderground,
-                        providerLabel: "Source: Weather Underground — \(stationId)",
+                        effectiveProvider: wuCount > 0 ? .wunderground : .automatic,
+                        providerLabel: label,
                         stationName: stationId,
-                        isMeasured: true,
+                        isMeasured: wuCount > 0,
                         fallbackUsed: fallbackUsed,
                         fallbackReason: fallbackReason,
                         coveredFrom: safeFrom,
                         coveredTo: safeTo,
-                        recordCount: wu.recordCount
+                        recordCount: wu.recordCount + archiveCount,
+                        davisDaysCovered: 0,
+                        wuDaysCovered: wuCount,
+                        archiveDaysCovered: archiveCount,
+                        coverageSummary: coverageSummary(davis: 0, wu: wuCount, archive: archiveCount),
+                        rateLimited: false
                     )
                 } catch {
                     let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
@@ -243,46 +252,55 @@ enum RainfallHistoryService {
                         from: safeFrom,
                         to: safeTo
                     )) ?? [:]
+                    var sources: [Date: RainfallSource] = [:]
+                    for (k, _) in archive { sources[k] = .archive }
                     return RainfallHistoryResult(
                         dailyMm: archive,
+                        sources: sources,
                         configuredProvider: .wunderground,
                         effectiveProvider: .automatic,
-                        providerLabel: "Source: Weather Underground — \(stationId)",
+                        providerLabel: "Source: Open-Meteo Archive (WU unavailable)",
                         stationName: stationId,
                         isMeasured: false,
                         fallbackUsed: true,
                         fallbackReason: "Weather Underground data unavailable — using fallback. (\(error.localizedDescription))",
                         coveredFrom: safeFrom,
                         coveredTo: safeTo,
-                        recordCount: archive.count
+                        recordCount: archive.count,
+                        davisDaysCovered: 0,
+                        wuDaysCovered: 0,
+                        archiveDaysCovered: archive.count,
+                        coverageSummary: coverageSummary(davis: 0, wu: 0, archive: archive.count),
+                        rateLimited: false
                     )
                 }
             }
         }
 
-        // MARK: Fallback path (WU / Automatic / Davis-not-configured)
+        // MARK: Fallback path (Automatic / unconfigured / past years)
         let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
             latitude: latitude,
             longitude: longitude,
             from: safeFrom,
             to: safeTo
         )) ?? [:]
+        var sources: [Date: RainfallSource] = [:]
+        for (k, _) in archive { sources[k] = .archive }
 
         let label: String
         var fallbackUsed = false
         var fallbackReason: String?
         switch configuredProvider {
         case .davis:
-            // Differentiate Davis setup states so the UI can give the user
-            // an actionable hint instead of a generic "not connected".
             let cfg = vineyardId.map { WeatherProviderStore.shared.config(for: $0) }
-            label = "Source: Automatic archive"
+            label = "Source: Open-Meteo Archive"
             fallbackUsed = true
-            if let cfg {
+            if isPastYearOnly {
+                fallbackReason = "Historical archive rainfall. Davis station history is used for recent periods only."
+            } else if let cfg {
                 if cfg.davisHasCredentials,
                    cfg.davisConnectionTested,
                    (cfg.davisStationId ?? "").isEmpty {
-                    // Credentials tested OK but no station picked yet.
                     fallbackReason = "Davis connected, but no station is selected. Select a Davis station to use local rainfall."
                 } else if cfg.davisHasCredentials, !cfg.davisConnectionTested {
                     fallbackReason = "Davis credentials saved — run Test Connection to use local rainfall."
@@ -293,19 +311,22 @@ enum RainfallHistoryService {
                 fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
             }
         case .wunderground:
-            // Reached when WU is selected but no station was supplied or
-            // the device has no WU API key configured.
-            label = "Source: Automatic archive"
+            label = "Source: Open-Meteo Archive"
             fallbackUsed = true
-            fallbackReason = "Weather Underground selected but no station is set. Choose a WU station to use local rainfall."
+            if isPastYearOnly {
+                fallbackReason = "Historical archive rainfall. Weather Underground is used for recent periods only."
+            } else {
+                fallbackReason = "Weather Underground selected but no station is set. Choose a WU station to use local rainfall."
+            }
         case .automatic:
-            label = "Source: Automatic archive rainfall"
+            label = "Source: Open-Meteo Archive"
             fallbackUsed = true
             fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
         }
 
         return RainfallHistoryResult(
             dailyMm: archive,
+            sources: sources,
             configuredProvider: configuredProvider,
             effectiveProvider: .automatic,
             providerLabel: label,
@@ -315,7 +336,167 @@ enum RainfallHistoryService {
             fallbackReason: fallbackReason,
             coveredFrom: safeFrom,
             coveredTo: safeTo,
-            recordCount: archive.count
+            recordCount: archive.count,
+            davisDaysCovered: 0,
+            wuDaysCovered: 0,
+            archiveDaysCovered: archive.count,
+            coverageSummary: coverageSummary(davis: 0, wu: 0, archive: archive.count),
+            rateLimited: false
+        )
+    }
+
+    // MARK: - Davis path with cache + delta fetch
+
+    private static func runDavisPath(
+        vineyardId: UUID,
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        stationLabel: String,
+        stationName: String?,
+        safeFrom: Date,
+        safeTo: Date,
+        davisStart: Date,
+        latitude: Double,
+        longitude: Double
+    ) async -> RainfallHistoryResult {
+        let cal = Calendar.current
+
+        // Pull cached values for any years that intersect the Davis window.
+        let years = yearsSpanning(from: davisStart, to: safeTo)
+        var davisData: [Date: Double] = [:]
+        for y in years {
+            for (k, v) in DavisRainfallCache.load(stationId: stationId, year: y) {
+                let comps = cal.dateComponents([.year], from: k)
+                if comps.year == y, k >= davisStart, k <= cal.startOfDay(for: safeTo) {
+                    davisData[k] = v
+                }
+            }
+        }
+
+        // Determine which days inside the Davis window still need fetching.
+        let allDays = enumerateDays(from: davisStart, to: safeTo)
+        let today = cal.startOfDay(for: Date())
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today) ?? today
+        let mustRefresh: Set<Date> = [today, yesterday]
+
+        let toFetch = allDays.filter { d in
+            mustRefresh.contains(d) || davisData[d] == nil
+        }
+
+        var rateLimited = false
+        var davisError: Error?
+
+        if !toFetch.isEmpty {
+            let ranges = contiguousRanges(of: toFetch)
+            for range in ranges {
+                let chunkFrom = range.start
+                let chunkTo = cal.date(byAdding: .day, value: 1, to: range.end) ?? range.end.addingTimeInterval(86400)
+                do {
+                    let result = try await DavisWeatherLinkService.fetchDailyRainfall(
+                        apiKey: apiKey,
+                        apiSecret: apiSecret,
+                        stationId: stationId,
+                        from: chunkFrom,
+                        to: chunkTo
+                    )
+                    // For days inside the requested chunk that returned no
+                    // record, treat them as 0 mm so we don't keep hammering
+                    // the API on every reload (Davis simply omits empty days).
+                    let chunkDays = enumerateDays(from: range.start, to: range.end)
+                    for d in chunkDays {
+                        davisData[d] = result.dailyMm[d] ?? 0
+                    }
+                } catch let e as DavisWeatherLinkError {
+                    if case .http(let code) = e, code == 429 {
+                        rateLimited = true
+                    }
+                    davisError = e
+                    break
+                } catch {
+                    davisError = error
+                    break
+                }
+            }
+
+            // Persist whatever we have per year (even partial progress).
+            for y in years {
+                let yearOnly = davisData.filter { cal.component(.year, from: $0.key) == y }
+                if !yearOnly.isEmpty {
+                    DavisRainfallCache.save(stationId: stationId, year: y, daily: yearOnly)
+                }
+            }
+        }
+
+        // Merge into the result map (Davis values).
+        var merged: [Date: Double] = [:]
+        var sources: [Date: RainfallSource] = [:]
+        var davisCount = 0
+        for (k, v) in davisData {
+            merged[k] = v
+            sources[k] = .davis
+            davisCount += 1
+        }
+
+        // Fill anything outside the Davis window or any missing days from
+        // Open-Meteo Archive.
+        var archiveCount = 0
+        if davisStart > safeFrom || davisError != nil || mustRefresh.contains(where: { merged[$0] == nil }) {
+            let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
+                latitude: latitude,
+                longitude: longitude,
+                from: safeFrom,
+                to: safeTo
+            )) ?? [:]
+            for (k, v) in archive where merged[k] == nil {
+                merged[k] = v
+                sources[k] = .archive
+                archiveCount += 1
+            }
+        }
+
+        // Build labels and fallback messages.
+        let usedFallback = archiveCount > 0 || davisError != nil
+        let label: String
+        if davisCount == 0 {
+            label = "Source: Open-Meteo Archive (Davis unavailable)"
+        } else if archiveCount > 0 {
+            label = "Source: Mixed — Davis WeatherLink (\(stationLabel)) + Open-Meteo Archive"
+        } else {
+            label = "Source: Davis WeatherLink — \(stationLabel)"
+        }
+
+        var fallbackReason: String?
+        if rateLimited {
+            fallbackReason = "WeatherLink rate limit reached. Showing archive rainfall for now — try again in a few minutes."
+        } else if let davisError, davisCount == 0 {
+            fallbackReason = "Davis data unavailable for this period — using fallback. (\(davisError.localizedDescription))"
+        } else if davisError != nil {
+            fallbackReason = "Some Davis data unavailable — older dates filled from automatic archive."
+        } else if archiveCount > 0 && davisCount > 0 {
+            fallbackReason = "Recent rainfall from Davis. Older dates filled from automatic archive."
+        } else if archiveCount > 0 {
+            fallbackReason = "Using automatic archive rainfall."
+        }
+
+        return RainfallHistoryResult(
+            dailyMm: merged,
+            sources: sources,
+            configuredProvider: .davis,
+            effectiveProvider: davisCount > 0 ? .davis : .automatic,
+            providerLabel: label,
+            stationName: stationName,
+            isMeasured: davisCount > 0,
+            fallbackUsed: usedFallback,
+            fallbackReason: fallbackReason,
+            coveredFrom: safeFrom,
+            coveredTo: safeTo,
+            recordCount: davisCount + archiveCount,
+            davisDaysCovered: davisCount,
+            wuDaysCovered: 0,
+            archiveDaysCovered: archiveCount,
+            coverageSummary: coverageSummary(davis: davisCount, wu: 0, archive: archiveCount),
+            rateLimited: rateLimited
         )
     }
 
@@ -340,6 +521,58 @@ enum RainfallHistoryService {
             to: to,
             weatherStationId: weatherStationId
         )
+    }
+
+    // MARK: - Helpers
+
+    private static func coverageSummary(davis: Int, wu: Int, archive: Int) -> String? {
+        var parts: [String] = []
+        if davis > 0 { parts.append("Davis: \(davis) day\(davis == 1 ? "" : "s")") }
+        if wu > 0 { parts.append("WU: \(wu) day\(wu == 1 ? "" : "s")") }
+        if archive > 0 { parts.append("Archive: \(archive) day\(archive == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func yearsSpanning(from: Date, to: Date) -> [Int] {
+        let cal = Calendar.current
+        let start = cal.component(.year, from: from)
+        let end = cal.component(.year, from: to)
+        guard start <= end else { return [start] }
+        return Array(start...end)
+    }
+
+    private static func enumerateDays(from: Date, to: Date) -> [Date] {
+        let cal = Calendar.current
+        var out: [Date] = []
+        var cur = cal.startOfDay(for: from)
+        let last = cal.startOfDay(for: to)
+        while cur <= last {
+            out.append(cur)
+            guard let next = cal.date(byAdding: .day, value: 1, to: cur) else { break }
+            cur = next
+        }
+        return out
+    }
+
+    private static func contiguousRanges(of days: [Date]) -> [(start: Date, end: Date)] {
+        let cal = Calendar.current
+        let sorted = days.sorted()
+        guard !sorted.isEmpty else { return [] }
+        var ranges: [(Date, Date)] = []
+        var rangeStart = sorted[0]
+        var prev = sorted[0]
+        for d in sorted.dropFirst() {
+            if let next = cal.date(byAdding: .day, value: 1, to: prev),
+               cal.isDate(d, inSameDayAs: next) {
+                prev = d
+            } else {
+                ranges.append((rangeStart, prev))
+                rangeStart = d
+                prev = d
+            }
+        }
+        ranges.append((rangeStart, prev))
+        return ranges
     }
 }
 
