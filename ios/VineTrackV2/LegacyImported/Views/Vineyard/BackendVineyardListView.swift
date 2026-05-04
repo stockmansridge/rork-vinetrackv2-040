@@ -212,7 +212,7 @@ struct BackendVineyardListView: View {
         VStack(spacing: 0) {
             VineyardEmptyStateView(
                 icon: "leaf.fill",
-                title: "Welcome to VineTrackV2",
+                title: "Welcome to VineTrack",
                 message: "Create your first vineyard to get started.",
                 actionTitle: "Create Vineyard",
                 action: { showAddVineyard = true }

@@ -231,7 +231,7 @@ struct PinsPDFService {
             checkPageBreak(needed: 30)
             let footerDate = Date().formattedTZ(date: .abbreviated, time: .shortened, in: timeZone)
             let tzAbbrev = timeZone.abbreviation() ?? timeZone.identifier
-            drawText("Generated \(footerDate) (\(tzAbbrev)) • VineTrackV2", font: captionFont, color: .gray)
+            drawText("Generated \(footerDate) (\(tzAbbrev)) • VineTrack", font: captionFont, color: .gray)
         }
 
         return data

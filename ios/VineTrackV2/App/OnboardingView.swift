@@ -17,26 +17,26 @@ struct OnboardingView: View {
         Page(
             icon: "leaf.fill",
             iconColor: VineyardTheme.leafGreen,
-            title: "Welcome to VineTrackV2",
-            message: "A practical companion for managing your vineyard — pins, trips, sprays, work tasks, and growth observations in one place."
+            title: "Welcome to VineTrack",
+            message: "Built by vignerons for vignerons — manage vineyard observations, spray records, irrigation, disease risk and team activity in one place."
         ),
         Page(
             icon: "mappin.and.ellipse",
             iconColor: .blue,
-            title: "Track What Matters",
-            message: "Drop pins for repairs and observations, log spray records and trips, and capture work and growth stage data on the go."
+            title: "Track work in the vineyard",
+            message: "Drop pins for repairs and observations, record trips, capture growth stages and keep your team aligned row by row."
+        ),
+        Page(
+            icon: "cloud.sun.rain.fill",
+            iconColor: .orange,
+            title: "Smarter vineyard decisions",
+            message: "Use weather data, irrigation recommendations and disease-risk alerts for Downy, Powdery and Botrytis to help prioritise vineyard work."
         ),
         Page(
             icon: "person.2.fill",
             iconColor: .purple,
-            title: "Local-First, Team Synced",
-            message: "Your data is stored on this device and synced securely with your vineyard team through Supabase."
-        ),
-        Page(
-            icon: "building.2.fill",
-            iconColor: VineyardTheme.earthBrown,
-            title: "Choose or Create a Vineyard",
-            message: "Vineyard membership controls who can see and edit data. You can create a new vineyard or accept a team invitation next."
+            title: "Sync with your vineyard team",
+            message: "Choose or create a vineyard, invite team members, manage roles and keep records synced securely across devices."
         )
     ]
 

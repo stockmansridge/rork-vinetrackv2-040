@@ -5,7 +5,7 @@ struct SprayProgramCSVService {
 
     static let maxChemicals = 6
 
-    static let descriptionRow = "VineTrackV2 Spray Program Import Template — Row 1 is this description (ignored on import). Row 2 contains column headers. Enter one spray record per row starting from Row 3. Dates must be DD/MM/YYYY. Chemical units: Litres, mL, Kg, or g. Growth Stage uses E-L codes (e.g. EL12). Operation Type: Foliar Spray, Banded Spray, or Spreader. Delete the example row before importing. Up to 6 chemicals per record."
+    static let descriptionRow = "VineTrack Spray Program Import Template — Row 1 is this description (ignored on import). Row 2 contains column headers. Enter one spray record per row starting from Row 3. Dates must be DD/MM/YYYY. Chemical units: Litres, mL, Kg, or g. Growth Stage uses E-L codes (e.g. EL12). Operation Type: Foliar Spray, Banded Spray, or Spreader. Delete the example row before importing. Up to 6 chemicals per record."
 
     static let templateHeaders: [String] = {
         var headers = [

@@ -309,9 +309,9 @@ struct AccountDeletionRequestView: View {
     }
 
     private func openMail() {
-        let subject = "VineTrackV2 account deletion request"
+        let subject = "VineTrack account deletion request"
         let body = """
-Please delete my VineTrackV2 account.
+Please delete my VineTrack account.
 
 Name: \(auth.userName ?? "—")
 Email: \(auth.userEmail ?? "—")
