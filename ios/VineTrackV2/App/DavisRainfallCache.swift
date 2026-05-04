@@ -11,8 +11,24 @@ nonisolated enum DavisRainfallCache {
     private static let prefix = "DavisRainfallCache.v1"
     private static let lastFetchedSuffix = ".lastFetched"
 
+    /// Cache key — when a `vineyardId` is supplied, the entry is scoped
+    /// to the vineyard so a personal/local Davis setup and a vineyard-
+    /// shared Davis setup never collide. Legacy entries (no vineyard)
+    /// remain readable for backwards compatibility.
+    private static func key(
+        vineyardId: UUID?,
+        provider: String,
+        stationId: String,
+        year: Int
+    ) -> String {
+        if let vid = vineyardId {
+            return "\(prefix).\(provider).\(vid.uuidString).\(stationId).\(year)"
+        }
+        return "\(prefix).\(stationId).\(year)"
+    }
+
     private static func key(stationId: String, year: Int) -> String {
-        "\(prefix).\(stationId).\(year)"
+        key(vineyardId: nil, provider: "davis", stationId: stationId, year: year)
     }
 
     private static func dateFormatter() -> DateFormatter {
@@ -27,8 +43,21 @@ nonisolated enum DavisRainfallCache {
     /// Returns cached daily rainfall (start-of-day → mm) for the given
     /// station/year. Empty when nothing is cached.
     static func load(stationId: String, year: Int) -> [Date: Double] {
-        let k = key(stationId: stationId, year: year)
-        let raw = UserDefaults.standard.dictionary(forKey: k) ?? [:]
+        load(vineyardId: nil, stationId: stationId, year: year)
+    }
+
+    /// Vineyard-aware load. Returns the merged daily totals from the
+    /// vineyard-scoped entry, falling back to the legacy device-scoped
+    /// entry if no vineyard entry exists yet.
+    static func load(vineyardId: UUID?, stationId: String, year: Int) -> [Date: Double] {
+        let k = key(vineyardId: vineyardId, provider: "davis", stationId: stationId, year: year)
+        var raw = UserDefaults.standard.dictionary(forKey: k) ?? [:]
+        if raw.isEmpty, vineyardId != nil {
+            // Read-through to the legacy non-vineyard entry so cached
+            // data isn't lost after the upgrade.
+            let legacy = key(stationId: stationId, year: year)
+            raw = UserDefaults.standard.dictionary(forKey: legacy) ?? [:]
+        }
         let cal = Calendar.current
         let fmt = dateFormatter()
         var out: [Date: Double] = [:]
@@ -46,12 +75,22 @@ nonisolated enum DavisRainfallCache {
 
     /// Replaces the cache entry entirely.
     static func save(stationId: String, year: Int, daily: [Date: Double]) {
+        save(vineyardId: nil, stationId: stationId, year: year, daily: daily)
+    }
+
+    /// Vineyard-aware save.
+    static func save(
+        vineyardId: UUID?,
+        stationId: String,
+        year: Int,
+        daily: [Date: Double]
+    ) {
         let fmt = dateFormatter()
         var dict: [String: Double] = [:]
         for (date, v) in daily {
             dict[fmt.string(from: date)] = v
         }
-        let k = key(stationId: stationId, year: year)
+        let k = key(vineyardId: vineyardId, provider: "davis", stationId: stationId, year: year)
         UserDefaults.standard.set(dict, forKey: k)
         UserDefaults.standard.set(Date(), forKey: k + lastFetchedSuffix)
     }
@@ -77,11 +116,22 @@ nonisolated enum DavisRainfallCache {
     }
 
     /// Removes all cached Davis rainfall entries for the given station
-    /// across every year.
+    /// across every year, in both vineyard-scoped and legacy entries.
     static func clearAll(stationId: String) {
-        let stationPrefix = "\(prefix).\(stationId)."
         let defaults = UserDefaults.standard
-        for k in defaults.dictionaryRepresentation().keys where k.hasPrefix(stationPrefix) {
+        let suffix = ".\(stationId)."
+        for k in defaults.dictionaryRepresentation().keys
+        where k.hasPrefix(prefix) && k.contains(suffix) {
+            defaults.removeObject(forKey: k)
+        }
+    }
+
+    /// Removes vineyard-scoped Davis rainfall entries for a specific
+    /// vineyard / station combination.
+    static func clearAll(vineyardId: UUID, stationId: String) {
+        let defaults = UserDefaults.standard
+        let scope = "\(prefix).davis.\(vineyardId.uuidString).\(stationId)."
+        for k in defaults.dictionaryRepresentation().keys where k.hasPrefix(scope) {
             defaults.removeObject(forKey: k)
         }
     }

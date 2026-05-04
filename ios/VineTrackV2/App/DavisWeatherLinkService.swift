@@ -130,7 +130,7 @@ nonisolated enum DavisWeatherLinkService {
               let array = json["stations"] as? [[String: Any]] else {
             throw DavisWeatherLinkError.decoding("Missing 'stations' array")
         }
-        let stations = array.compactMap(parseStation)
+        let stations = array.compactMap(parseStationDict)
         if stations.isEmpty { throw DavisWeatherLinkError.noStations }
         return stations
     }
@@ -154,14 +154,23 @@ nonisolated enum DavisWeatherLinkService {
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw DavisWeatherLinkError.decoding("Invalid JSON")
         }
+        return parseCurrentConditionsJSON(json, fallbackStationId: stationId)
+    }
 
+    /// Parses a WeatherLink v2 `/current/{station-id}` response (already
+    /// decoded as a JSON object). Used by both the direct Davis client and
+    /// the vineyard-shared proxy path.
+    static func parseCurrentConditionsJSON(
+        _ json: [String: Any],
+        fallbackStationId: String
+    ) -> DavisCurrentConditions {
         let resolvedStationId: String = {
             if let n = json["station_id"] as? Int { return String(n) }
             if let s = json["station_id"] as? String { return s }
-            return stationId
+            return fallbackStationId
         }()
         let generatedAt: Date = {
-            if let n = parseDouble(json["generated_at"] ?? 0) { return Date(timeIntervalSince1970: n) }
+            if let n = parseAnyDouble(json["generated_at"] ?? 0) { return Date(timeIntervalSince1970: n) }
             return Date()
         }()
 
@@ -180,7 +189,7 @@ nonisolated enum DavisWeatherLinkService {
 
             for (rawKey, value) in latest {
                 let key = rawKey.lowercased()
-                guard let v = parseDouble(value) else { continue }
+                guard let v = parseAnyDouble(value) else { continue }
 
                 // Outdoor air temperature/humidity (skip indoor, soil, leaf-temp).
                 if temperatureF == nil,
@@ -318,7 +327,7 @@ nonisolated enum DavisWeatherLinkService {
         return false
     }
 
-    private static func parseStation(_ dict: [String: Any]) -> DavisStation? {
+    static func parseStationDict(_ dict: [String: Any]) -> DavisStation? {
         let stationId: String
         if let n = dict["station_id"] as? Int {
             stationId = String(n)
@@ -339,8 +348,8 @@ nonisolated enum DavisWeatherLinkService {
             stationId: stationId,
             stationIdUuid: dict["station_id_uuid"] as? String,
             name: name,
-            latitude: parseDouble(dict["latitude"] ?? 0),
-            longitude: parseDouble(dict["longitude"] ?? 0),
+            latitude: parseAnyDouble(dict["latitude"] ?? 0),
+            longitude: parseAnyDouble(dict["longitude"] ?? 0),
             timezone: dict["time_zone"] as? String,
             active: active
         )
@@ -525,13 +534,13 @@ nonisolated enum DavisWeatherLinkService {
         for sensor in sensorsArr {
             guard let dataArr = sensor["data"] as? [[String: Any]] else { continue }
             for entry in dataArr {
-                guard let ts = parseDouble(entry["ts"] ?? 0), ts > 0 else { continue }
+                guard let ts = parseAnyDouble(entry["ts"] ?? 0), ts > 0 else { continue }
                 var mm: Double?
                 // Prefer metric per-interval field, then imperial.
-                if let v = parseDouble(entry["rainfall_mm"] ?? 0),
+                if let v = parseAnyDouble(entry["rainfall_mm"] ?? 0),
                    !isCumulativeFieldPresent(entry: entry, preferredKey: "rainfall_mm") {
                     mm = v
-                } else if let v = parseDouble(entry["rainfall_in"] ?? 0),
+                } else if let v = parseAnyDouble(entry["rainfall_in"] ?? 0),
                           !isCumulativeFieldPresent(entry: entry, preferredKey: "rainfall_in") {
                     mm = v * 25.4
                 }
@@ -550,7 +559,7 @@ nonisolated enum DavisWeatherLinkService {
         return key.contains("year") || key.contains("month") || key.contains("daily") || key.contains("storm")
     }
 
-    private static func parseDouble(_ value: Any) -> Double? {
+    static func parseAnyDouble(_ value: Any) -> Double? {
         if let d = value as? Double { return d }
         if let i = value as? Int { return Double(i) }
         if let n = value as? NSNumber { return n.doubleValue }

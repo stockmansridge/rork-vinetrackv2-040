@@ -161,45 +161,66 @@ class WeatherHourlyService {
     /// and overrides `measuredLeafWetness` on hours within the last 2 hours.
     func applyDavisMeasuredWetness(for vineyardId: UUID) async {
         guard let forecast = self.forecast, !forecast.hours.isEmpty else { return }
+        await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: vineyardId)
         let cfg = WeatherProviderStore.shared.config(for: vineyardId)
         guard cfg.provider == .davis,
-              cfg.davisHasCredentials,
-              cfg.davisConnectionTested,
               cfg.davisHasLeafWetnessSensor,
-              let stationId = cfg.davisStationId, !stationId.isEmpty,
-              let apiKey = WeatherKeychain.get(.apiKey),
-              let apiSecret = WeatherKeychain.get(.apiSecret) else {
+              let stationId = cfg.davisStationId, !stationId.isEmpty else {
             return
         }
+
+        // Prefer the vineyard-shared proxy when the integration is
+        // configured for the vineyard (works for owner, manager AND
+        // operators). Fall back to local Keychain credentials only if
+        // the proxy isn't usable yet.
+        let useProxy = cfg.davisIsVineyardShared
+            && cfg.davisVineyardHasServerCredentials
+
+        let current: DavisCurrentConditions
         do {
-            let current = try await DavisWeatherLinkService.fetchCurrentConditions(
-                apiKey: apiKey,
-                apiSecret: apiSecret,
-                stationId: stationId
-            )
-            guard let measured = current.measuredLeafWetness else { return }
-            let now = Date()
-            let earliest = now.addingTimeInterval(-2 * 3600)
-            let latest = now.addingTimeInterval(60 * 60)
-            let updated: [WeatherHour] = forecast.hours.map { h in
-                guard h.date >= earliest, h.date <= latest else { return h }
-                return WeatherHour(
-                    date: h.date,
-                    temperatureC: h.temperatureC,
-                    dewPointC: h.dewPointC,
-                    humidityPercent: h.humidityPercent,
-                    precipitationMm: h.precipitationMm,
-                    measuredLeafWetness: measured
+            if useProxy {
+                current = try await VineyardDavisProxyService.fetchCurrentConditions(
+                    vineyardId: vineyardId,
+                    stationId: stationId
+                )
+            } else {
+                guard cfg.davisHasCredentials,
+                      cfg.davisConnectionTested,
+                      let apiKey = WeatherKeychain.get(.apiKey),
+                      let apiSecret = WeatherKeychain.get(.apiSecret) else {
+                    return
+                }
+                current = try await DavisWeatherLinkService.fetchCurrentConditions(
+                    apiKey: apiKey,
+                    apiSecret: apiSecret,
+                    stationId: stationId
                 )
             }
-            self.forecast = HourlyForecast(
-                hours: updated,
-                source: forecast.source + " + Davis WeatherLink",
-                hasMeasuredLeafWetness: true
-            )
         } catch {
             // Non-blocking: estimated wetness proxy continues to apply.
+            return
         }
+
+        guard let measured = current.measuredLeafWetness else { return }
+        let now = Date()
+        let earliest = now.addingTimeInterval(-2 * 3600)
+        let latest = now.addingTimeInterval(60 * 60)
+        let updated: [WeatherHour] = forecast.hours.map { h in
+            guard h.date >= earliest, h.date <= latest else { return h }
+            return WeatherHour(
+                date: h.date,
+                temperatureC: h.temperatureC,
+                dewPointC: h.dewPointC,
+                humidityPercent: h.humidityPercent,
+                precipitationMm: h.precipitationMm,
+                measuredLeafWetness: measured
+            )
+        }
+        self.forecast = HourlyForecast(
+            hours: updated,
+            source: forecast.source + " + Davis WeatherLink",
+            hasMeasuredLeafWetness: true
+        )
     }
 
     private static func parseDouble(_ value: Any) -> Double? {

@@ -1,5 +1,12 @@
 import Foundation
 
+/// Wraps a Davis fetch error plus a flag for whether it was a rate-limit
+/// response, so the shared Davis path can show a friendly 429 message.
+nonisolated struct DavisFetchFailure: Error, Sendable {
+    let error: any Error
+    let rateLimited: Bool
+}
+
 /// Provenance for a single daily rainfall value.
 nonisolated enum RainfallSource: String, Sendable, Hashable, Codable {
     case davis
@@ -128,6 +135,15 @@ enum RainfallHistoryService {
             )
         }
 
+        // Make sure the vineyard's Davis integration metadata (if any)
+        // has been pulled into the local config before resolving the
+        // active provider. This is what allows operator users — who
+        // never opened Weather Data settings — to see and use the
+        // shared Davis source automatically.
+        if let vid = vineyardId {
+            await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: vid)
+        }
+
         let status: WeatherSourceStatus? = vineyardId.map {
             WeatherProviderResolver.resolve(for: $0, weatherStationId: weatherStationId)
         }
@@ -146,9 +162,7 @@ enum RainfallHistoryService {
            !isPastYearOnly {
             let cfg = WeatherProviderStore.shared.config(for: vid)
             let stationLabel = (cfg.davisStationName?.isEmpty == false ? cfg.davisStationName! : (cfg.davisStationId ?? ""))
-            if let stationId = cfg.davisStationId, !stationId.isEmpty,
-               let apiKey = WeatherKeychain.get(.apiKey),
-               let apiSecret = WeatherKeychain.get(.apiSecret) {
+            if let stationId = cfg.davisStationId, !stationId.isEmpty {
 
                 // Limit Davis fetch window to last `davisMaxDaysWindow` days,
                 // or to the explicit `davisRecentOnlyDays` window when the
@@ -157,19 +171,43 @@ enum RainfallHistoryService {
                 let earliestDavis = cal.date(byAdding: .day, value: -windowDays, to: safeTo) ?? safeFrom
                 let davisStart = max(safeFrom, earliestDavis)
 
-                return await runDavisPath(
-                    vineyardId: vid,
-                    apiKey: apiKey,
-                    apiSecret: apiSecret,
-                    stationId: stationId,
-                    stationLabel: stationLabel,
-                    stationName: cfg.davisStationName,
-                    safeFrom: safeFrom,
-                    safeTo: safeTo,
-                    davisStart: davisStart,
-                    latitude: latitude,
-                    longitude: longitude
-                )
+                // Prefer the vineyard-shared proxy whenever the
+                // integration is configured for the vineyard. Operators
+                // never hold local Keychain credentials, but they can
+                // still load Davis rainfall via the proxy.
+                let useProxy = cfg.davisIsVineyardShared
+                    && cfg.davisVineyardHasServerCredentials
+
+                if useProxy {
+                    return await runDavisProxyPath(
+                        vineyardId: vid,
+                        stationId: stationId,
+                        stationLabel: stationLabel,
+                        stationName: cfg.davisStationName,
+                        safeFrom: safeFrom,
+                        safeTo: safeTo,
+                        davisStart: davisStart,
+                        latitude: latitude,
+                        longitude: longitude
+                    )
+                }
+
+                if let apiKey = WeatherKeychain.get(.apiKey),
+                   let apiSecret = WeatherKeychain.get(.apiSecret) {
+                    return await runDavisPath(
+                        vineyardId: vid,
+                        apiKey: apiKey,
+                        apiSecret: apiSecret,
+                        stationId: stationId,
+                        stationLabel: stationLabel,
+                        stationName: cfg.davisStationName,
+                        safeFrom: safeFrom,
+                        safeTo: safeTo,
+                        davisStart: davisStart,
+                        latitude: latitude,
+                        longitude: longitude
+                    )
+                }
             }
         }
 
@@ -347,6 +385,51 @@ enum RainfallHistoryService {
 
     // MARK: - Davis path with cache + delta fetch
 
+    /// Vineyard-shared proxy variant: fetches Davis rainfall via the
+    /// `davis-proxy` Edge Function (no local Keychain credentials
+    /// required), so every member of the vineyard sees the same data.
+    private static func runDavisProxyPath(
+        vineyardId: UUID,
+        stationId: String,
+        stationLabel: String,
+        stationName: String?,
+        safeFrom: Date,
+        safeTo: Date,
+        davisStart: Date,
+        latitude: Double,
+        longitude: Double
+    ) async -> RainfallHistoryResult {
+        await runDavisCommon(
+            vineyardId: vineyardId,
+            stationId: stationId,
+            stationLabel: stationLabel,
+            stationName: stationName,
+            safeFrom: safeFrom,
+            safeTo: safeTo,
+            davisStart: davisStart,
+            latitude: latitude,
+            longitude: longitude,
+            fetchChunk: { from, to in
+                do {
+                    let r = try await VineyardDavisProxyService.fetchHistoricRainfall(
+                        vineyardId: vineyardId,
+                        stationId: stationId,
+                        from: from,
+                        to: to
+                    )
+                    return .success(r)
+                } catch let e as VineyardDavisProxyError {
+                    if case .rateLimited = e {
+                        return .failure(DavisFetchFailure(error: e, rateLimited: true))
+                    }
+                    return .failure(DavisFetchFailure(error: e, rateLimited: false))
+                } catch {
+                    return .failure(DavisFetchFailure(error: error, rateLimited: false))
+                }
+            }
+        )
+    }
+
     private static func runDavisPath(
         vineyardId: UUID,
         apiKey: String,
@@ -360,13 +443,62 @@ enum RainfallHistoryService {
         latitude: Double,
         longitude: Double
     ) async -> RainfallHistoryResult {
+        await runDavisCommon(
+            vineyardId: vineyardId,
+            stationId: stationId,
+            stationLabel: stationLabel,
+            stationName: stationName,
+            safeFrom: safeFrom,
+            safeTo: safeTo,
+            davisStart: davisStart,
+            latitude: latitude,
+            longitude: longitude,
+            fetchChunk: { from, to in
+                do {
+                    let r = try await DavisWeatherLinkService.fetchDailyRainfall(
+                        apiKey: apiKey,
+                        apiSecret: apiSecret,
+                        stationId: stationId,
+                        from: from,
+                        to: to
+                    )
+                    return .success(r)
+                } catch let e as DavisWeatherLinkError {
+                    if case .http(let code) = e, code == 429 {
+                        return .failure(DavisFetchFailure(error: e, rateLimited: true))
+                    }
+                    return .failure(DavisFetchFailure(error: e, rateLimited: false))
+                } catch {
+                    return .failure(DavisFetchFailure(error: error, rateLimited: false))
+                }
+            }
+        )
+    }
+
+    /// Shared Davis path used by both the direct (Keychain) client and
+    /// the vineyard-shared proxy client. The only thing that varies is
+    /// how a 24h+ chunk is fetched.
+    private static func runDavisCommon(
+        vineyardId: UUID,
+        stationId: String,
+        stationLabel: String,
+        stationName: String?,
+        safeFrom: Date,
+        safeTo: Date,
+        davisStart: Date,
+        latitude: Double,
+        longitude: Double,
+        fetchChunk: (_ from: Date, _ to: Date) async -> Result<DavisDailyRainfall, DavisFetchFailure>
+    ) async -> RainfallHistoryResult {
         let cal = Calendar.current
 
         // Pull cached values for any years that intersect the Davis window.
         let years = yearsSpanning(from: davisStart, to: safeTo)
         var davisData: [Date: Double] = [:]
         for y in years {
-            for (k, v) in DavisRainfallCache.load(stationId: stationId, year: y) {
+            for (k, v) in DavisRainfallCache.load(
+                vineyardId: vineyardId, stationId: stationId, year: y
+            ) {
                 let comps = cal.dateComponents([.year], from: k)
                 if comps.year == y, k >= davisStart, k <= cal.startOfDay(for: safeTo) {
                     davisData[k] = v
@@ -392,14 +524,9 @@ enum RainfallHistoryService {
             for range in ranges {
                 let chunkFrom = range.start
                 let chunkTo = cal.date(byAdding: .day, value: 1, to: range.end) ?? range.end.addingTimeInterval(86400)
-                do {
-                    let result = try await DavisWeatherLinkService.fetchDailyRainfall(
-                        apiKey: apiKey,
-                        apiSecret: apiSecret,
-                        stationId: stationId,
-                        from: chunkFrom,
-                        to: chunkTo
-                    )
+                let outcome = await fetchChunk(chunkFrom, chunkTo)
+                switch outcome {
+                case .success(let result):
                     // For days inside the requested chunk that returned no
                     // record, treat them as 0 mm so we don't keep hammering
                     // the API on every reload (Davis simply omits empty days).
@@ -407,23 +534,23 @@ enum RainfallHistoryService {
                     for d in chunkDays {
                         davisData[d] = result.dailyMm[d] ?? 0
                     }
-                } catch let e as DavisWeatherLinkError {
-                    if case .http(let code) = e, code == 429 {
-                        rateLimited = true
-                    }
-                    davisError = e
-                    break
-                } catch {
-                    davisError = error
-                    break
+                case .failure(let info):
+                    if info.rateLimited { rateLimited = true }
+                    davisError = info.error
                 }
+                if davisError != nil { break }
             }
 
             // Persist whatever we have per year (even partial progress).
             for y in years {
                 let yearOnly = davisData.filter { cal.component(.year, from: $0.key) == y }
                 if !yearOnly.isEmpty {
-                    DavisRainfallCache.save(stationId: stationId, year: y, daily: yearOnly)
+                    DavisRainfallCache.save(
+                        vineyardId: vineyardId,
+                        stationId: stationId,
+                        year: y,
+                        daily: yearOnly
+                    )
                 }
             }
         }

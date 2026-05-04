@@ -483,10 +483,83 @@ struct WeatherDataSettingsView: View {
             }
 
             // 1. Saved status card on top
-            if savedAndNotEditing {
+            if savedAndNotEditing && canEdit {
                 savedStatusCard
             }
 
+            // For operators, surface the configured station and basic
+            // status only — never the API key/secret or test/edit
+            // controls. Reads still go through the davis-proxy edge
+            // function under the hood.
+            if !canEdit {
+                operatorReadOnlyDavisCard
+            } else {
+                ownerEditableDavisControls
+            }
+        } header: {
+            Text("Davis WeatherLink")
+        } footer: {
+            Text(canEdit
+                ? "Credentials are stored as part of this vineyard's shared weather integration. All members use the same station; only owners and managers can change them."
+                : "All vineyard members use the same Davis station via a secure server-side connection. Owners and managers can change credentials.")
+        }
+    }
+
+    @ViewBuilder
+    private var operatorReadOnlyDavisCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "person.badge.shield.checkmark.fill")
+                    .font(.title3)
+                    .foregroundStyle(.indigo)
+                    .frame(width: 32, height: 32)
+                    .background(Color.indigo.opacity(0.12), in: .rect(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Davis WeatherLink is configured for this vineyard.")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Managed by your owner or manager.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            if let name = config.davisStationName, !name.isEmpty {
+                LabeledContent("Station") {
+                    Text(name).foregroundStyle(.secondary).lineLimit(1)
+                }
+            } else if let sid = config.davisStationId, !sid.isEmpty {
+                LabeledContent("Station") {
+                    Text("Station \(sid)").foregroundStyle(.secondary)
+                }
+            }
+            if !config.davisDetectedSensors.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Detected sensors")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(config.davisDetectedSensors, id: \.self) { sensor in
+                        Label(sensor, systemImage: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                }
+            }
+            if config.davisHasLeafWetnessSensor {
+                Label("Measured leaf wetness available", systemImage: "drop.fill")
+                    .font(.caption)
+                    .foregroundStyle(.blue)
+            }
+            Text("Actual rainfall source: Davis WeatherLink\((config.davisStationName?.isEmpty == false) ? " — \(config.davisStationName!)" : "")")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var ownerEditableDavisControls: some View {
+        let savedAndNotEditing = config.davisHasCredentials && !isEditingDavisCredentials
+        Group {
             // API Key row
             HStack {
                 Text("API Key")
@@ -741,10 +814,6 @@ struct WeatherDataSettingsView: View {
                 }
             }
             .padding(.vertical, 4)
-        } header: {
-            Text("Davis WeatherLink")
-        } footer: {
-            Text("Credentials are stored as part of this vineyard's shared weather integration. All members use the same station; only owners and managers can change them.")
         }
     }
 
@@ -979,6 +1048,7 @@ struct WeatherDataSettingsView: View {
                 p_is_active: true
             )
             try await integrationRepository.save(payload)
+            VineyardWeatherIntegrationCache.shared.invalidate(vid)
             // Refresh the local snapshot.
             if let integ = try? await integrationRepository.fetch(
                 vineyardId: vid, provider: "davis_weatherlink"
@@ -1018,6 +1088,7 @@ struct WeatherDataSettingsView: View {
                 p_is_active: true
             )
             try await integrationRepository.save(payload)
+            VineyardWeatherIntegrationCache.shared.invalidate(vid)
             migrationMessage = "Davis setup moved to this vineyard. All members now use the same station."
             showMigratePrompt = false
             await loadVineyardIntegration(for: vid)
