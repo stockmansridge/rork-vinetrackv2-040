@@ -626,6 +626,17 @@ private struct BlockDetailSheet: View {
                     LabeledContent("Vine Spacing", value: String(format: "%.1f m", paddock.vineSpacing))
                 }
 
+                if paddock.intermediatePostSpacing != nil || paddock.intermediatePostCount != nil {
+                    Section("Trellis") {
+                        if let spacing = paddock.intermediatePostSpacing {
+                            LabeledContent("Intermediate Post Spacing", value: String(format: "%.1f m", spacing))
+                        }
+                        if let posts = paddock.intermediatePostCount {
+                            LabeledContent("Intermediate Posts", value: "\(posts)")
+                        }
+                    }
+                }
+
                 if paddock.flowPerEmitter != nil || paddock.emitterSpacing != nil {
                     Section("Irrigation") {
                         if let flow = paddock.flowPerEmitter {
