@@ -588,7 +588,7 @@ private struct NewHomeTabView: View {
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
-                    YieldHubView()
+                    YieldDeterminationCalculatorView()
                 } label: {
                     iconTile(title: "Yield Determination", icon: "scalemass.fill", tint: .purple)
                 }
@@ -610,7 +610,7 @@ private struct NewHomeTabView: View {
         case "Yield Estimation": return "Forecast crop"
         case "Irrigation Advisor": return "Water planning"
         case "Disease Risk": return "Downy/Powdery/Botrytis"
-        case "Yield Determination": return "Final weights"
+        case "Yield Determination": return "Pruning bud-load"
         case "Manage Users": return "Team & roles"
         case "Vineyard Setup": return "Blocks & rows"
         case "Audit Log": return "Activity history"
