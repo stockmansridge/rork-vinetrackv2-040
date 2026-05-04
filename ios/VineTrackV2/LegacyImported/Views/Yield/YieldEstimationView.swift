@@ -15,6 +15,8 @@ struct YieldEstimationView: View {
     @State private var showCompleteConfirmation: Bool = false
     @State private var showSamplesPerHaEditor: Bool = false
     @State private var samplesPerHaText: String = ""
+    @State private var showSampling: Bool = false
+    @State private var showSampleList: Bool = false
 
     private var paddocks: [Paddock] {
         store.orderedPaddocks.filter { $0.polygonPoints.count >= 3 }
@@ -47,8 +49,9 @@ struct YieldEstimationView: View {
                     }
 
                     if !viewModel.isCompleted {
-                        pathButton
+                        startSamplingButton
                     }
+
                     bunchWeightButton
 
                     if viewModel.recordedSiteCount > 0 {
@@ -61,11 +64,23 @@ struct YieldEstimationView: View {
 
                     progressSection
 
+                    if !viewModel.isCompleted {
+                        pathButton
+                    }
+
                     if viewModel.isPathGenerated {
                         pathMapSection
                     }
 
-                    sampleListSection
+                    DisclosureGroup(isExpanded: $showSampleList) {
+                        sampleListSection
+                            .padding(.top, 8)
+                    } label: {
+                        Label("All Sample Sites (\(viewModel.sampleSites.count))", systemImage: "list.number")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(12)
+                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
                 }
             }
             .padding(.horizontal)
@@ -108,6 +123,9 @@ struct YieldEstimationView: View {
         }
         .navigationDestination(isPresented: $showReport) {
             YieldReportView(viewModel: viewModel)
+        }
+        .navigationDestination(isPresented: $showSampling) {
+            YieldSamplingNavigationView(viewModel: viewModel)
         }
         .onAppear {
             loadExistingSession()
@@ -611,6 +629,31 @@ struct YieldEstimationView: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
             }
+        }
+    }
+
+    // MARK: - Start Sampling Button
+
+    private var startSamplingButton: some View {
+        VStack(spacing: 8) {
+            Button {
+                showSampling = true
+            } label: {
+                Label(
+                    viewModel.recordedSiteCount > 0 ? "Continue Sampling" : "Start Sampling",
+                    systemImage: "location.north.line.fill"
+                )
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+
+            Text("Guided field workflow with map and bunch-count entry.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
         }
     }
 
