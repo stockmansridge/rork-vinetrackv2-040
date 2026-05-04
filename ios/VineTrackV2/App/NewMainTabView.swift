@@ -570,7 +570,7 @@ private struct NewHomeTabView: View {
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
-                    YieldEstimationView()
+                    YieldHubView()
                 } label: {
                     iconTile(title: "Yield Estimation", icon: "chart.bar.fill", tint: .orange)
                 }
