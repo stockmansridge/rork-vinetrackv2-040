@@ -84,15 +84,21 @@ struct OnboardingView: View {
         VStack(spacing: 24) {
             Spacer()
             ZStack {
-                Circle()
-                    .fill(p.iconColor.opacity(0.15))
-                    .frame(width: 140, height: 140)
                 if let asset = p.assetImage {
                     Image(asset)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 110, height: 110)
+                        .frame(width: 140, height: 140)
+                        .clipShape(.rect(cornerRadius: 30, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                .strokeBorder(.white.opacity(0.6), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 6)
                 } else {
+                    Circle()
+                        .fill(p.iconColor.opacity(0.15))
+                        .frame(width: 140, height: 140)
                     Image(systemName: p.icon)
                         .font(.system(size: 64, weight: .semibold))
                         .foregroundStyle(p.iconColor)
