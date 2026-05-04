@@ -516,18 +516,6 @@ private struct NewHomeTabView: View {
                     quickActionTileLabel(title: "Growth", grapeLeaf: true, colors: [VineyardTheme.leafGreen, VineyardTheme.darkGreen])
                 }
                 .buttonStyle(.plain)
-                Button {
-                    showTripChoice = true
-                } label: {
-                    quickActionTileLabel(title: "Start Trip", systemIcon: "steeringwheel", colors: [.blue, Color.blue.opacity(0.75)])
-                }
-                .buttonStyle(.plain)
-                NavigationLink {
-                    SprayProgramView()
-                } label: {
-                    quickActionTileLabel(title: "Spray Program", systemIcon: "sprinkler.and.droplets.fill", colors: [.purple, Color.purple.opacity(0.75)])
-                }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal)
         }
