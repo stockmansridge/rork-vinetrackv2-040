@@ -111,18 +111,24 @@ struct RainfallCalendarView: View {
     }
 
     private var sourceCard: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: service.isMeasured
-                      ? "sensor.tag.radiowaves.forward.fill"
-                      : "cloud.sun.fill")
-                    .foregroundStyle(service.isMeasured ? VineyardTheme.leafGreen : .secondary)
-                Text(service.providerLabel)
-                    .font(.footnote.weight(.semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            calendarSourceRow(
+                label: "Recent actual",
+                value: actualRainValue,
+                icon: service.isMeasured ? "sensor.tag.radiowaves.forward.fill" : "cloud.sun.fill",
+                tint: service.isMeasured ? VineyardTheme.leafGreen : .secondary
+            )
+            calendarSourceRow(
+                label: "Older / fallback",
+                value: "Open-Meteo Archive",
+                icon: "tray.full.fill",
+                tint: .secondary
+            )
+            if service.fallbackUsed {
+                Text(service.fallbackNote)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
             }
-            Text(service.fallbackNote)
-                .font(.caption2)
-                .foregroundStyle(service.fallbackUsed ? .orange : .secondary)
             if let updated = service.lastUpdated {
                 Text("Updated \(updated.formatted(.relative(presentation: .named)))")
                     .font(.caption2)
@@ -136,6 +142,33 @@ struct RainfallCalendarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+    }
+
+    private var actualRainValue: String {
+        let raw = service.providerLabel
+        if raw.hasPrefix("Source: ") {
+            return String(raw.dropFirst("Source: ".count))
+        }
+        return raw
+    }
+
+    private func calendarSourceRow(label: String, value: String, icon: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(tint)
+                .frame(width: 14)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 100, alignment: .leading)
+            Text(value)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
     }
 
     private var locationMissing: some View {

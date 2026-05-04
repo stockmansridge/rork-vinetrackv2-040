@@ -1,6 +1,7 @@
 import Foundation
 
-/// Weather data source providers available to the user.
+/// Legacy single-provider enum. Retained for compatibility with existing
+/// call sites and code that maps to the *local observation* role.
 nonisolated enum WeatherProvider: String, Codable, Sendable, CaseIterable, Identifiable {
     case automatic
     case wunderground
@@ -44,10 +45,82 @@ nonisolated enum WeatherProvider: String, Codable, Sendable, CaseIterable, Ident
     }
 }
 
+// MARK: - Role-aware providers
+
+/// Forecast data provider — used for forecast rainfall, ET forecast,
+/// future temperature/wind, disease forecast risk and irrigation forecast.
+nonisolated enum ForecastProvider: String, Codable, Sendable, CaseIterable, Identifiable {
+    case openMeteo
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self { case .openMeteo: return "Open-Meteo Forecast" }
+    }
+    var symbol: String { "cloud.sun.fill" }
+    var helpCopy: String {
+        "Used for future rainfall, ET, temperature, wind and irrigation forecast calculations."
+    }
+}
+
+/// Local station observation provider — used for actual recent rainfall,
+/// current local conditions, measured leaf wetness and Rainfall Calendar
+/// recent history.
+nonisolated enum LocalObservationProvider: String, Codable, Sendable, CaseIterable, Identifiable {
+    case none
+    case davis
+    case wunderground
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .none: return "None / Automatic"
+        case .davis: return "Davis WeatherLink"
+        case .wunderground: return "Weather Underground PWS"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .none: return "cloud.sun.fill"
+        case .davis: return "sensor.tag.radiowaves.forward.fill"
+        case .wunderground: return "antenna.radiowaves.left.and.right"
+        }
+    }
+    var helpCopy: String {
+        switch self {
+        case .none:
+            return "No local station. Actual rainfall and current conditions fall back to the historical archive."
+        case .davis:
+            return "Connect your Davis WeatherLink account to use your own station data. If a leaf wetness sensor is available, disease risk uses measured wetness."
+        case .wunderground:
+            return "Use a nearby Weather Underground PWS for current/local observations and recent rainfall."
+        }
+    }
+}
+
+/// Historical fallback provider — used when local station history is
+/// unavailable or outside the supported live-history window.
+nonisolated enum HistoricalFallbackProvider: String, Codable, Sendable, CaseIterable, Identifiable {
+    case openMeteoArchive
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self { case .openMeteoArchive: return "Open-Meteo Archive" }
+    }
+    var symbol: String { "tray.full.fill" }
+    var helpCopy: String {
+        "Used when local station history is unavailable or outside the supported live-history window."
+    }
+}
+
 /// Per-vineyard provider configuration, persisted via UserDefaults
 /// (non-secret fields only). Davis credentials live in the Keychain.
 nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
-    var provider: WeatherProvider = .automatic
+    // Role-aware selections.
+    var forecastProvider: ForecastProvider = .openMeteo
+    var localObservationProvider: LocalObservationProvider = .none
+    var historicalFallbackProvider: HistoricalFallbackProvider = .openMeteoArchive
+
+    // Davis-specific state (only meaningful when localObservationProvider == .davis)
     var davisStationId: String? = nil
     var davisStationName: String? = nil
     var davisHasCredentials: Bool = false
@@ -60,6 +133,98 @@ nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
     var lastSuccessfulUpdate: Date? = nil
 
     static let `default` = WeatherProviderConfig()
+
+    /// Compatibility shim: map between the legacy single-provider field
+    /// and the new local-observation role.
+    var provider: WeatherProvider {
+        get {
+            switch localObservationProvider {
+            case .none: return .automatic
+            case .davis: return .davis
+            case .wunderground: return .wunderground
+            }
+        }
+        set {
+            switch newValue {
+            case .automatic: localObservationProvider = .none
+            case .davis: localObservationProvider = .davis
+            case .wunderground: localObservationProvider = .wunderground
+            }
+        }
+    }
+
+    // MARK: Codable (with legacy migration)
+
+    private enum CodingKeys: String, CodingKey {
+        case forecastProvider
+        case localObservationProvider
+        case historicalFallbackProvider
+        case provider // legacy
+        case davisStationId
+        case davisStationName
+        case davisHasCredentials
+        case davisLastTestSuccess
+        case davisLastTestError
+        case davisDetectedSensors
+        case davisHasLeafWetnessSensor
+        case davisConnectionTested
+        case davisAvailableStations
+        case lastSuccessfulUpdate
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+
+        self.forecastProvider = (try? c.decode(ForecastProvider.self, forKey: .forecastProvider)) ?? .openMeteo
+        self.historicalFallbackProvider = (try? c.decode(HistoricalFallbackProvider.self, forKey: .historicalFallbackProvider)) ?? .openMeteoArchive
+
+        if let local = try? c.decode(LocalObservationProvider.self, forKey: .localObservationProvider) {
+            self.localObservationProvider = local
+        } else if let legacy = try? c.decode(WeatherProvider.self, forKey: .provider) {
+            // Migrate from old single-provider field.
+            switch legacy {
+            case .automatic: self.localObservationProvider = .none
+            case .davis: self.localObservationProvider = .davis
+            case .wunderground: self.localObservationProvider = .wunderground
+            }
+        } else {
+            self.localObservationProvider = .none
+        }
+
+        self.davisStationId = try? c.decodeIfPresent(String.self, forKey: .davisStationId)
+        self.davisStationName = try? c.decodeIfPresent(String.self, forKey: .davisStationName)
+        self.davisHasCredentials = (try? c.decode(Bool.self, forKey: .davisHasCredentials)) ?? false
+        self.davisLastTestSuccess = try? c.decodeIfPresent(Date.self, forKey: .davisLastTestSuccess)
+        self.davisLastTestError = try? c.decodeIfPresent(String.self, forKey: .davisLastTestError)
+        self.davisDetectedSensors = (try? c.decode([String].self, forKey: .davisDetectedSensors)) ?? []
+        self.davisHasLeafWetnessSensor = (try? c.decode(Bool.self, forKey: .davisHasLeafWetnessSensor)) ?? false
+        self.davisConnectionTested = (try? c.decode(Bool.self, forKey: .davisConnectionTested)) ?? false
+        self.davisAvailableStations = (try? c.decode([DavisStation].self, forKey: .davisAvailableStations)) ?? []
+        self.lastSuccessfulUpdate = try? c.decodeIfPresent(Date.self, forKey: .lastSuccessfulUpdate)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(forecastProvider, forKey: .forecastProvider)
+        try c.encode(localObservationProvider, forKey: .localObservationProvider)
+        try c.encode(historicalFallbackProvider, forKey: .historicalFallbackProvider)
+        // Also write the legacy `provider` key so older app builds still
+        // read the right local-observation source after a downgrade.
+        try c.encode(provider, forKey: .provider)
+
+        try c.encodeIfPresent(davisStationId, forKey: .davisStationId)
+        try c.encodeIfPresent(davisStationName, forKey: .davisStationName)
+        try c.encode(davisHasCredentials, forKey: .davisHasCredentials)
+        try c.encodeIfPresent(davisLastTestSuccess, forKey: .davisLastTestSuccess)
+        try c.encodeIfPresent(davisLastTestError, forKey: .davisLastTestError)
+        try c.encode(davisDetectedSensors, forKey: .davisDetectedSensors)
+        try c.encode(davisHasLeafWetnessSensor, forKey: .davisHasLeafWetnessSensor)
+        try c.encode(davisConnectionTested, forKey: .davisConnectionTested)
+        try c.encode(davisAvailableStations, forKey: .davisAvailableStations)
+        try c.encodeIfPresent(lastSuccessfulUpdate, forKey: .lastSuccessfulUpdate)
+    }
 }
 
 @MainActor

@@ -108,25 +108,56 @@ struct DiseaseRiskAdvisorView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let status = weatherStatus {
-                HStack(spacing: 6) {
-                    Image(systemName: "cloud.sun.fill")
+            VStack(alignment: .leading, spacing: 4) {
+                diseaseSourceRow(label: "Forecast", value: "Open-Meteo Forecast", icon: "cloud.sun.fill", tint: Color.accentColor)
+                diseaseSourceRow(label: "Wetness", value: wetnessSourceValue, icon: weatherStatus?.quality == .localStationWithMeasuredWetness ? "sensor.tag.radiowaves.forward.fill" : "drop.fill", tint: weatherStatus?.quality == .localStationWithMeasuredWetness ? VineyardTheme.leafGreen : .secondary)
+                diseaseSourceRow(label: "Fallback wetness", value: "Estimated from rain / RH / dew point", icon: "tray.full.fill", tint: .secondary)
+                if let last = lastCalculated {
+                    Text("Updated \(last.formatted(.relative(presentation: .named)))")
                         .font(.caption2)
-                    Text(status.compactLabel)
-                        .font(.caption2)
-                    Spacer()
-                    if let last = lastCalculated {
-                        Text(last.formatted(.relative(presentation: .named)))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 2)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
             }
+            .padding(.top, 2)
         }
         .padding(14)
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+    }
+
+    private var wetnessSourceValue: String {
+        guard let s = weatherStatus else { return "Estimated wetness" }
+        switch s.quality {
+        case .localStationWithMeasuredWetness:
+            return "Davis WeatherLink — \(s.detailLabel) (measured wetness)"
+        case .localStation:
+            switch s.provider {
+            case .davis: return "Davis WeatherLink — \(s.detailLabel) (no leaf wetness sensor)"
+            case .wunderground: return "Weather Underground — \(s.detailLabel) (estimated wetness)"
+            case .automatic: return "Estimated wetness"
+            }
+        case .forecastOnly:
+            return "Estimated wetness"
+        }
+    }
+
+    private func diseaseSourceRow(label: String, value: String, icon: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(tint)
+                .frame(width: 14)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 96, alignment: .leading)
+            Text(value)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
     }
 
     // MARK: - Summary cards

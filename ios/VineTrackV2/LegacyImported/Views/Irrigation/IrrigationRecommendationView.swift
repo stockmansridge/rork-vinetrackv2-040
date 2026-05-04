@@ -204,6 +204,12 @@ struct IrrigationRecommendationView: View {
                             : "externaldrive.connected.to.line.below.fill",
                         tint: (recentRainResult?.isMeasured ?? false) ? VineyardTheme.leafGreen : .secondary
                     )
+                    sourceRow(
+                        label: "Fallback",
+                        value: "Open-Meteo Archive",
+                        icon: "tray.full.fill",
+                        tint: .secondary
+                    )
                 }
 
                 if let r = recentRainResult, r.fallbackUsed {

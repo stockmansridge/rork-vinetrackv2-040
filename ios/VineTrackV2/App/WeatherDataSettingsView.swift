@@ -86,22 +86,23 @@ struct WeatherDataSettingsView: View {
         Form {
             headerSection
             currentSourceSection
-            providerSelectionSection
 
-            if config.provider == .wunderground {
+            forecastSourceSection
+
+            localObservationSection
+
+            if config.localObservationProvider == .wunderground {
                 weatherUndergroundSection
             }
 
-            if config.provider == .davis {
+            if config.localObservationProvider == .davis {
                 davisSection
-            }
-
-            if config.provider == .davis {
                 davisHelpSection
             }
 
+            historicalFallbackSection
+
             usageSection
-            fallbackSection
 
             if !canEdit {
                 Section {
@@ -198,25 +199,55 @@ struct WeatherDataSettingsView: View {
         }
     }
 
-    private var providerSelectionSection: some View {
+    // MARK: - Forecast Source (read-only role)
+
+    private var forecastSourceSection: some View {
         Section {
-            ForEach(WeatherProvider.allCases) { provider in
+            HStack(alignment: .top, spacing: 12) {
+                SettingsIconTile(symbol: ForecastProvider.openMeteo.symbol, color: .blue)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(config.forecastProvider.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(config.forecastProvider.helpCopy)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("No setup required.")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                        .padding(.top, 2)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+        } header: {
+            Text("Forecast Source")
+        } footer: {
+            Text("Davis and Weather Underground are used for actual observations. Forecasts always come from Open-Meteo.")
+        }
+    }
+
+    // MARK: - Local Observation Source (user-selectable role)
+
+    private var localObservationSection: some View {
+        Section {
+            ForEach(LocalObservationProvider.allCases) { provider in
                 Button {
                     guard canEdit else { return }
                     var c = config
-                    c.provider = provider
+                    c.localObservationProvider = provider
                     config = c
                     persist()
                 } label: {
                     HStack(alignment: .top, spacing: 12) {
-                        SettingsIconTile(symbol: provider.symbol, color: providerColor(provider))
+                        SettingsIconTile(symbol: provider.symbol, color: localProviderColor(provider))
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(provider.displayName)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.primary)
-                                if provider == .automatic {
-                                    Text("Recommended")
+                                if provider == .none {
+                                    Text("Default")
                                         .font(.caption2.weight(.semibold))
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
@@ -230,7 +261,7 @@ struct WeatherDataSettingsView: View {
                                 .multilineTextAlignment(.leading)
                         }
                         Spacer(minLength: 8)
-                        if config.provider == provider {
+                        if config.localObservationProvider == provider {
                             Image(systemName: "checkmark")
                                 .foregroundStyle(.tint)
                         }
@@ -241,9 +272,37 @@ struct WeatherDataSettingsView: View {
                 .disabled(!canEdit)
             }
         } header: {
-            Text("Data Source")
+            Text("Local Observation Source")
         } footer: {
-            Text("Choose where VineTrack pulls current weather observations from. Forecasts always fall back to the default service if a local source is unavailable.")
+            Text("Used for actual rainfall, local station readings and measured leaf wetness where available. Forecasts still use Open-Meteo regardless of this choice.")
+        }
+    }
+
+    // MARK: - Historical Fallback (read-only role)
+
+    private var historicalFallbackSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                SettingsIconTile(symbol: HistoricalFallbackProvider.openMeteoArchive.symbol, color: .gray)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(config.historicalFallbackProvider.displayName)
+                        .font(.subheadline.weight(.semibold))
+                    Text(config.historicalFallbackProvider.helpCopy)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("No setup required.")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.green)
+                        .padding(.top, 2)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 2)
+        } header: {
+            Text("Historical Fallback")
+        } footer: {
+            Text("Used for the Rainfall Calendar's older periods and as a fallback when local station history is unavailable.")
         }
     }
 
@@ -588,20 +647,7 @@ struct WeatherDataSettingsView: View {
         }
     }
 
-    private var fallbackSection: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 8) {
-                fallbackRow(rank: "A", title: "Davis WeatherLink", detail: "Uses Davis observations and history when configured. Measured leaf wetness when sensor is present.")
-                fallbackRow(rank: "B", title: "Weather Underground PWS", detail: "Uses your selected PWS for current/local observations.")
-                fallbackRow(rank: "C", title: "Automatic Forecast", detail: "Default forecast based on vineyard location.")
-            }
-            .padding(.vertical, 4)
-        } header: {
-            Text("Data priority / fallback")
-        } footer: {
-            Text("VineTrack falls back through this priority list automatically if a higher-priority source is unavailable. Disease risk continues with estimated wetness when measured wetness isn't available.")
-        }
-    }
+
 
     // MARK: - Helpers
 
@@ -621,6 +667,14 @@ struct WeatherDataSettingsView: View {
     private func providerColor(_ p: WeatherProvider) -> Color {
         switch p {
         case .automatic: return .blue
+        case .wunderground: return .orange
+        case .davis: return .indigo
+        }
+    }
+
+    private func localProviderColor(_ p: LocalObservationProvider) -> Color {
+        switch p {
+        case .none: return .blue
         case .wunderground: return .orange
         case .davis: return .indigo
         }
