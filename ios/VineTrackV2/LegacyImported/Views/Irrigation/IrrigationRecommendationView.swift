@@ -170,33 +170,92 @@ struct IrrigationRecommendationView: View {
 
     private var statusSection: some View {
         Section {
-            HStack(spacing: 10) {
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(.tint)
-                VStack(alignment: .leading, spacing: 2) {
-                    if let forecast = forecastService.forecast {
-                        Text(forecast.source)
-                            .font(.subheadline.weight(.semibold))
-                    } else {
-                        Text("Open-Meteo")
-                            .font(.subheadline.weight(.semibold))
-                    }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(.tint)
+                    Text("Weather sources")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
                     if let updated = lastUpdated {
                         Text("Updated \(updated.formatted(.relative(presentation: .named)))")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else if forecastService.isLoading {
-                        Text("Loading forecast…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Awaiting forecast")
-                            .font(.caption)
+                        Text("Loading…")
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
-                Spacer()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    sourceRow(
+                        label: "Forecast",
+                        value: forecastService.forecast?.source ?? "Open-Meteo Forecast",
+                        icon: "cloud.sun.fill",
+                        tint: Color.accentColor
+                    )
+                    sourceRow(
+                        label: "Actual rain",
+                        value: actualRainSourceValue,
+                        icon: (recentRainResult?.isMeasured ?? false)
+                            ? "sensor.tag.radiowaves.forward.fill"
+                            : "externaldrive.connected.to.line.below.fill",
+                        tint: (recentRainResult?.isMeasured ?? false) ? VineyardTheme.leafGreen : .secondary
+                    )
+                }
+
+                if let r = recentRainResult, r.fallbackUsed {
+                    Label("Using archive fallback for actual rainfall.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func sourceRow(label: String, value: String, icon: String, tint: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 86, alignment: .leading)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// User-facing text shown on the right of the "Actual rain" row.
+    /// Strips the "Source: " prefix produced by RainfallHistoryService so the
+    /// label sits naturally beside "Actual rain:".
+    private var actualRainSourceValue: String {
+        guard let r = recentRainResult else {
+            if isLoadingRecentRain { return "Loading…" }
+            return "Automatic Historical Weather"
+        }
+        let raw = r.providerLabel
+        if raw.hasPrefix("Source: ") {
+            return String(raw.dropFirst("Source: ".count))
+        }
+        return raw
+    }
+
+    /// Short tag used inside the recommendation card sentence.
+    private var actualRainShortSource: String {
+        guard let r = recentRainResult else { return "Archive" }
+        switch r.effectiveProvider {
+        case .davis: return "Davis WeatherLink"
+        case .wunderground: return "Weather Underground"
+        case .automatic: return "Archive"
         }
     }
 
@@ -405,8 +464,9 @@ struct IrrigationRecommendationView: View {
             }
 
             if result.recentActualRainMm > 0 {
-                Text(String(format: "Includes %.1f mm recent actual rain offset",
-                            result.recentActualRainMm))
+                Text(String(format: "Includes %.1f mm recent actual rain from %@.",
+                            result.recentActualRainMm,
+                            actualRainShortSource))
                     .font(.caption2)
                     .foregroundStyle(VineyardTheme.leafGreen)
             }
