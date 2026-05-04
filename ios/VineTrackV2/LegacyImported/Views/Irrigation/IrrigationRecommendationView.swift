@@ -93,6 +93,7 @@ struct IrrigationRecommendationView: View {
                 missingSetupSection
             }
             recommendationSection
+            rainfallCalendarSection
             blockSection
             forecastControlSection
             forecastDetailsSection
@@ -191,6 +192,29 @@ struct IrrigationRecommendationView: View {
                 }
             }
             .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Rainfall calendar entry
+
+    private var rainfallCalendarSection: some View {
+        Section {
+            NavigationLink {
+                RainfallCalendarView()
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "calendar")
+                        .foregroundStyle(.tint)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Rainfall Calendar")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Daily rainfall by month for the year")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
