@@ -63,6 +63,12 @@ enum RainfallHistoryService {
     /// Archive and clearly labelled as fallback data.
     static let davisMaxDaysWindow: Int = 120
 
+    /// WU's per-day daily-history endpoint requires one HTTP call per day.
+    /// We cap the live WU window so a year-long calendar fetch doesn't
+    /// fire 365 calls. Older portions are filled from the Open-Meteo
+    /// archive and labelled as fallback data.
+    static let wuMaxDaysWindow: Int = 60
+
     static func fetchDailyRainfall(
         vineyardId: UUID?,
         latitude: Double,
@@ -180,6 +186,80 @@ enum RainfallHistoryService {
             }
         }
 
+        // MARK: Weather Underground path
+        if let s = status,
+           s.provider == .wunderground,
+           let stationId = weatherStationId,
+           !stationId.isEmpty {
+            let apiKey = AppConfig.wundergroundAPIKey
+            if !apiKey.isEmpty {
+                let earliestWU = cal.date(byAdding: .day, value: -wuMaxDaysWindow, to: safeTo) ?? safeFrom
+                let wuStart = max(safeFrom, earliestWU)
+                do {
+                    let wu = try await WeatherUndergroundRainfallService.fetchDailyRainfall(
+                        apiKey: apiKey,
+                        stationId: stationId,
+                        from: wuStart,
+                        to: safeTo
+                    )
+
+                    var merged = wu.dailyMm
+                    var fallbackUsed = false
+                    var fallbackReason: String?
+
+                    if wuStart > safeFrom {
+                        let priorEnd = cal.date(byAdding: .day, value: -1, to: wuStart) ?? safeFrom
+                        if let archive = try? await OpenMeteoRainfallArchive.fetchDaily(
+                            latitude: latitude,
+                            longitude: longitude,
+                            from: safeFrom,
+                            to: priorEnd
+                        ) {
+                            for (k, v) in archive where merged[k] == nil {
+                                merged[k] = v
+                            }
+                        }
+                        fallbackUsed = true
+                        fallbackReason = "Weather Underground history covers the last \(wuMaxDaysWindow) days. Earlier dates filled from automatic archive."
+                    }
+
+                    return RainfallHistoryResult(
+                        dailyMm: merged,
+                        configuredProvider: .wunderground,
+                        effectiveProvider: .wunderground,
+                        providerLabel: "Source: Weather Underground — \(stationId)",
+                        stationName: stationId,
+                        isMeasured: true,
+                        fallbackUsed: fallbackUsed,
+                        fallbackReason: fallbackReason,
+                        coveredFrom: safeFrom,
+                        coveredTo: safeTo,
+                        recordCount: wu.recordCount
+                    )
+                } catch {
+                    let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
+                        latitude: latitude,
+                        longitude: longitude,
+                        from: safeFrom,
+                        to: safeTo
+                    )) ?? [:]
+                    return RainfallHistoryResult(
+                        dailyMm: archive,
+                        configuredProvider: .wunderground,
+                        effectiveProvider: .automatic,
+                        providerLabel: "Source: Weather Underground — \(stationId)",
+                        stationName: stationId,
+                        isMeasured: false,
+                        fallbackUsed: true,
+                        fallbackReason: "Weather Underground data unavailable — using fallback. (\(error.localizedDescription))",
+                        coveredFrom: safeFrom,
+                        coveredTo: safeTo,
+                        recordCount: archive.count
+                    )
+                }
+            }
+        }
+
         // MARK: Fallback path (WU / Automatic / Davis-not-configured)
         let archive = (try? await OpenMeteoRainfallArchive.fetchDaily(
             latitude: latitude,
@@ -197,9 +277,17 @@ enum RainfallHistoryService {
             fallbackUsed = true
             fallbackReason = "Davis WeatherLink isn't fully connected yet. Using automatic archive data."
         case .wunderground:
-            label = "Source: Weather Underground — historical via automatic archive"
+            // Reached when WU is selected but no station was supplied or
+            // the device has no WU API key configured.
+            label = "Source: Weather Underground — using fallback"
             fallbackUsed = true
-            fallbackReason = "Weather Underground daily history isn't supported yet. Using automatic archive data."
+            if (weatherStationId ?? "").isEmpty {
+                fallbackReason = "No Weather Underground station selected. Using automatic archive data."
+            } else if AppConfig.wundergroundAPIKey.isEmpty {
+                fallbackReason = "Weather Underground API key not configured on this device. Using automatic archive data."
+            } else {
+                fallbackReason = "Weather Underground data unavailable — using fallback."
+            }
         case .automatic:
             label = "Source: Automatic Forecast / Historical Weather"
         }
