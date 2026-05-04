@@ -145,7 +145,7 @@ enum RainfallHistoryService {
                             }
                         }
                         fallbackUsed = true
-                        fallbackReason = "Davis history covers the last \(davisMaxDaysWindow) days. Earlier dates filled from automatic archive."
+                        fallbackReason = "Recent rainfall from Davis. Older dates filled from automatic archive."
                     }
 
                     let label = "Source: Davis WeatherLink — \(stationLabel)"
@@ -220,7 +220,7 @@ enum RainfallHistoryService {
                             }
                         }
                         fallbackUsed = true
-                        fallbackReason = "Weather Underground history covers the last \(wuMaxDaysWindow) days. Earlier dates filled from automatic archive."
+                        fallbackReason = "Recent rainfall from WU. Older dates filled from automatic archive."
                     }
 
                     return RainfallHistoryResult(
@@ -273,23 +273,19 @@ enum RainfallHistoryService {
         var fallbackReason: String?
         switch configuredProvider {
         case .davis:
-            label = "Source: Davis WeatherLink configured — using fallback"
+            label = "Source: Automatic archive (Davis not connected)"
             fallbackUsed = true
-            fallbackReason = "Davis WeatherLink isn't fully connected yet. Using automatic archive data."
+            fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
         case .wunderground:
             // Reached when WU is selected but no station was supplied or
             // the device has no WU API key configured.
-            label = "Source: Weather Underground — using fallback"
+            label = "Source: Automatic archive (WU not connected)"
             fallbackUsed = true
-            if (weatherStationId ?? "").isEmpty {
-                fallbackReason = "No Weather Underground station selected. Using automatic archive data."
-            } else if AppConfig.wundergroundAPIKey.isEmpty {
-                fallbackReason = "Weather Underground API key not configured on this device. Using automatic archive data."
-            } else {
-                fallbackReason = "Weather Underground data unavailable — using fallback."
-            }
+            fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
         case .automatic:
-            label = "Source: Automatic Forecast / Historical Weather"
+            label = "Source: Automatic archive rainfall"
+            fallbackUsed = true
+            fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
         }
 
         return RainfallHistoryResult(
