@@ -8,6 +8,7 @@ final class YieldRepository {
     static let sessionsKey = "vinetrack_yield_sessions"
     static let damageKey = "vinetrack_damage_records"
     static let historicalKey = "vinetrack_historical_yield_records"
+    static let determinationKey = "vinetrack_yield_determination_results"
 
     private let persistence: PersistenceStore
 
@@ -118,5 +119,22 @@ final class YieldRepository {
         }
         persistence.save(all, key: Self.historicalKey)
         return all.filter { $0.vineyardId == vineyardId }
+    }
+
+    // MARK: - YieldDeterminationResult (local only — sync-ready shape)
+
+    func loadAllDetermination() -> [YieldDeterminationResult] {
+        persistence.load(key: Self.determinationKey) ?? []
+    }
+
+    func loadDetermination(for vineyardId: UUID) -> [YieldDeterminationResult] {
+        loadAllDetermination().filter { $0.vineyardId == vineyardId }
+    }
+
+    func saveDeterminationSlice(_ items: [YieldDeterminationResult], for vineyardId: UUID) {
+        var all = loadAllDetermination()
+        all.removeAll { $0.vineyardId == vineyardId }
+        all.append(contentsOf: items)
+        persistence.save(all, key: Self.determinationKey)
     }
 }

@@ -286,6 +286,24 @@ struct YieldReportsListView: View {
                 }
             }
 
+            if let determination = store.latestDetermination(for: summary.paddockId) {
+                HStack(spacing: 6) {
+                    Image(systemName: "scalemass.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.purple)
+                    Text(String(format: "Determined %.2f t/ha", determination.yieldTonnesPerHa))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if summary.yieldPerHa > 0, determination.yieldTonnesPerHa > 0 {
+                        let variance = ((summary.yieldPerHa - determination.yieldTonnesPerHa) / determination.yieldTonnesPerHa) * 100
+                        Text(String(format: "%@%.0f%%", variance >= 0 ? "+" : "", variance))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(variance >= 0 ? VineyardTheme.leafGreen : .orange)
+                    }
+                    Spacer()
+                }
+            }
+
             if summary.samplesTotal > 0 {
                 ProgressView(value: Double(summary.samplesRecorded), total: Double(summary.samplesTotal))
                     .tint(summary.samplesRecorded == summary.samplesTotal ? .green : .orange)

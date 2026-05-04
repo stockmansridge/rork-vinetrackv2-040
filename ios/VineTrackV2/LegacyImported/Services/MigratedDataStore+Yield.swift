@@ -118,4 +118,36 @@ extension MigratedDataStore {
         yieldRepo.saveHistoricalSlice(historicalYieldRecords, for: vineyardId)
         onHistoricalYieldRecordDeleted?(record.id)
     }
+
+    // MARK: - YieldDeterminationResult (local only)
+
+    func saveYieldDeterminationResult(_ result: YieldDeterminationResult) {
+        guard let vineyardId = selectedVineyardId else { return }
+        var item = result
+        item.vineyardId = vineyardId
+        if let idx = yieldDeterminationResults.firstIndex(where: { $0.id == item.id }) {
+            yieldDeterminationResults[idx] = item
+        } else {
+            yieldDeterminationResults.append(item)
+        }
+        yieldRepo.saveDeterminationSlice(yieldDeterminationResults, for: vineyardId)
+    }
+
+    func deleteYieldDeterminationResult(_ result: YieldDeterminationResult) {
+        guard let vineyardId = selectedVineyardId else { return }
+        yieldDeterminationResults.removeAll { $0.id == result.id }
+        yieldRepo.saveDeterminationSlice(yieldDeterminationResults, for: vineyardId)
+    }
+
+    /// Most recent determination result for the given paddock, if any.
+    func latestDetermination(for paddockId: UUID) -> YieldDeterminationResult? {
+        yieldDeterminationResults
+            .filter { $0.paddockId == paddockId }
+            .max(by: { $0.createdAt < $1.createdAt })
+    }
+
+    /// Most recent determination result for the current vineyard overall.
+    var latestDeterminationOverall: YieldDeterminationResult? {
+        yieldDeterminationResults.max(by: { $0.createdAt < $1.createdAt })
+    }
 }

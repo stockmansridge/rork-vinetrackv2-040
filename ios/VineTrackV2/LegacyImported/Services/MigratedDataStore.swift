@@ -39,6 +39,7 @@ final class MigratedDataStore {
     var yieldSessions: [YieldEstimationSession] = []
     var damageRecords: [DamageRecord] = []
     var historicalYieldRecords: [HistoricalYieldRecord] = []
+    var yieldDeterminationResults: [YieldDeterminationResult] = []
 
     var maintenanceLogs: [MaintenanceLog] = []
     var workTasks: [WorkTask] = []
@@ -284,6 +285,7 @@ final class MigratedDataStore {
             yieldSessions = []
             damageRecords = []
             historicalYieldRecords = []
+            yieldDeterminationResults = []
             maintenanceLogs = []
             workTasks = []
             settings = AppSettings()
@@ -304,6 +306,7 @@ final class MigratedDataStore {
         yieldSessions = yieldRepo.loadSessions(for: vineyardId)
         damageRecords = yieldRepo.loadDamage(for: vineyardId)
         historicalYieldRecords = yieldRepo.loadHistorical(for: vineyardId)
+        yieldDeterminationResults = yieldRepo.loadDetermination(for: vineyardId)
 
         settings = settingsRepo.load(for: vineyardId)
 
@@ -336,6 +339,7 @@ final class MigratedDataStore {
         yieldSessions = []
         damageRecords = []
         historicalYieldRecords = []
+        yieldDeterminationResults = []
         maintenanceLogs = []
         workTasks = []
         grapeVarieties = []

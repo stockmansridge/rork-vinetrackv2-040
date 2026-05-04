@@ -578,13 +578,7 @@ private struct NewHomeTabView: View {
                 NavigationLink {
                     YieldHubView()
                 } label: {
-                    iconTile(title: "Yield Estimation", icon: "chart.bar.fill", tint: .orange)
-                }
-                .buttonStyle(.plain)
-                NavigationLink {
-                    YieldDeterminationCalculatorView()
-                } label: {
-                    iconTile(title: "Yield Determination", icon: "scalemass.fill", tint: .purple)
+                    iconTile(title: "Yield Forecasting", icon: "chart.bar.fill", tint: .orange)
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
@@ -607,6 +601,7 @@ private struct NewHomeTabView: View {
         case "Work Tasks": return "Log & calculate"
         case "Maintenance Log": return "Repairs & jobs"
         case "Growth Stage Report": return "E-L tracking"
+        case "Yield Forecasting": return "Potential, samples & reports"
         case "Yield Estimation": return "Forecast crop"
         case "Irrigation Advisor": return "Water planning"
         case "Disease Risk": return "Downy/Powdery/Botrytis"

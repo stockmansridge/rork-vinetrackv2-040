@@ -10,13 +10,26 @@ struct YieldHubView: View {
 
                 VStack(spacing: 12) {
                     NavigationLink {
+                        YieldDeterminationCalculatorView()
+                    } label: {
+                        hubOption(
+                            icon: "scalemass.fill",
+                            iconGradient: [.purple, .pink],
+                            title: "Yield Determination",
+                            subtitle: "Pruning bud-load potential",
+                            detail: determinationDetail
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    NavigationLink {
                         YieldEstimationView()
                     } label: {
                         hubOption(
                             icon: "chart.bar.doc.horizontal",
-                            iconGradient: [.purple, .indigo],
+                            iconGradient: [.orange, .red],
                             title: "Yield Estimation",
-                            subtitle: "Bunch count sample sites & block estimates",
+                            subtitle: "Sample sites & bunch counts",
                             detail: yieldEstimationDetail
                         )
                     }
@@ -29,7 +42,7 @@ struct YieldHubView: View {
                             icon: "list.clipboard.fill",
                             iconGradient: [.indigo, .blue],
                             title: "Yield Reports",
-                            subtitle: "Block summaries & estimation jobs",
+                            subtitle: "Compare estimates and harvest results",
                             detail: yieldReportsDetail
                         )
                     }
@@ -42,7 +55,7 @@ struct YieldHubView: View {
                             icon: "exclamationmark.triangle.fill",
                             iconGradient: [.red, .orange],
                             title: "Record Damage",
-                            subtitle: "Frost, hail, wind & more",
+                            subtitle: "Frost, hail, wind & crop loss",
                             detail: damageDetail
                         )
                     }
@@ -53,7 +66,7 @@ struct YieldHubView: View {
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle("Yield & Damage")
+        .navigationTitle("Yield Forecasting")
         .navigationBarTitleDisplayMode(.large)
     }
 
@@ -160,5 +173,10 @@ struct YieldHubView: View {
         let count = store.damageRecords.count
         guard count > 0 else { return nil }
         return "\(count) damage record\(count == 1 ? "" : "s")"
+    }
+
+    private var determinationDetail: String? {
+        guard let latest = store.latestDeterminationOverall else { return nil }
+        return String(format: "Latest: %.1f t/ha", latest.yieldTonnesPerHa)
     }
 }

@@ -37,6 +37,9 @@ struct YieldDeterminationCalculatorView: View {
     @State private var vinesPerHaText: String = ""
     @State private var bunchWeightText: String = "120"
 
+    @State private var lastSavedAt: Date?
+    @State private var showSavedToast: Bool = false
+
     @FocusState private var focusedField: Field?
 
     private enum Field: Hashable {
@@ -195,6 +198,35 @@ struct YieldDeterminationCalculatorView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Section {
+                Button {
+                    saveResult()
+                } label: {
+                    Label("Save Result", systemImage: "square.and.arrow.down.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(VineyardTheme.leafGreen)
+                .disabled(yieldTonnesPerHa <= 0)
+
+                if let lastSavedAt {
+                    Text("Last saved \(lastSavedAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .overlay(alignment: .top) {
+            if showSavedToast {
+                Text("Saved")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: .capsule)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         .navigationTitle("Yield Determination")
         .navigationBarTitleDisplayMode(.inline)
@@ -292,5 +324,34 @@ struct YieldDeterminationCalculatorView: View {
 
     private func parse(_ text: String) -> Double {
         Double(text.replacingOccurrences(of: ",", with: ".")) ?? 0
+    }
+
+    private func saveResult() {
+        guard let vineyardId = store.selectedVineyard?.id else { return }
+        let result = YieldDeterminationResult(
+            vineyardId: vineyardId,
+            paddockId: selectedPaddockId,
+            pruneMethod: pruneMethod.rawValue,
+            bunchesPerBud: bunchesPerBud,
+            budsPerSpur: budsPerSpur,
+            spursPerVine: spursPerVine,
+            budsPerCane: budsPerCane,
+            canesPerVine: canesPerVine,
+            vinesPerHa: vinesPerHa,
+            bunchWeightGrams: bunchWeightGrams,
+            budsPerVine: budsPerVine,
+            bunchesPerHa: bunchesPerHa,
+            yieldKgPerHa: yieldKgPerHa,
+            yieldTonnesPerHa: yieldTonnesPerHa,
+            totalYieldTonnes: totalYieldTonnes,
+            createdBy: authService.userId?.uuidString
+        )
+        store.saveYieldDeterminationResult(result)
+        lastSavedAt = result.createdAt
+        withAnimation(.easeOut(duration: 0.2)) { showSavedToast = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            withAnimation(.easeIn(duration: 0.2)) { showSavedToast = false }
+        }
     }
 }
