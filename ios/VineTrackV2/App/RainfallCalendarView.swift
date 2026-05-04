@@ -112,11 +112,17 @@ struct RainfallCalendarView: View {
 
     private var sourceCard: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(service.providerLabel)
-                .font(.footnote.weight(.semibold))
+            HStack(spacing: 6) {
+                Image(systemName: service.isMeasured
+                      ? "sensor.tag.radiowaves.forward.fill"
+                      : "cloud.sun.fill")
+                    .foregroundStyle(service.isMeasured ? VineyardTheme.leafGreen : .secondary)
+                Text(service.providerLabel)
+                    .font(.footnote.weight(.semibold))
+            }
             Text(service.fallbackNote)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(service.fallbackUsed ? .orange : .secondary)
             if let updated = service.lastUpdated {
                 Text("Updated \(updated.formatted(.relative(presentation: .named)))")
                     .font(.caption2)
@@ -332,27 +338,10 @@ struct RainfallCalendarView: View {
         guard let lat = latitude, let lon = longitude else { return }
         await service.load(
             year: year,
+            vineyardId: store.selectedVineyardId,
             latitude: lat,
             longitude: lon,
-            providerLabel: resolvedProviderLabel()
-        )
-    }
-
-    private func resolvedProviderLabel() -> String {
-        guard let vid = store.selectedVineyardId else {
-            return "Source: Automatic Forecast / Historical Weather"
-        }
-        let status = WeatherProviderResolver.resolve(
-            for: vid,
             weatherStationId: store.settings.weatherStationId
         )
-        switch status.provider {
-        case .davis:
-            return "Source: Davis WeatherLink"
-        case .wunderground:
-            return "Source: Weather Underground"
-        case .automatic:
-            return "Source: Automatic Forecast / Historical Weather"
-        }
     }
 }

@@ -21,6 +21,12 @@ struct IrrigationRecommendationView: View {
     @State private var lastUpdated: Date?
     @State private var didAutoLoad: Bool = false
 
+    // Recent actual rainfall (preferring Davis WeatherLink when configured).
+    @State private var recentRainResult: RainfallHistoryResult?
+    @State private var recentRainDays: Int = 7
+    @State private var includeRecentActualRain: Bool = true
+    @State private var isLoadingRecentRain: Bool = false
+
     private let durationOptions: [Int] = [3, 5, 7, 14]
 
     @FocusState private var focusedField: Field?
@@ -68,8 +74,19 @@ struct IrrigationRecommendationView: View {
         }
     }
 
+    /// Total recent actual rainfall (mm) eligible to offset the deficit.
+    /// Only counts when the toggle is on and we actually have data.
+    private var recentActualRainOffsetMm: Double {
+        guard includeRecentActualRain, let r = recentRainResult else { return 0 }
+        return r.dailyMm.values.reduce(0, +)
+    }
+
     private var result: IrrigationRecommendationResult? {
-        IrrigationCalculator.calculate(forecastDays: forecastDays, settings: settings)
+        IrrigationCalculator.calculate(
+            forecastDays: forecastDays,
+            settings: settings,
+            recentActualRainMm: recentActualRainOffsetMm
+        )
     }
 
     private var missingItems: [String] {
@@ -93,6 +110,7 @@ struct IrrigationRecommendationView: View {
                 missingSetupSection
             }
             recommendationSection
+            recentRainSection
             rainfallCalendarSection
             blockSection
             forecastControlSection
@@ -122,6 +140,9 @@ struct IrrigationRecommendationView: View {
                 if forecastService.forecast == nil, latitude != nil, longitude != nil {
                     Task { await loadForecast() }
                 }
+                if recentRainResult == nil, latitude != nil, longitude != nil {
+                    Task { await loadRecentRainfall() }
+                }
             }
         }
         .onChange(of: kcText) { _, _ in persistParameters() }
@@ -136,6 +157,11 @@ struct IrrigationRecommendationView: View {
             persistForecastDuration(newValue)
             if latitude != nil, longitude != nil {
                 Task { await loadForecast() }
+            }
+        }
+        .onChange(of: recentRainDays) { _, _ in
+            if latitude != nil, longitude != nil {
+                Task { await loadRecentRainfall() }
             }
         }
     }
@@ -193,6 +219,88 @@ struct IrrigationRecommendationView: View {
             }
             .padding(.vertical, 4)
         }
+    }
+
+    // MARK: - Recent actual rainfall
+
+    @ViewBuilder
+    private var recentRainSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: (recentRainResult?.isMeasured ?? false)
+                                      ? "sensor.tag.radiowaves.forward.fill"
+                                      : "cloud.rain.fill")
+                        .foregroundStyle((recentRainResult?.isMeasured ?? false) ? VineyardTheme.leafGreen : Color.accentColor)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(recentRainHeading)
+                            .font(.subheadline.weight(.semibold))
+                        Text(recentRainSourceLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    if isLoadingRecentRain {
+                        ProgressView()
+                    } else {
+                        Button {
+                            Task { await loadRecentRainfall() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+
+                Picker("Window", selection: $recentRainDays) {
+                    Text("24h").tag(1)
+                    Text("48h").tag(2)
+                    Text("7d").tag(7)
+                    Text("14d").tag(14)
+                }
+                .pickerStyle(.segmented)
+
+                if let warn = recentRainResult?.fallbackReason, recentRainResult?.fallbackUsed == true {
+                    Text(warn)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+
+                Toggle(isOn: $includeRecentActualRain) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Include recent actual rain")
+                            .font(.subheadline)
+                        Text(includeRecentActualRain
+                             ? "Subtracted from forecast deficit (after rainfall effectiveness)."
+                             : "Recent actual rain is shown but not used in the calculation.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tint(VineyardTheme.leafGreen)
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Recent Actual Rainfall")
+        }
+    }
+
+    private var recentRainHeading: String {
+        guard let r = recentRainResult else {
+            return isLoadingRecentRain ? "Loading recent rainfall…" : "Recent rainfall: —"
+        }
+        let mm = r.dailyMm.values.reduce(0, +)
+        let label = recentRainDays == 1 ? "24h" : (recentRainDays == 2 ? "48h" : "\(recentRainDays) days")
+        return String(format: "Recent rainfall: %.1f mm over last \(label)", mm)
+    }
+
+    private var recentRainSourceLabel: String {
+        guard let r = recentRainResult else { return "Source: —" }
+        return r.providerLabel
     }
 
     // MARK: - Rainfall calendar entry
@@ -294,6 +402,13 @@ struct IrrigationRecommendationView: View {
                 summaryStat("Crop use", String(format: "%.1f mm", result.forecastCropUseMm))
                 summaryStat("Eff. rain", String(format: "%.1f mm", result.forecastEffectiveRainMm))
                 summaryStat("Net deficit", String(format: "%.1f mm", result.netDeficitMm))
+            }
+
+            if result.recentActualRainMm > 0 {
+                Text(String(format: "Includes %.1f mm recent actual rain offset",
+                            result.recentActualRainMm))
+                    .font(.caption2)
+                    .foregroundStyle(VineyardTheme.leafGreen)
             }
 
             if let paddock = selectedPaddock,
@@ -628,6 +743,20 @@ struct IrrigationRecommendationView: View {
         if forecastService.forecast != nil {
             lastUpdated = Date()
         }
+    }
+
+    private func loadRecentRainfall() async {
+        guard let lat = latitude, let lon = longitude else { return }
+        isLoadingRecentRain = true
+        let result = await RainfallHistoryService.fetchRecentRainfall(
+            vineyardId: store.selectedVineyardId,
+            latitude: lat,
+            longitude: lon,
+            days: recentRainDays,
+            weatherStationId: store.settings.weatherStationId
+        )
+        recentRainResult = result
+        isLoadingRecentRain = false
     }
 
     private func applyPaddockDefaults() {

@@ -1,11 +1,8 @@
 import Foundation
 
-/// Fetches a year's worth of daily rainfall (mm) for the vineyard location.
-///
-/// Phase 1 uses the Open-Meteo Archive API for historical daily rainfall.
-/// The resolved provider label (Davis / Weather Underground / Automatic) is
-/// preserved so the UI can show the configured source even when historical
-/// values are filled by the Open-Meteo fallback.
+/// Fetches a year's worth of daily rainfall (mm) for the vineyard location,
+/// preferring the configured local weather station (Davis WeatherLink) and
+/// falling back gracefully to Open-Meteo Archive.
 @MainActor
 @Observable
 final class RainfallCalendarService {
@@ -17,14 +14,17 @@ final class RainfallCalendarService {
     var providerLabel: String = "Source: Automatic Forecast / Historical Weather"
     var fallbackNote: String = "Daily history via Open-Meteo Archive"
     var lastUpdated: Date?
+    var fallbackUsed: Bool = false
+    var stationName: String?
+    var isMeasured: Bool = false
 
     func load(year: Int,
+              vineyardId: UUID?,
               latitude: Double,
               longitude: Double,
-              providerLabel: String) async {
+              weatherStationId: String?) async {
         isLoading = true
         errorMessage = nil
-        self.providerLabel = providerLabel
         defer { isLoading = false }
 
         self.year = year
@@ -45,64 +45,30 @@ final class RainfallCalendarService {
         let end = min(dec31, today)
 
         if end < jan1 {
-            // Year is entirely in the future.
             self.dailyRainMm = [:]
             self.lastUpdated = Date()
             return
         }
 
-        let fmt = DateFormatter()
-        fmt.calendar = cal
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = cal.timeZone
-        fmt.dateFormat = "yyyy-MM-dd"
-        let startStr = fmt.string(from: jan1)
-        let endStr = fmt.string(from: end)
+        let result = await RainfallHistoryService.fetchDailyRainfall(
+            vineyardId: vineyardId,
+            latitude: latitude,
+            longitude: longitude,
+            from: jan1,
+            to: end,
+            weatherStationId: weatherStationId
+        )
 
-        let urlString = "https://archive-api.open-meteo.com/v1/archive?latitude=\(latitude)&longitude=\(longitude)&start_date=\(startStr)&end_date=\(endStr)&daily=precipitation_sum&timezone=auto"
-
-        guard let url = URL(string: urlString) else {
-            errorMessage = "Invalid rainfall URL"
-            return
-        }
-
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                errorMessage = "Could not load rainfall (HTTP \(code))"
-                return
-            }
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let daily = json["daily"] as? [String: Any],
-                  let times = daily["time"] as? [String],
-                  let rains = daily["precipitation_sum"] as? [Any] else {
-                errorMessage = "Could not parse rainfall response"
-                return
-            }
-
-            var map: [Date: Double] = [:]
-            let count = min(times.count, rains.count)
-            for i in 0..<count {
-                guard let d = fmt.date(from: times[i]) else { continue }
-                if let value = Self.parse(rains[i]) {
-                    map[cal.startOfDay(for: d)] = value
-                }
-            }
-            self.dailyRainMm = map
-            self.lastUpdated = Date()
-        } catch {
-            errorMessage = "Could not load rainfall: \(error.localizedDescription)"
-        }
-    }
-
-    private static func parse(_ value: Any) -> Double? {
-        if let d = value as? Double { return d }
-        if let i = value as? Int { return Double(i) }
-        if let n = value as? NSNumber { return n.doubleValue }
-        if let s = value as? String { return Double(s) }
-        if value is NSNull { return nil }
-        return nil
+        self.dailyRainMm = result.dailyMm
+        self.providerLabel = result.providerLabel
+        self.stationName = result.stationName
+        self.isMeasured = result.isMeasured
+        self.fallbackUsed = result.fallbackUsed
+        self.fallbackNote = result.fallbackReason
+            ?? (result.isMeasured
+                ? "Daily totals from station archive"
+                : "Daily history via Open-Meteo Archive")
+        self.lastUpdated = Date()
     }
 }
 

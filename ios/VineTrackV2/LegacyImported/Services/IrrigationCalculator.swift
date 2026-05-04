@@ -60,6 +60,9 @@ nonisolated struct IrrigationRecommendationResult: Sendable, Hashable {
     let dailyBreakdown: [DailyIrrigationBreakdown]
     let forecastCropUseMm: Double
     let forecastEffectiveRainMm: Double
+    /// Recent measured/actual rainfall fed into the calculation as a soil
+    /// moisture credit. Zero when no actual-rain offset is applied.
+    let recentActualRainMm: Double
     let netDeficitMm: Double
     let grossIrrigationMm: Double
     let recommendedIrrigationHours: Double
@@ -69,7 +72,8 @@ nonisolated struct IrrigationRecommendationResult: Sendable, Hashable {
 nonisolated enum IrrigationCalculator {
     static func calculate(
         forecastDays: [ForecastDay],
-        settings: IrrigationSettings
+        settings: IrrigationSettings,
+        recentActualRainMm: Double = 0
     ) -> IrrigationRecommendationResult? {
         guard !forecastDays.isEmpty else { return nil }
         guard settings.irrigationApplicationRateMmPerHour > 0 else { return nil }
@@ -104,7 +108,11 @@ nonisolated enum IrrigationCalculator {
             totalDeficit += dailyDeficitMm
         }
 
-        let adjustedNetDeficitMm = max(0, totalDeficit - settings.soilMoistureBufferMm)
+        // Subtract recent measured rainfall (capped at calc deficit) before
+        // soil-buffer offset, so users with Davis stations don't over-irrigate
+        // after a recent storm.
+        let actualRainOffset = max(0, recentActualRainMm * (settings.rainfallEffectivenessPercent / 100.0))
+        let adjustedNetDeficitMm = max(0, totalDeficit - settings.soilMoistureBufferMm - actualRainOffset)
         let targetNetIrrigationMm = adjustedNetDeficitMm * replacement
         let grossIrrigationMm = targetNetIrrigationMm / irrEff
         let hours = grossIrrigationMm / settings.irrigationApplicationRateMmPerHour
@@ -114,6 +122,7 @@ nonisolated enum IrrigationCalculator {
             dailyBreakdown: breakdown,
             forecastCropUseMm: totalCropUse,
             forecastEffectiveRainMm: totalEffectiveRain,
+            recentActualRainMm: actualRainOffset,
             netDeficitMm: adjustedNetDeficitMm,
             grossIrrigationMm: grossIrrigationMm,
             recommendedIrrigationHours: hours,

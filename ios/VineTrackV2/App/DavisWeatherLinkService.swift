@@ -47,6 +47,16 @@ nonisolated struct DavisSensorSummary: Sendable, Hashable, Codable {
     )
 }
 
+/// Daily rainfall totals (mm) aggregated from WeatherLink v2 historic
+/// archive records. Keys are start-of-day in `Calendar.current`.
+nonisolated struct DavisDailyRainfall: Sendable, Hashable {
+    let dailyMm: [Date: Double]
+    let totalMm: Double
+    let recordCount: Int
+    let coveredFrom: Date
+    let coveredTo: Date
+}
+
 nonisolated struct DavisCurrentConditions: Sendable, Hashable {
     let stationId: String
     let generatedAt: Date
@@ -336,11 +346,18 @@ nonisolated enum DavisWeatherLinkService {
         )
     }
 
-    private static func get(path: String, apiKey: String, apiSecret: String) async throws -> Data {
+    private static func get(
+        path: String,
+        apiKey: String,
+        apiSecret: String,
+        extraQuery: [URLQueryItem] = []
+    ) async throws -> Data {
         guard var components = URLComponents(string: baseURL + path) else {
             throw DavisWeatherLinkError.network("Invalid URL")
         }
-        components.queryItems = [URLQueryItem(name: "api-key", value: apiKey)]
+        var items: [URLQueryItem] = [URLQueryItem(name: "api-key", value: apiKey)]
+        items.append(contentsOf: extraQuery)
+        components.queryItems = items
         guard let url = components.url else {
             throw DavisWeatherLinkError.network("Invalid URL")
         }
@@ -367,6 +384,170 @@ nonisolated enum DavisWeatherLinkService {
             throw DavisWeatherLinkError.http(http.statusCode)
         }
         return data
+    }
+
+    // MARK: - Historic rainfall
+
+    /// Per WeatherLink v2 docs, the historic endpoint accepts a window of up
+    /// to 24 hours per call. We chunk longer windows into 24h calls.
+    private static let historicChunkSeconds: TimeInterval = 24 * 60 * 60
+
+    /// Fetches archive (interval) rainfall and aggregates to daily totals (mm)
+    /// using `Calendar.current` (device timezone). Splits the requested window
+    /// into 24-hour chunks to satisfy the WeatherLink v2 historic limit.
+    ///
+    /// Cumulative running totals (`rainfall_year_*`, `rainfall_monthly_*`,
+    /// `rainfall_daily_*`, `rainfall_storm_*`) are deliberately ignored — only
+    /// per-interval `rainfall_mm` / `rainfall_in` fields are summed.
+    static func fetchDailyRainfall(
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        from: Date,
+        to: Date,
+        maxConcurrent: Int = 4
+    ) async throws -> DavisDailyRainfall {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSecret = apiSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty, !trimmedSecret.isEmpty, !stationId.isEmpty else {
+            throw DavisWeatherLinkError.missingCredentials
+        }
+        guard from < to else {
+            return DavisDailyRainfall(dailyMm: [:], totalMm: 0, recordCount: 0,
+                                      coveredFrom: from, coveredTo: to)
+        }
+
+        var chunks: [(start: Date, end: Date)] = []
+        var cur = from
+        while cur < to {
+            let next = min(cur.addingTimeInterval(historicChunkSeconds), to)
+            chunks.append((cur, next))
+            cur = next
+        }
+
+        let limit = max(1, min(maxConcurrent, 6))
+        var perRecord: [(ts: Date, mm: Double)] = []
+
+        try await withThrowingTaskGroup(of: [(Date, Double)].self) { group in
+            var index = 0
+            var inFlight = 0
+            while index < chunks.count {
+                while inFlight < limit && index < chunks.count {
+                    let chunk = chunks[index]
+                    index += 1
+                    inFlight += 1
+                    group.addTask {
+                        try await fetchHistoricRainfallChunk(
+                            apiKey: trimmedKey,
+                            apiSecret: trimmedSecret,
+                            stationId: stationId,
+                            startEpoch: Int(chunk.start.timeIntervalSince1970),
+                            endEpoch: Int(chunk.end.timeIntervalSince1970)
+                        )
+                    }
+                }
+                if let res = try await group.next() {
+                    perRecord.append(contentsOf: res)
+                    inFlight -= 1
+                }
+            }
+            for try await res in group {
+                perRecord.append(contentsOf: res)
+            }
+        }
+
+        let cal = Calendar.current
+        var daily: [Date: Double] = [:]
+        for (ts, mm) in perRecord {
+            let key = cal.startOfDay(for: ts)
+            daily[key, default: 0] += mm
+        }
+        let total = daily.values.reduce(0, +)
+        return DavisDailyRainfall(
+            dailyMm: daily,
+            totalMm: total,
+            recordCount: perRecord.count,
+            coveredFrom: from,
+            coveredTo: to
+        )
+    }
+
+    /// Convenience: total rainfall for the last `days` days plus the daily
+    /// breakdown.
+    static func fetchRecentRainfall(
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        days: Int
+    ) async throws -> DavisDailyRainfall {
+        let cal = Calendar.current
+        let to = Date()
+        let startOfToday = cal.startOfDay(for: to)
+        let from = cal.date(byAdding: .day, value: -max(1, days), to: startOfToday)
+            ?? to.addingTimeInterval(-Double(max(1, days)) * 86400)
+        return try await fetchDailyRainfall(
+            apiKey: apiKey,
+            apiSecret: apiSecret,
+            stationId: stationId,
+            from: from,
+            to: to
+        )
+    }
+
+    private static func fetchHistoricRainfallChunk(
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        startEpoch: Int,
+        endEpoch: Int
+    ) async throws -> [(Date, Double)] {
+        let extra = [
+            URLQueryItem(name: "start-timestamp", value: String(startEpoch)),
+            URLQueryItem(name: "end-timestamp", value: String(endEpoch))
+        ]
+        let data = try await get(
+            path: "/historic/\(stationId)",
+            apiKey: apiKey,
+            apiSecret: apiSecret,
+            extraQuery: extra
+        )
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let sensors = json["sensors"] as? [[String: Any]] else {
+            throw DavisWeatherLinkError.decoding("Missing 'sensors' array in historic")
+        }
+        return parseHistoricRainfall(sensorsArr: sensors)
+    }
+
+    /// Parses interval rainfall fields from a WeatherLink v2 historic
+    /// response. Returns `(timestamp, mm)` per archive record.
+    static func parseHistoricRainfall(sensorsArr: [[String: Any]]) -> [(Date, Double)] {
+        var out: [(Date, Double)] = []
+        for sensor in sensorsArr {
+            guard let dataArr = sensor["data"] as? [[String: Any]] else { continue }
+            for entry in dataArr {
+                guard let ts = parseDouble(entry["ts"] ?? 0), ts > 0 else { continue }
+                var mm: Double?
+                // Prefer metric per-interval field, then imperial.
+                if let v = parseDouble(entry["rainfall_mm"] ?? 0),
+                   !isCumulativeFieldPresent(entry: entry, preferredKey: "rainfall_mm") {
+                    mm = v
+                } else if let v = parseDouble(entry["rainfall_in"] ?? 0),
+                          !isCumulativeFieldPresent(entry: entry, preferredKey: "rainfall_in") {
+                    mm = v * 25.4
+                }
+                if let value = mm, value.isFinite, value >= 0 {
+                    out.append((Date(timeIntervalSince1970: ts), value))
+                }
+            }
+        }
+        return out
+    }
+
+    /// Helper: ensures the field we read is the per-interval rain key, not a
+    /// running counter. Currently we only inspect the chosen key directly.
+    private static func isCumulativeFieldPresent(entry: [String: Any], preferredKey: String) -> Bool {
+        let key = preferredKey.lowercased()
+        return key.contains("year") || key.contains("month") || key.contains("daily") || key.contains("storm")
     }
 
     private static func parseDouble(_ value: Any) -> Double? {
