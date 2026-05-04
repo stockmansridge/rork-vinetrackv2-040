@@ -73,13 +73,21 @@ enum WeatherProviderResolver {
             }
             // Davis selected but not yet usable — surface a Davis-flavoured
             // fallback status so the UI can explain the situation.
+            let detail: String
+            if cfg.davisHasCredentials,
+               cfg.davisConnectionTested,
+               (cfg.davisStationId ?? "").isEmpty {
+                detail = "Connected — select a station"
+            } else if cfg.davisHasCredentials {
+                detail = "Credentials saved — run Test Connection"
+            } else {
+                detail = "Not configured — using Automatic Forecast fallback"
+            }
             return WeatherSourceStatus(
                 provider: .davis,
                 quality: .forecastOnly,
                 primaryLabel: "Davis WeatherLink",
-                detailLabel: cfg.davisHasCredentials
-                    ? "Configured — using Automatic Forecast fallback"
-                    : "Not configured — using Automatic Forecast fallback",
+                detailLabel: detail,
                 lastUpdated: cfg.lastSuccessfulUpdate
             )
 

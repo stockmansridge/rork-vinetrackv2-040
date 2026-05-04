@@ -273,15 +273,31 @@ enum RainfallHistoryService {
         var fallbackReason: String?
         switch configuredProvider {
         case .davis:
-            label = "Source: Automatic archive (Davis not connected)"
+            // Differentiate Davis setup states so the UI can give the user
+            // an actionable hint instead of a generic "not connected".
+            let cfg = vineyardId.map { WeatherProviderStore.shared.config(for: $0) }
+            label = "Source: Automatic archive"
             fallbackUsed = true
-            fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
+            if let cfg {
+                if cfg.davisHasCredentials,
+                   cfg.davisConnectionTested,
+                   (cfg.davisStationId ?? "").isEmpty {
+                    // Credentials tested OK but no station picked yet.
+                    fallbackReason = "Davis connected, but no station is selected. Select a Davis station to use local rainfall."
+                } else if cfg.davisHasCredentials, !cfg.davisConnectionTested {
+                    fallbackReason = "Davis credentials saved — run Test Connection to use local rainfall."
+                } else {
+                    fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
+                }
+            } else {
+                fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
+            }
         case .wunderground:
             // Reached when WU is selected but no station was supplied or
             // the device has no WU API key configured.
-            label = "Source: Automatic archive (WU not connected)"
+            label = "Source: Automatic archive"
             fallbackUsed = true
-            fallbackReason = "Using automatic archive rainfall. Connect Davis WeatherLink or Weather Underground for local station history."
+            fallbackReason = "Weather Underground selected but no station is set. Choose a WU station to use local rainfall."
         case .automatic:
             label = "Source: Automatic archive rainfall"
             fallbackUsed = true

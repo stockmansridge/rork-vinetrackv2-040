@@ -438,6 +438,34 @@ struct WeatherDataSettingsView: View {
                     }
                 }
                 .disabled(!canEdit)
+            } else if config.davisHasCredentials, config.davisConnectionTested {
+                // Connection tested but no station picked yet — emphasise.
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Label("Selected station", systemImage: "antenna.radiowaves.left.and.right")
+                        infoButton(.stationId)
+                        Spacer()
+                        Text("Station required")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.orange.opacity(0.18), in: .capsule)
+                            .foregroundStyle(.orange)
+                    }
+                    Text("Choose which Davis station VineTrack should use for rainfall, current conditions and leaf wetness.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button {
+                        showDavisStationPicker = true
+                    } label: {
+                        Label("Choose station", systemImage: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                    .disabled(!canEdit || (config.davisAvailableStations.isEmpty && davisStations.isEmpty))
+                }
             } else {
                 HStack {
                     Text("Station selection")
@@ -494,9 +522,12 @@ struct WeatherDataSettingsView: View {
                 }
                 .disabled(!canEdit || !config.davisHasCredentials || isTestingDavis)
                 if let msg = davisTestMessage, !msg.isEmpty {
+                    let needsStation = davisTestSucceeded
+                        && config.davisConnectionTested
+                        && (config.davisStationId ?? "").isEmpty
                     Text(msg)
                         .font(.caption2)
-                        .foregroundStyle(davisTestSucceeded ? .green : .secondary)
+                        .foregroundStyle(needsStation ? .orange : (davisTestSucceeded ? .green : .secondary))
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("Verifies your WeatherLink account and loads available stations.")
@@ -876,7 +907,9 @@ struct WeatherDataSettingsView: View {
                     ? "Connected to WeatherLink. Measured leaf wetness available."
                     : "Connected to WeatherLink. No leaf wetness sensor detected — using estimated wetness."
             } else if c.davisStationId == nil {
-                davisTestMessage = "Connected. Select a station to detect sensors."
+                davisTestMessage = "Connected. Select a station to finish setup."
+                // Auto-present the picker so the next step is obvious.
+                showDavisStationPicker = true
             } else {
                 davisTestMessage = "Connected to WeatherLink."
             }
