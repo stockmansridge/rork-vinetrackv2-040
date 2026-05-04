@@ -18,8 +18,18 @@ struct WeatherDataSettingsView: View {
     @State private var showDavisStationPicker: Bool = false
     @State private var showClearDavisCacheConfirm: Bool = false
     @State private var davisCacheClearedMessage: String?
+    @State private var vineyardIntegration: VineyardWeatherIntegration?
+    @State private var isLoadingVineyardIntegration: Bool = false
+    @State private var vineyardIntegrationError: String?
+    @State private var showMigratePrompt: Bool = false
+    @State private var isMigrating: Bool = false
+    @State private var migrationMessage: String?
+
+    private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
+        = SupabaseVineyardWeatherIntegrationRepository()
 
     private var canEdit: Bool { accessControl.canChangeSettings }
+    private var isOperator: Bool { !canEdit }
 
     enum DavisStatus: Equatable {
         case notConfigured
@@ -75,7 +85,7 @@ struct WeatherDataSettingsView: View {
             case .apiKey:
                 return "Davis WeatherLink v2 API details are created from your WeatherLink account page. The API Key identifies your account connection and is safe to display after saving.\n\nTo generate one:\n1. Sign in to weatherlink.com.\n2. Open Account Settings.\n3. Tap ‘Generate v2 Key’.\n4. Copy the API Key into VineTrack."
             case .apiSecret:
-                return "The API Secret authorises access to your Davis WeatherLink data and should be kept private. VineTrack stores it securely on this device using the iOS Keychain — it is never shared with other vineyard members or uploaded in plain text.\n\nGenerate it alongside the API Key from Account Settings → Generate v2 Key on weatherlink.com."
+                return "The API Secret authorises access to your Davis WeatherLink data. VineTrack stores it as part of this vineyard's shared weather integration so every member uses the same station for rainfall, current conditions and disease risk. Only owners and managers can view or change credentials; operators see the configured station and status without secrets.\n\nGenerate the secret alongside the API Key from Account Settings → Generate v2 Key on weatherlink.com."
             case .stationId:
                 return "VineTrack loads stations directly from WeatherLink after a successful Test Connection. If your account has more than one station, you can pick the correct vineyard station from the list. The Station ID is read from the API — you don't need to enter it manually."
             }
@@ -87,6 +97,10 @@ struct WeatherDataSettingsView: View {
     var body: some View {
         Form {
             headerSection
+            if showMigratePrompt && canEdit { migrationPromptSection }
+            if let msg = migrationMessage, !msg.isEmpty {
+                Section { Text(msg).font(.caption).foregroundStyle(.secondary) }
+            }
             currentSourceSection
 
             forecastSourceSection
@@ -181,6 +195,50 @@ struct WeatherDataSettingsView: View {
             Text("VineTrack uses weather data for irrigation advice, spray records, disease risk alerts and weather warnings. The app works automatically using forecast data, but you can connect a local weather station for more accurate vineyard conditions.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private var migrationPromptSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .font(.title3)
+                        .foregroundStyle(.orange)
+                        .frame(width: 32, height: 32)
+                        .background(Color.orange.opacity(0.15), in: .rect(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Move Davis WeatherLink setup to this vineyard?")
+                            .font(.subheadline.weight(.semibold))
+                        Text("This device has Davis credentials, but they are not yet shared with other vineyard members. Move them to the vineyard so every member sees the same rainfall, station and disease-risk data.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                HStack {
+                    Button {
+                        Task { await runMigrationToVineyard() }
+                    } label: {
+                        HStack {
+                            if isMigrating { ProgressView().controlSize(.small) }
+                            Text(isMigrating ? "Moving…" : "Move to vineyard")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                    .disabled(isMigrating)
+
+                    Button("Not now") { showMigratePrompt = false }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Vineyard sharing")
         }
     }
 
@@ -375,7 +433,9 @@ struct WeatherDataSettingsView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .frame(width: 22)
-                Text("Davis credentials are stored securely on this device. They are not shared with other vineyard members.")
+                Text(canEdit
+                    ? "Davis WeatherLink is configured for this vineyard. Owners and managers can manage the station connection. All vineyard users use the same weather source for consistent rainfall and disease-risk data."
+                    : "Davis WeatherLink is managed by your vineyard owner or manager. You can see the selected station and source status, but cannot view or change credentials.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -684,7 +744,7 @@ struct WeatherDataSettingsView: View {
         } header: {
             Text("Davis WeatherLink")
         } footer: {
-            Text("Credentials are stored securely on this device using the iOS Keychain and are not shared with other vineyard members.")
+            Text("Credentials are stored as part of this vineyard's shared weather integration. All members use the same station; only owners and managers can change them.")
         }
     }
 
@@ -722,8 +782,9 @@ struct WeatherDataSettingsView: View {
             .padding(.vertical, 4)
 
             VStack(alignment: .leading, spacing: 6) {
-                Label("Your API Secret is stored securely on this device using Keychain.", systemImage: "lock.shield")
-                Label("It is not shared with other vineyard members.", systemImage: "person.2.slash")
+                Label("Your API Secret is encrypted and stored as part of this vineyard's shared weather integration.", systemImage: "lock.shield")
+                Label("All vineyard members see the same station and rainfall data.", systemImage: "person.3.fill")
+                Label("Only owners and managers can view or replace credentials.", systemImage: "person.badge.key")
                 Label("Station ID is selected automatically after connection where possible.", systemImage: "antenna.radiowaves.left.and.right")
                 Label("If your station has a leaf wetness sensor, VineTrack can use measured wetness for disease risk.", systemImage: "drop.fill")
                 Label("If no leaf wetness sensor is detected, VineTrack will continue using estimated wetness.", systemImage: "drop")
@@ -827,13 +888,142 @@ struct WeatherDataSettingsView: View {
     private func loadConfig() {
         guard let vid = vineyardId else { return }
         var c = WeatherProviderStore.shared.config(for: vid)
-        // Reconcile keychain state.
+        // Reconcile local keychain state for owner/manager direct fetches.
         c.davisHasCredentials = WeatherKeychain.hasCredentials
         if !c.davisHasCredentials {
             c.davisConnectionTested = false
         }
         config = c
         davisStations = c.davisAvailableStations
+        Task { await loadVineyardIntegration(for: vid) }
+    }
+
+    private func loadVineyardIntegration(for vineyardId: UUID) async {
+        isLoadingVineyardIntegration = true
+        defer { isLoadingVineyardIntegration = false }
+        do {
+            let integ = try await integrationRepository.fetch(
+                vineyardId: vineyardId,
+                provider: "davis_weatherlink"
+            )
+            vineyardIntegration = integ
+            vineyardIntegrationError = nil
+            applyIntegrationToConfig(integ)
+            // Offer the migration prompt if this device has Keychain creds
+            // but the vineyard has none yet, and the caller may write.
+            if canEdit,
+               WeatherKeychain.hasCredentials,
+               (integ?.hasApiSecret != true) {
+                showMigratePrompt = true
+            }
+        } catch {
+            vineyardIntegration = nil
+            vineyardIntegrationError = error.localizedDescription
+        }
+    }
+
+    private func applyIntegrationToConfig(_ integ: VineyardWeatherIntegration?) {
+        guard let vid = vineyardId else { return }
+        var c = config
+        if let integ {
+            c.davisIsVineyardShared = true
+            c.davisVineyardHasServerCredentials = integ.hasApiSecret
+            c.davisVineyardConfiguredBy = integ.configuredBy
+            c.davisVineyardUpdatedAt = integ.updatedAt
+            // Shared station / sensor metadata is the source of truth
+            // for every member.
+            if let sid = integ.stationId, !sid.isEmpty {
+                c.davisStationId = sid
+                c.davisStationName = integ.stationName
+                c.davisHasLeafWetnessSensor = integ.hasLeafWetness
+                c.davisDetectedSensors = integ.detectedSensors
+                c.davisConnectionTested = integ.lastTestStatus == "ok"
+                    || integ.lastTestStatus == nil ? true : c.davisConnectionTested
+            }
+            // Operators have no local creds but should still see the source
+            // as configured for read-only display.
+            if isOperator { c.davisHasCredentials = false }
+        } else {
+            c.davisIsVineyardShared = false
+            c.davisVineyardHasServerCredentials = false
+            c.davisVineyardConfiguredBy = nil
+            c.davisVineyardUpdatedAt = nil
+        }
+        config = c
+        WeatherProviderStore.shared.save(c, for: vid)
+    }
+
+    /// Pushes the latest station + detected sensor state to the vineyard
+    /// integration so every member sees the same source. No-op if the
+    /// caller doesn't have edit rights or there's no Davis station yet.
+    private func pushStationStateToVineyard() async {
+        guard canEdit, let vid = vineyardId,
+              let sid = config.davisStationId, !sid.isEmpty else { return }
+        do {
+            let payload = VineyardWeatherIntegrationSave(
+                p_vineyard_id: vid,
+                p_provider: "davis_weatherlink",
+                p_api_key: nil,
+                p_api_secret: nil,
+                p_station_id: sid,
+                p_station_name: config.davisStationName,
+                p_station_latitude: nil,
+                p_station_longitude: nil,
+                p_has_leaf_wetness: config.davisHasLeafWetnessSensor,
+                p_has_rain: true,
+                p_has_wind: nil,
+                p_has_temperature_humidity: nil,
+                p_detected_sensors: config.davisDetectedSensors,
+                p_last_tested_at: config.davisLastTestSuccess,
+                p_last_test_status: "ok",
+                p_is_active: true
+            )
+            try await integrationRepository.save(payload)
+            // Refresh the local snapshot.
+            if let integ = try? await integrationRepository.fetch(
+                vineyardId: vid, provider: "davis_weatherlink"
+            ) {
+                vineyardIntegration = integ
+                applyIntegrationToConfig(integ)
+            }
+        } catch {
+            // Don't surface a hard error — local fetch path still works.
+        }
+    }
+
+    private func runMigrationToVineyard() async {
+        guard canEdit, let vid = vineyardId,
+              let apiKey = WeatherKeychain.get(.apiKey),
+              let apiSecret = WeatherKeychain.get(.apiSecret),
+              !apiKey.isEmpty, !apiSecret.isEmpty else { return }
+        isMigrating = true
+        defer { isMigrating = false }
+        do {
+            let payload = VineyardWeatherIntegrationSave(
+                p_vineyard_id: vid,
+                p_provider: "davis_weatherlink",
+                p_api_key: apiKey,
+                p_api_secret: apiSecret,
+                p_station_id: config.davisStationId,
+                p_station_name: config.davisStationName,
+                p_station_latitude: nil,
+                p_station_longitude: nil,
+                p_has_leaf_wetness: config.davisHasLeafWetnessSensor,
+                p_has_rain: true,
+                p_has_wind: nil,
+                p_has_temperature_humidity: nil,
+                p_detected_sensors: config.davisDetectedSensors,
+                p_last_tested_at: config.davisLastTestSuccess,
+                p_last_test_status: config.davisConnectionTested ? "ok" : nil,
+                p_is_active: true
+            )
+            try await integrationRepository.save(payload)
+            migrationMessage = "Davis setup moved to this vineyard. All members now use the same station."
+            showMigratePrompt = false
+            await loadVineyardIntegration(for: vid)
+        } catch {
+            migrationMessage = "Could not save vineyard integration — \(error.localizedDescription)"
+        }
     }
 
     private func persist() {
@@ -1002,6 +1192,7 @@ struct WeatherDataSettingsView: View {
 
             config = c
             persist()
+            await pushStationStateToVineyard()
             davisTestSucceeded = true
             if stations.count == 1 {
                 davisTestMessage = c.davisHasLeafWetnessSensor
@@ -1050,6 +1241,7 @@ struct WeatherDataSettingsView: View {
             c2.lastSuccessfulUpdate = cur.generatedAt
             config = c2
             persist()
+            await pushStationStateToVineyard()
             davisTestSucceeded = true
             davisTestMessage = c2.davisHasLeafWetnessSensor
                 ? "Station selected. Measured leaf wetness available."

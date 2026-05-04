@@ -132,6 +132,16 @@ nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
     var davisAvailableStations: [DavisStation] = []
     var lastSuccessfulUpdate: Date? = nil
 
+    // Vineyard-shared metadata (populated from
+    // `vineyard_weather_integrations` via the role-aware RPC). When true,
+    // station + sensor info is the shared source of truth for every member
+    // of this vineyard. Credentials are still required on the owner /
+    // manager device(s) that perform live fetches.
+    var davisIsVineyardShared: Bool = false
+    var davisVineyardHasServerCredentials: Bool = false
+    var davisVineyardConfiguredBy: UUID? = nil
+    var davisVineyardUpdatedAt: Date? = nil
+
     static let `default` = WeatherProviderConfig()
 
     /// Compatibility shim: map between the legacy single-provider field
@@ -170,6 +180,10 @@ nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
         case davisConnectionTested
         case davisAvailableStations
         case lastSuccessfulUpdate
+        case davisIsVineyardShared
+        case davisVineyardHasServerCredentials
+        case davisVineyardConfiguredBy
+        case davisVineyardUpdatedAt
     }
 
     init() {}
@@ -203,6 +217,10 @@ nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
         self.davisConnectionTested = (try? c.decode(Bool.self, forKey: .davisConnectionTested)) ?? false
         self.davisAvailableStations = (try? c.decode([DavisStation].self, forKey: .davisAvailableStations)) ?? []
         self.lastSuccessfulUpdate = try? c.decodeIfPresent(Date.self, forKey: .lastSuccessfulUpdate)
+        self.davisIsVineyardShared = (try? c.decode(Bool.self, forKey: .davisIsVineyardShared)) ?? false
+        self.davisVineyardHasServerCredentials = (try? c.decode(Bool.self, forKey: .davisVineyardHasServerCredentials)) ?? false
+        self.davisVineyardConfiguredBy = try? c.decodeIfPresent(UUID.self, forKey: .davisVineyardConfiguredBy)
+        self.davisVineyardUpdatedAt = try? c.decodeIfPresent(Date.self, forKey: .davisVineyardUpdatedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -224,6 +242,10 @@ nonisolated struct WeatherProviderConfig: Codable, Sendable, Equatable {
         try c.encode(davisConnectionTested, forKey: .davisConnectionTested)
         try c.encode(davisAvailableStations, forKey: .davisAvailableStations)
         try c.encodeIfPresent(lastSuccessfulUpdate, forKey: .lastSuccessfulUpdate)
+        try c.encode(davisIsVineyardShared, forKey: .davisIsVineyardShared)
+        try c.encode(davisVineyardHasServerCredentials, forKey: .davisVineyardHasServerCredentials)
+        try c.encodeIfPresent(davisVineyardConfiguredBy, forKey: .davisVineyardConfiguredBy)
+        try c.encodeIfPresent(davisVineyardUpdatedAt, forKey: .davisVineyardUpdatedAt)
     }
 }
 

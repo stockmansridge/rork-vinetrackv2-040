@@ -50,12 +50,22 @@ enum WeatherProviderResolver {
     static func resolve(for vineyardId: UUID, weatherStationId: String?) -> WeatherSourceStatus {
         let cfg = WeatherProviderStore.shared.config(for: vineyardId)
 
+        // A vineyard-shared Davis integration counts as a working local
+        // source for every member, even on devices that don't hold the
+        // credentials locally — fetches go through the server-side proxy.
+        let hasShared = cfg.davisIsVineyardShared
+            && cfg.davisVineyardHasServerCredentials
+            && (cfg.davisStationId?.isEmpty == false)
+
         switch cfg.provider {
         case .davis:
             // Only count as a working local source when the user actually
-            // tested the connection AND we picked a station back.
-            if cfg.davisHasCredentials,
-               cfg.davisConnectionTested,
+            // tested the connection AND we picked a station back, OR the
+            // vineyard has a shared, fully-configured Davis integration.
+            if (hasShared) ||
+               (cfg.davisHasCredentials
+                && cfg.davisConnectionTested
+                && (cfg.davisStationId?.isEmpty == false)),
                let stationId = cfg.davisStationId,
                !stationId.isEmpty {
                 let quality: WeatherSourceStatus.Quality =
