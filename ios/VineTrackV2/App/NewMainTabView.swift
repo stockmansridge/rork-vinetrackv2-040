@@ -613,8 +613,6 @@ private struct NewHomeTabView: View {
         case "Yield Determination": return "Pruning bud-load"
         case "Manage Users": return "Team & roles"
         case "Vineyard Setup": return "Blocks & rows"
-        case "Audit Log": return "Activity history"
-        case "Full Overview": return "All metrics"
         default: return ""
         }
     }
@@ -672,18 +670,6 @@ private struct NewHomeTabView: View {
                         VineyardSetupHubView()
                     } label: {
                         iconTile(title: "Vineyard Setup", icon: "gearshape.2.fill", tint: .gray)
-                    }
-                    .buttonStyle(.plain)
-                    NavigationLink {
-                        OperationsHubView()
-                    } label: {
-                        iconTile(title: "Audit Log", icon: "doc.text.magnifyingglass", tint: .pink)
-                    }
-                    .buttonStyle(.plain)
-                    NavigationLink {
-                        OperationsHubView()
-                    } label: {
-                        iconTile(title: "Full Overview", icon: "chart.pie.fill", tint: VineyardTheme.leafGreen)
                     }
                     .buttonStyle(.plain)
                 }
