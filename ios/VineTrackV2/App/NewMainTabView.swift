@@ -564,18 +564,6 @@ private struct NewHomeTabView: View {
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
-                    GrowthStageReportView()
-                } label: {
-                    iconTile(title: "Growth Stage Report", icon: "chart.line.uptrend.xyaxis", tint: VineyardTheme.leafGreen)
-                }
-                .buttonStyle(.plain)
-                NavigationLink {
-                    YieldHubView()
-                } label: {
-                    iconTile(title: "Yield Estimation", icon: "chart.bar.fill", tint: .orange)
-                }
-                .buttonStyle(.plain)
-                NavigationLink {
                     IrrigationRecommendationView()
                 } label: {
                     iconTile(title: "Irrigation Advisor", icon: "drop.fill", tint: .cyan)
@@ -588,9 +576,21 @@ private struct NewHomeTabView: View {
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
+                    YieldHubView()
+                } label: {
+                    iconTile(title: "Yield Estimation", icon: "chart.bar.fill", tint: .orange)
+                }
+                .buttonStyle(.plain)
+                NavigationLink {
                     YieldDeterminationCalculatorView()
                 } label: {
                     iconTile(title: "Yield Determination", icon: "scalemass.fill", tint: .purple)
+                }
+                .buttonStyle(.plain)
+                NavigationLink {
+                    GrowthStageReportView()
+                } label: {
+                    iconTile(title: "Growth Stage Report", icon: "chart.line.uptrend.xyaxis", tint: VineyardTheme.leafGreen)
                 }
                 .buttonStyle(.plain)
             }
