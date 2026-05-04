@@ -11,6 +11,7 @@ struct OnboardingView: View {
         let iconColor: Color
         let title: String
         let message: String
+        var assetImage: String? = nil
     }
 
     private let pages: [Page] = [
@@ -18,7 +19,8 @@ struct OnboardingView: View {
             icon: "leaf.fill",
             iconColor: VineyardTheme.leafGreen,
             title: "Welcome to VineTrack",
-            message: "Built by vignerons for vignerons — manage vineyard observations, spray records, irrigation, disease risk and team activity in one place."
+            message: "Built by vignerons for vignerons — manage vineyard observations, spray records, irrigation, disease risk and team activity in one place.",
+            assetImage: "vinetrack_logo"
         ),
         Page(
             icon: "mappin.and.ellipse",
@@ -85,9 +87,16 @@ struct OnboardingView: View {
                 Circle()
                     .fill(p.iconColor.opacity(0.15))
                     .frame(width: 140, height: 140)
-                Image(systemName: p.icon)
-                    .font(.system(size: 64, weight: .semibold))
-                    .foregroundStyle(p.iconColor)
+                if let asset = p.assetImage {
+                    Image(asset)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 110, height: 110)
+                } else {
+                    Image(systemName: p.icon)
+                        .font(.system(size: 64, weight: .semibold))
+                        .foregroundStyle(p.iconColor)
+                }
             }
             Text(p.title)
                 .font(.title.weight(.bold))
