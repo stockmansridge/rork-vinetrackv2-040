@@ -359,8 +359,69 @@ struct WeatherDataSettingsView: View {
 
     private var davisSection: some View {
         let savedAndNotEditing = config.davisHasCredentials && !isEditingDavisCredentials
+        let hasOrphanStation = !config.davisHasCredentials
+            && ((config.davisStationName?.isEmpty == false)
+                || (config.davisStationId?.isEmpty == false))
+
+        // TODO: Vineyard-shared weather station connections can be added later
+        // using encrypted/server-side credential storage. For now Davis API
+        // Key & API Secret live only in this device's iOS Keychain and are
+        // never written to Supabase or vineyard settings.
 
         return Section {
+            // Privacy / per-device notice
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "iphone.and.arrow.forward")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                Text("Davis credentials are stored securely on this device. They are not shared with other vineyard members.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+
+            // Orphan station — station metadata exists but no credentials on
+            // this device (e.g. signed in on a new device, or another team
+            // member). Surface a clear, actionable state.
+            if hasOrphanStation {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "key.slash")
+                            .font(.title3)
+                            .foregroundStyle(.orange)
+                            .frame(width: 32, height: 32)
+                            .background(Color.orange.opacity(0.15), in: .rect(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Davis station was previously selected, but credentials are not saved on this device.")
+                                .font(.subheadline.weight(.semibold))
+                            if let name = config.davisStationName, !name.isEmpty {
+                                Text("Last station: \(name)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Enter your Davis API Key and Secret below to reconnect on this device.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    Button {
+                        isEditingDavisCredentials = true
+                    } label: {
+                        Label("Enter Davis credentials", systemImage: "key.fill")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                    .disabled(!canEdit)
+                }
+                .padding(.vertical, 4)
+            }
+
             // 1. Saved status card on top
             if savedAndNotEditing {
                 savedStatusCard
