@@ -483,6 +483,20 @@ private struct BlockInfoCard: View {
                 blockStat(label: "Rows", value: "\(paddock.rows.count)")
             }
 
+            if paddock.litresPerHour != nil || paddock.intermediatePostCount != nil {
+                LazyVGrid(columns: [
+                    GridItem(.flexible()),
+                    GridItem(.flexible())
+                ], spacing: 8) {
+                    if let lph = paddock.litresPerHour {
+                        blockStat(label: "Block Flow", value: "\(formatLitres(lph)) L/Hr")
+                    }
+                    if let posts = paddock.intermediatePostCount {
+                        blockStat(label: "Int. Posts", value: "\(formatIntegerCount(posts))")
+                    }
+                }
+            }
+
             if let first = rowNumbers.first, let last = rowNumbers.last, first != last {
                 HStack(spacing: 4) {
                     Image(systemName: "number")
@@ -515,6 +529,19 @@ private struct BlockInfoCard: View {
             return String(format: "%.1fkm", meters / 1000)
         }
         return String(format: "%.0fm", meters)
+    }
+
+    private func formatLitres(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? String(format: "%.0f", value)
+    }
+
+    private func formatIntegerCount(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
 

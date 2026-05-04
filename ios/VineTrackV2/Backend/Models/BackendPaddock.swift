@@ -12,6 +12,7 @@ nonisolated struct BackendPaddock: Codable, Sendable, Identifiable {
     let rowLengthOverride: Double?
     let flowPerEmitter: Double?
     let emitterSpacing: Double?
+    let intermediatePostSpacing: Double?
     let budburstDate: Date?
     let floweringDate: Date?
     let veraisonDate: Date?
@@ -42,6 +43,7 @@ nonisolated struct BackendPaddock: Codable, Sendable, Identifiable {
         case rowLengthOverride = "row_length_override"
         case flowPerEmitter = "flow_per_emitter"
         case emitterSpacing = "emitter_spacing"
+        case intermediatePostSpacing = "intermediate_post_spacing"
         case budburstDate = "budburst_date"
         case floweringDate = "flowering_date"
         case veraisonDate = "veraison_date"
@@ -77,6 +79,7 @@ nonisolated struct BackendPaddockUpsert: Encodable, Sendable {
     let rowLengthOverride: Double?
     let flowPerEmitter: Double?
     let emitterSpacing: Double?
+    let intermediatePostSpacing: Double?
     let budburstDate: Date?
     let floweringDate: Date?
     let veraisonDate: Date?
@@ -102,6 +105,7 @@ nonisolated struct BackendPaddockUpsert: Encodable, Sendable {
         case rowLengthOverride = "row_length_override"
         case flowPerEmitter = "flow_per_emitter"
         case emitterSpacing = "emitter_spacing"
+        case intermediatePostSpacing = "intermediate_post_spacing"
         case budburstDate = "budburst_date"
         case floweringDate = "flowering_date"
         case veraisonDate = "veraison_date"
@@ -132,6 +136,7 @@ extension BackendPaddock {
             rowLengthOverride: paddock.rowLengthOverride,
             flowPerEmitter: paddock.flowPerEmitter,
             emitterSpacing: paddock.emitterSpacing,
+            intermediatePostSpacing: paddock.intermediatePostSpacing,
             budburstDate: paddock.budburstDate,
             floweringDate: paddock.floweringDate,
             veraisonDate: paddock.veraisonDate,
@@ -163,6 +168,7 @@ extension BackendPaddock {
             rowLengthOverride: rowLengthOverride,
             flowPerEmitter: flowPerEmitter,
             emitterSpacing: emitterSpacing,
+            intermediatePostSpacing: intermediatePostSpacing,
             varietyAllocations: varietyAllocations ?? [],
             budburstDate: budburstDate,
             floweringDate: floweringDate,

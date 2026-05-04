@@ -18,6 +18,7 @@ struct EditPaddockSheet: View {
     @State private var rowLengthOverride: String = ""
     @State private var flowPerEmitterText: String = ""
     @State private var emitterSpacingText: String = ""
+    @State private var intermediatePostSpacingText: String = ""
     @State private var varietyAllocations: [PaddockVarietyAllocation] = []
     @State private var budburstDate: Date = Date()
     @State private var hasBudburstDate: Bool = false
@@ -108,6 +109,9 @@ struct EditPaddockSheet: View {
                     }
                     if let spacing = paddock.emitterSpacing {
                         emitterSpacingText = String(format: "%.2f", spacing)
+                    }
+                    if let postSpacing = paddock.intermediatePostSpacing {
+                        intermediatePostSpacingText = String(format: "%.2f", postSpacing)
                     }
                     varietyAllocations = paddock.varietyAllocations
                     if let bd = paddock.budburstDate {
@@ -332,6 +336,11 @@ struct EditPaddockSheet: View {
 
     private var irrigationEmitterSpacing: Double? {
         guard let val = Double(emitterSpacingText), val > 0 else { return nil }
+        return val
+    }
+
+    private var intermediatePostSpacingValue: Double? {
+        guard let val = Double(intermediatePostSpacingText), val > 0 else { return nil }
         return val
     }
 
@@ -628,10 +637,42 @@ struct EditPaddockSheet: View {
                     .font(.subheadline)
                 Slider(value: $vineSpacing, in: 0.5...3.0, step: 0.05)
             }
+
+            HStack {
+                Text("Intermediate Post Spacing")
+                    .font(.subheadline)
+                Spacer()
+                TextField("0.00", text: $intermediatePostSpacingText)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 80)
+                    .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                Text("m")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let spacing = intermediatePostSpacingValue, spacing > 0 {
+                let total = paddock?.effectiveTotalRowLength ?? 0
+                let rowCountValue = max(rowCount, 0)
+                let rawPosts = Int(total / spacing)
+                let posts = max(0, rawPosts - 2 * rowCountValue)
+                if total > 0 {
+                    HStack {
+                        Label("Intermediate Posts", systemImage: "point.3.connected.trianglepath.dotted")
+                            .font(.subheadline)
+                            .foregroundStyle(VineyardTheme.earthBrown)
+                        Spacer()
+                        Text("\(posts)")
+                            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(VineyardTheme.earthBrown)
+                    }
+                }
+            }
         } header: {
-            Text("Vine Spacing")
+            Text("Vine & Trellis Spacing")
         } footer: {
-            Text("Distance between each vine along a row. Used to estimate total vine count.")
+            Text("Vine Spacing is used to estimate vine count. Intermediate Post Spacing is the distance (m) between trellis posts inside a row, excluding the two end posts per row.")
         }
     }
 
@@ -774,6 +815,7 @@ struct EditPaddockSheet: View {
             existing.rowLengthOverride = Double(rowLengthOverride)
             existing.flowPerEmitter = irrigationFlowPerEmitter
             existing.emitterSpacing = irrigationEmitterSpacing
+            existing.intermediatePostSpacing = intermediatePostSpacingValue
             existing.varietyAllocations = varietyAllocations
             existing.budburstDate = hasBudburstDate ? budburstDate : nil
             existing.floweringDate = hasFloweringDate ? floweringDate : nil
@@ -796,6 +838,7 @@ struct EditPaddockSheet: View {
                 rowLengthOverride: Double(rowLengthOverride),
                 flowPerEmitter: irrigationFlowPerEmitter,
                 emitterSpacing: irrigationEmitterSpacing,
+                intermediatePostSpacing: intermediatePostSpacingValue,
                 varietyAllocations: varietyAllocations,
                 budburstDate: hasBudburstDate ? budburstDate : nil,
                 floweringDate: hasFloweringDate ? floweringDate : nil,

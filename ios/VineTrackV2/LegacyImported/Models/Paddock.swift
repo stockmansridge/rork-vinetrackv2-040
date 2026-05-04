@@ -15,6 +15,7 @@ nonisolated struct Paddock: Codable, Identifiable, Sendable, Hashable {
     var rowLengthOverride: Double?
     var flowPerEmitter: Double?
     var emitterSpacing: Double?
+    var intermediatePostSpacing: Double?
     var varietyAllocations: [PaddockVarietyAllocation]
     var budburstDate: Date?
     var floweringDate: Date?
@@ -38,6 +39,7 @@ nonisolated struct Paddock: Codable, Identifiable, Sendable, Hashable {
         rowLengthOverride: Double? = nil,
         flowPerEmitter: Double? = nil,
         emitterSpacing: Double? = nil,
+        intermediatePostSpacing: Double? = nil,
         varietyAllocations: [PaddockVarietyAllocation] = [],
         budburstDate: Date? = nil,
         floweringDate: Date? = nil,
@@ -60,6 +62,7 @@ nonisolated struct Paddock: Codable, Identifiable, Sendable, Hashable {
         self.rowLengthOverride = rowLengthOverride
         self.flowPerEmitter = flowPerEmitter
         self.emitterSpacing = emitterSpacing
+        self.intermediatePostSpacing = intermediatePostSpacing
         self.varietyAllocations = varietyAllocations
         self.budburstDate = budburstDate
         self.floweringDate = floweringDate
@@ -71,7 +74,7 @@ nonisolated struct Paddock: Codable, Identifiable, Sendable, Hashable {
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
-        case id, vineyardId, name, polygonPoints, rows, rowDirection, rowWidth, rowOffset, vineSpacing, vineCountOverride, rowLengthOverride, flowPerEmitter, emitterSpacing, varietyAllocations, budburstDate, floweringDate, veraisonDate, harvestDate, plantingYear, calculationModeOverride, resetModeOverride
+        case id, vineyardId, name, polygonPoints, rows, rowDirection, rowWidth, rowOffset, vineSpacing, vineCountOverride, rowLengthOverride, flowPerEmitter, emitterSpacing, intermediatePostSpacing, varietyAllocations, budburstDate, floweringDate, veraisonDate, harvestDate, plantingYear, calculationModeOverride, resetModeOverride
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +92,7 @@ nonisolated struct Paddock: Codable, Identifiable, Sendable, Hashable {
         rowLengthOverride = try container.decodeIfPresent(Double.self, forKey: .rowLengthOverride)
         flowPerEmitter = try container.decodeIfPresent(Double.self, forKey: .flowPerEmitter)
         emitterSpacing = try container.decodeIfPresent(Double.self, forKey: .emitterSpacing)
+        intermediatePostSpacing = try container.decodeIfPresent(Double.self, forKey: .intermediatePostSpacing)
         varietyAllocations = try container.decodeIfPresent([PaddockVarietyAllocation].self, forKey: .varietyAllocations) ?? []
         budburstDate = try container.decodeIfPresent(Date.self, forKey: .budburstDate)
         floweringDate = try container.decodeIfPresent(Date.self, forKey: .floweringDate)
@@ -216,6 +220,15 @@ extension Paddock {
     var totalEmitters: Int? {
         guard let emitterSpacing, emitterSpacing > 0 else { return nil }
         return Int(effectiveTotalRowLength / emitterSpacing)
+    }
+
+    var intermediatePostCount: Int? {
+        guard let spacing = intermediatePostSpacing, spacing > 0 else { return nil }
+        let total = effectiveTotalRowLength
+        guard total > 0 else { return nil }
+        let rawPosts = Int(total / spacing)
+        let endPosts = 2 * rows.count
+        return max(0, rawPosts - endPosts)
     }
 
     var litresPerVinePerHour: Double? {
