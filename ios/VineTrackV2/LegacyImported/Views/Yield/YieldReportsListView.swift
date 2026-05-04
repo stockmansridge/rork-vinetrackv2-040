@@ -8,6 +8,7 @@ struct YieldReportsListView: View {
     @State private var historicalSortBy: HistoricalSort = .newest
     @State private var historicalFilterPaddock: UUID?
     @State private var recordPendingDeletion: HistoricalYieldRecord?
+    @State private var sessionPendingDeletion: YieldEstimationSession?
 
     private var paddocks: [Paddock] {
         store.orderedPaddocks.filter { $0.polygonPoints.count >= 3 }
@@ -156,6 +157,20 @@ struct YieldReportsListView: View {
         } message: { record in
             let title = record.season.isEmpty ? "\(record.year)" : record.season
             Text("This will permanently delete the \(title) historical yield record. This cannot be undone.")
+        }
+        .alert("Delete Estimation?", isPresented: Binding(
+            get: { sessionPendingDeletion != nil },
+            set: { if !$0 { sessionPendingDeletion = nil } }
+        ), presenting: sessionPendingDeletion) { session in
+            Button("Delete", role: .destructive) {
+                store.deleteYieldSession(session)
+                sessionPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                sessionPendingDeletion = nil
+            }
+        } message: { _ in
+            Text("Delete this yield estimation? This will remove sample sites and bunch counts for this job. This cannot be undone.")
         }
     }
 
@@ -338,6 +353,24 @@ struct YieldReportsListView: View {
             } else {
                 ForEach(sessions) { session in
                     sessionCard(session)
+                        .contextMenu {
+                            if accessControl?.canDelete ?? false {
+                                Button(role: .destructive) {
+                                    sessionPendingDeletion = session
+                                } label: {
+                                    Label("Delete Estimation", systemImage: "trash")
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if accessControl?.canDelete ?? false {
+                                Button(role: .destructive) {
+                                    sessionPendingDeletion = session
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
                 }
             }
         }

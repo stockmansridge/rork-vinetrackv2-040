@@ -3,6 +3,7 @@ import MapKit
 
 struct YieldEstimationView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(\.accessControl) private var accessControl
     @State private var viewModel = YieldEstimationViewModel()
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var showBunchCountSheet: Bool = false
@@ -17,6 +18,7 @@ struct YieldEstimationView: View {
     @State private var samplesPerHaText: String = ""
     @State private var showSampling: Bool = false
     @State private var showSampleList: Bool = false
+    @State private var showDeleteEstimationConfirm: Bool = false
 
     private var paddocks: [Paddock] {
         store.orderedPaddocks.filter { $0.polygonPoints.count >= 3 }
@@ -46,6 +48,10 @@ struct YieldEstimationView: View {
                 if viewModel.isGenerated {
                     if viewModel.isCompleted {
                         completedBanner
+                    }
+
+                    if (accessControl?.canDelete ?? false) && hasExistingSession {
+                        deleteEstimationButton
                     }
 
                     if !viewModel.isCompleted {
@@ -126,6 +132,14 @@ struct YieldEstimationView: View {
         }
         .navigationDestination(isPresented: $showSampling) {
             YieldSamplingNavigationView(viewModel: viewModel)
+        }
+        .alert("Delete Estimation?", isPresented: $showDeleteEstimationConfirm) {
+            Button("Delete", role: .destructive) {
+                deleteCurrentEstimation()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Delete this yield estimation? This will remove sample sites and bunch counts for this job. This cannot be undone.")
         }
         .onAppear {
             loadExistingSession()
@@ -578,6 +592,36 @@ struct YieldEstimationView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Delete Estimation
+
+    private var hasExistingSession: Bool {
+        guard let vid = store.selectedVineyardId else { return false }
+        return store.yieldSessions.contains(where: { $0.vineyardId == vid })
+    }
+
+    private var deleteEstimationButton: some View {
+        Button(role: .destructive) {
+            showDeleteEstimationConfirm = true
+        } label: {
+            Label("Delete Estimation", systemImage: "trash")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+        }
+        .buttonStyle(.bordered)
+        .tint(.red)
+    }
+
+    private func deleteCurrentEstimation() {
+        guard let vid = store.selectedVineyardId else { return }
+        if let existing = store.yieldSessions.first(where: { $0.vineyardId == vid }) {
+            store.deleteYieldSession(existing)
+        }
+        withAnimation(.smooth(duration: 0.3)) {
+            viewModel.resetForNewEstimation()
+        }
     }
 
     // MARK: - Generate Button
