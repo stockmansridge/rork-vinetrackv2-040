@@ -20,6 +20,7 @@ struct YieldSamplingNavigationView: View {
     @State private var showCompleteConfirmation: Bool = false
     @State private var showReport: Bool = false
     @State private var showSiteList: Bool = false
+    @AppStorage("yieldSamplingTipDismissed_v1") private var tipDismissed: Bool = false
     @FocusState private var bunchesFocused: Bool
 
     private let arrivedThresholdMetres: Double = 12
@@ -72,6 +73,12 @@ struct YieldSamplingNavigationView: View {
                 headerCard
                     .padding(.horizontal, 14)
                     .padding(.top, 10)
+                if !tipDismissed {
+                    firstUseTip
+                        .padding(.horizontal, 14)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
                 Spacer(minLength: 0)
                 bottomPanel
             }
@@ -248,6 +255,41 @@ struct YieldSamplingNavigationView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - First-Use Tip
+
+    private var firstUseTip: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "lightbulb.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.yellow)
+                .padding(.top, 1)
+            Text("Follow each sample point, count bunches on the selected vine, enter the value, then tap Record & Next.")
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    tipDismissed = true
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(Color(.tertiarySystemBackground), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss tip")
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(.yellow.opacity(0.35), lineWidth: 0.5)
+        )
     }
 
     // MARK: - Bottom Panel
