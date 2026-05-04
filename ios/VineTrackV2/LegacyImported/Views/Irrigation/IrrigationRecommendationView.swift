@@ -18,10 +18,10 @@ struct IrrigationRecommendationView: View {
     @State private var manualRainOverrides: [Date: String] = [:]
     @State private var useManualInputs: Bool = false
     @State private var forecastDuration: Int = 5
-    @State private var showForecastReview: Bool = false
-    @State private var forecastConfirmed: Bool = false
+    @State private var lastUpdated: Date?
+    @State private var didAutoLoad: Bool = false
 
-    private let durationOptions: [Int] = [5, 7, 14, 28]
+    private let durationOptions: [Int] = [3, 5, 7, 14]
 
     @FocusState private var focusedField: Field?
 
@@ -72,36 +72,32 @@ struct IrrigationRecommendationView: View {
         IrrigationCalculator.calculate(forecastDays: forecastDays, settings: settings)
     }
 
+    private var missingItems: [String] {
+        var items: [String] = []
+        if latitude == nil || longitude == nil {
+            items.append("Vineyard coordinates / weather source")
+        }
+        if settings.irrigationApplicationRateMmPerHour <= 0 {
+            items.append("Irrigation application rate (mm/hr)")
+        }
+        if vineyardPaddocks.isEmpty {
+            items.append("At least one block")
+        }
+        return items
+    }
+
     var body: some View {
         Form {
-            blockSection
-            forecastSection
-            settingsSection
-            if let result, forecastConfirmed {
-                resultSection(result)
-                dailyBreakdownSection(result)
-            } else if forecastService.forecast == nil, forecastService.errorMessage == nil, !forecastService.isLoading {
-                Section {
-                    Text("Load a \(forecastDuration)-day forecast to see a recommendation.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } else if forecastService.forecast != nil, !forecastConfirmed {
-                Section {
-                    Label("Review and confirm the forecast above to see your recommendation.", systemImage: "hand.tap.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } else if settings.irrigationApplicationRateMmPerHour <= 0 {
-                Section {
-                    Label("Enter an application rate greater than 0 mm/hr to calculate.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                }
+            statusSection
+            if !missingItems.isEmpty {
+                missingSetupSection
             }
-        }
-        .sheet(isPresented: $showForecastReview) {
-            forecastReviewSheet
+            recommendationSection
+            blockSection
+            forecastControlSection
+            forecastDetailsSection
+            dailyBreakdownDisclosure
+            settingsSection
         }
         .navigationTitle("Irrigation Advisor")
         .navigationBarTitleDisplayMode(.inline)
@@ -120,6 +116,12 @@ struct IrrigationRecommendationView: View {
                 selectedPaddockId = store.settings.irrigationAlertPaddockId ?? vineyardPaddocks.first?.id
             }
             applyPaddockDefaults()
+            if !didAutoLoad {
+                didAutoLoad = true
+                if forecastService.forecast == nil, latitude != nil, longitude != nil {
+                    Task { await loadForecast() }
+                }
+            }
         }
         .onChange(of: kcText) { _, _ in persistParameters() }
         .onChange(of: efficiencyText) { _, _ in persistParameters() }
@@ -129,15 +131,172 @@ struct IrrigationRecommendationView: View {
         .onChange(of: selectedPaddockId) { _, _ in
             applyPaddockDefaults()
         }
-        .onChange(of: forecastDuration) { _, _ in
-            forecastConfirmed = false
-            if forecastService.forecast != nil || forecastService.errorMessage != nil {
+        .onChange(of: forecastDuration) { _, newValue in
+            persistForecastDuration(newValue)
+            if latitude != nil, longitude != nil {
                 Task { await loadForecast() }
             }
         }
     }
 
-    // MARK: - Sections
+    // MARK: - Top status
+
+    private var statusSection: some View {
+        Section {
+            HStack(spacing: 10) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let forecast = forecastService.forecast {
+                        Text(forecast.source)
+                            .font(.subheadline.weight(.semibold))
+                    } else {
+                        Text("Open-Meteo")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    if let updated = lastUpdated {
+                        Text("Updated \(updated.formatted(.relative(presentation: .named)))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if forecastService.isLoading {
+                        Text("Loading forecast…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Awaiting forecast")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var missingSetupSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Complete irrigation settings to calculate recommendations.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                ForEach(missingItems, id: \.self) { item in
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(item)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    // MARK: - Recommendation card
+
+    @ViewBuilder
+    private var recommendationSection: some View {
+        Section("Recommendation") {
+            if forecastService.isLoading && forecastService.forecast == nil {
+                HStack(spacing: 12) {
+                    ProgressView()
+                    Text("Calculating recommendation…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+            } else if let error = forecastService.errorMessage, forecastService.forecast == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.orange)
+                    Button {
+                        Task { await loadForecast() }
+                    } label: {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 4)
+            } else if let result {
+                recommendationCard(result)
+            } else if latitude == nil || longitude == nil {
+                Text("Set your vineyard location in Settings → Vineyard Setup, then return here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Recommendation will appear once the forecast loads.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func recommendationCard(_ result: IrrigationRecommendationResult) -> some View {
+        let needsIrrigation = result.netDeficitMm > 0 && settings.irrigationApplicationRateMmPerHour > 0
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: needsIrrigation ? "drop.fill" : "checkmark.seal.fill")
+                    .foregroundStyle(needsIrrigation ? VineyardTheme.vineRed : VineyardTheme.leafGreen)
+                Text(needsIrrigation ? "Irrigation recommended" : "No irrigation needed")
+                    .font(.headline)
+                Spacer()
+            }
+
+            if needsIrrigation {
+                Text(String(format: "%.1f hours", result.recommendedIrrigationHours))
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(VineyardTheme.leafGreen)
+                    .monospacedDigit()
+                Text(hoursMinutesString(result.recommendedIrrigationHours))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Text(String(format: "Apply %.1f mm over the next %d days", result.grossIrrigationMm, result.dailyBreakdown.count))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Forecast rainfall meets vine demand for the next \(result.dailyBreakdown.count) days.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            HStack(spacing: 14) {
+                summaryStat("Crop use", String(format: "%.1f mm", result.forecastCropUseMm))
+                summaryStat("Eff. rain", String(format: "%.1f mm", result.forecastEffectiveRainMm))
+                summaryStat("Net deficit", String(format: "%.1f mm", result.netDeficitMm))
+            }
+
+            if let paddock = selectedPaddock,
+               let lPerHaHr = paddock.litresPerHaPerHour,
+               let mmHr = paddock.mmPerHour, mmHr > 0, needsIrrigation {
+                let totalLitres = (result.grossIrrigationMm / mmHr) * lPerHaHr * paddock.areaHectares
+                Text(String(format: "≈ %.0f L total for %@", totalLitres, paddock.name))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func summaryStat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Block
 
     private var blockSection: some View {
         Section("Block") {
@@ -160,7 +319,7 @@ struct IrrigationRecommendationView: View {
                             .foregroundStyle(.secondary)
                     }
                     if let mmHr = paddock.mmPerHour {
-                        LabeledContent("System Rate") {
+                        LabeledContent("System rate") {
                             Text(String(format: "%.2f mm/hr", mmHr))
                                 .foregroundStyle(.secondary)
                         }
@@ -170,79 +329,114 @@ struct IrrigationRecommendationView: View {
         }
     }
 
-    private var forecastSection: some View {
+    // MARK: - Forecast controls
+
+    private var forecastControlSection: some View {
         Section {
-            Picker("Forecast Duration", selection: $forecastDuration) {
+            Picker("Forecast duration", selection: $forecastDuration) {
                 ForEach(durationOptions, id: \.self) { days in
                     Text("\(days) days").tag(days)
                 }
             }
             .pickerStyle(.segmented)
 
-            if forecastService.isLoading {
-                HStack {
-                    ProgressView()
-                    Text("Loading \(forecastDuration)-day forecast…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            } else if let error = forecastService.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            } else if let forecast = forecastService.forecast {
-                LabeledContent("Source") {
-                    Text(forecast.source)
-                        .foregroundStyle(.secondary)
-                }
-                if let vid = store.selectedVineyardId {
-                    let status = WeatherProviderResolver.resolve(
-                        for: vid,
-                        weatherStationId: store.settings.weatherStationId
-                    )
-                    LabeledContent("Provider") {
-                        Text(status.compactLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-                }
-                LabeledContent("Days") {
-                    Text("\(forecast.days.count)")
-                        .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    showForecastReview = true
-                } label: {
-                    Label(forecastConfirmed ? "Forecast Confirmed — Review Again" : "Review \(forecast.days.count)-Day Forecast", systemImage: forecastConfirmed ? "checkmark.seal.fill" : "eye.fill")
-                        .foregroundStyle(forecastConfirmed ? VineyardTheme.leafGreen : .blue)
-                }
-            }
-
             Button {
                 Task { await loadForecast() }
             } label: {
-                Label(forecastService.forecast == nil ? "Load Forecast" : "Refresh Forecast", systemImage: "arrow.clockwise")
+                if forecastService.isLoading {
+                    HStack {
+                        ProgressView()
+                        Text("Refreshing…")
+                    }
+                } else {
+                    Label("Refresh Recommendation", systemImage: "arrow.clockwise")
+                }
             }
             .disabled(forecastService.isLoading || latitude == nil || longitude == nil)
-            .onChange(of: forecastService.forecast?.days.count) { _, _ in
-                forecastConfirmed = false
-            }
-
+        } header: {
+            Text("Forecast")
+        } footer: {
             if latitude == nil || longitude == nil {
                 Text("Set your vineyard location in Settings → Vineyard Setup to load a forecast.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            } else {
+                Text("Recommendation refreshes automatically when you change duration.")
             }
-
-            Toggle("Override forecast values", isOn: $useManualInputs)
-        } header: {
-            Text("\(forecastDuration)-Day Forecast")
-        } footer: {
-            Text("Evapotranspiration (ETo) and rainfall are fetched from Open-Meteo. Forecasts beyond 16 days are capped at the maximum Open-Meteo provides. You can override each day below if needed.")
         }
     }
+
+    // MARK: - Forecast details (collapsible)
+
+    @ViewBuilder
+    private var forecastDetailsSection: some View {
+        if let forecast = forecastService.forecast {
+            Section {
+                DisclosureGroup("Forecast details") {
+                    LabeledContent("Source") {
+                        Text(forecast.source).foregroundStyle(.secondary)
+                    }
+                    if let vid = store.selectedVineyardId {
+                        let status = WeatherProviderResolver.resolve(
+                            for: vid,
+                            weatherStationId: store.settings.weatherStationId
+                        )
+                        LabeledContent("Provider") {
+                            Text(status.compactLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                    LabeledContent("Days") {
+                        Text("\(forecast.days.count)").foregroundStyle(.secondary)
+                    }
+                    Toggle("Override forecast values", isOn: $useManualInputs)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var dailyBreakdownDisclosure: some View {
+        if let result {
+            Section {
+                DisclosureGroup("Daily breakdown") {
+                    ForEach(result.dailyBreakdown) { day in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(day.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(String(format: "%.1f mm deficit", day.dailyDeficitMm))
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(day.dailyDeficitMm > 0 ? VineyardTheme.vineRed : VineyardTheme.leafGreen)
+                                    .monospacedDigit()
+                            }
+
+                            if useManualInputs {
+                                HStack(spacing: 8) {
+                                    manualField(label: "ETo", value: day.forecastEToMm, field: .manualEto(day.date), binding: etoBinding(for: day.date))
+                                    manualField(label: "Rain", value: day.forecastRainMm, field: .manualRain(day.date), binding: rainBinding(for: day.date))
+                                }
+                            } else {
+                                HStack {
+                                    metric("ETo", String(format: "%.1f", day.forecastEToMm), suffix: "mm")
+                                    Divider().frame(height: 20)
+                                    metric("Rain", String(format: "%.1f", day.forecastRainMm), suffix: "mm")
+                                    Divider().frame(height: 20)
+                                    metric("Crop use", String(format: "%.1f", day.cropUseMm), suffix: "mm")
+                                    Divider().frame(height: 20)
+                                    metric("Eff. rain", String(format: "%.1f", day.effectiveRainMm), suffix: "mm")
+                                }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Settings (collapsible)
 
     private var appRateIsSiteData: Bool {
         (selectedPaddock?.mmPerHour ?? 0) > 0
@@ -250,58 +444,58 @@ struct IrrigationRecommendationView: View {
 
     private var settingsSection: some View {
         Section {
-            settingRow(
-                label: "Application Rate (mm/hr)",
-                text: $applicationRateText,
-                field: .appRate,
-                help: "How many millimetres of water your irrigation system applies to this block in one hour of running.",
-                isSiteData: appRateIsSiteData,
-                siteDataNote: "Pre-filled from this paddock's system rate."
-            )
-            settingRow(
-                label: "Crop Coefficient (Kc)",
-                text: $kcText,
-                field: .kc,
-                help: "How thirsty the vines are compared to a reference grass. 0.65 is a typical mid-season value for wine grapes.",
-                isSiteData: false,
-                siteDataNote: nil
-            )
-            settingRow(
-                label: "Irrigation Efficiency (%)",
-                text: $efficiencyText,
-                field: .efficiency,
-                help: "How much of the water you pump actually reaches the vine roots. Drip systems are typically around 90%.",
-                isSiteData: false,
-                siteDataNote: nil
-            )
-            settingRow(
-                label: "Rainfall Effectiveness (%)",
-                text: $rainEffText,
-                field: .rainEff,
-                help: "How much of the forecast rainfall actually soaks in and is available to the vines. Typically around 80%.",
-                isSiteData: false,
-                siteDataNote: nil
-            )
-            settingRow(
-                label: "Replacement (%)",
-                text: $replacementText,
-                field: .replacement,
-                help: "How much of the water the vines use that you want to replace. 100% fully replaces it, lower values apply deficit irrigation.",
-                isSiteData: false,
-                siteDataNote: nil
-            )
-            settingRow(
-                label: "Soil Buffer (mm)",
-                text: $bufferText,
-                field: .buffer,
-                help: "Extra water already stored in the soil from earlier rain or irrigation. Subtracted from the deficit. Leave at 0 if unsure.",
-                isSiteData: false,
-                siteDataNote: nil
-            )
-        } header: {
-            Text("Irrigation Settings")
+            DisclosureGroup("Calculation assumptions & block settings") {
+                settingRow(
+                    label: "Application rate (mm/hr)",
+                    text: $applicationRateText,
+                    field: .appRate,
+                    help: "How many millimetres of water your irrigation system applies to this block in one hour.",
+                    isSiteData: appRateIsSiteData,
+                    siteDataNote: "Pre-filled from this paddock's system rate."
+                )
+                settingRow(
+                    label: "Crop coefficient (Kc)",
+                    text: $kcText,
+                    field: .kc,
+                    help: "Vine water demand vs reference grass. 0.65 is a typical mid-season value.",
+                    isSiteData: false,
+                    siteDataNote: nil
+                )
+                settingRow(
+                    label: "Irrigation efficiency (%)",
+                    text: $efficiencyText,
+                    field: .efficiency,
+                    help: "How much pumped water reaches vine roots. Drip systems ~90%.",
+                    isSiteData: false,
+                    siteDataNote: nil
+                )
+                settingRow(
+                    label: "Rainfall effectiveness (%)",
+                    text: $rainEffText,
+                    field: .rainEff,
+                    help: "Fraction of forecast rainfall available to the vines. Typically ~80%.",
+                    isSiteData: false,
+                    siteDataNote: nil
+                )
+                settingRow(
+                    label: "Replacement (%)",
+                    text: $replacementText,
+                    field: .replacement,
+                    help: "How much vine water use to replace. Lower for deficit irrigation.",
+                    isSiteData: false,
+                    siteDataNote: nil
+                )
+                settingRow(
+                    label: "Soil buffer (mm)",
+                    text: $bufferText,
+                    field: .buffer,
+                    help: "Extra water already stored in the soil. Subtracted from the deficit.",
+                    isSiteData: false,
+                    siteDataNote: nil
+                )
+            }
         } footer: {
-            Text("Fields marked \u{2728} are pre-filled with site-specific data from the selected paddock. Other values use sensible defaults you can adjust.")
+            Text("Fields marked \u{2728} are pre-filled with site-specific data from the selected paddock.")
         }
     }
 
@@ -340,100 +534,6 @@ struct IrrigationRecommendationView: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    private func resultSection(_ result: IrrigationRecommendationResult) -> some View {
-        Section("Recommendation") {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Recommended irrigation")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(String(format: "%.1f hours", result.recommendedIrrigationHours))
-                    .font(.title.weight(.bold))
-                    .foregroundStyle(VineyardTheme.leafGreen)
-                    .monospacedDigit()
-                Text(hoursMinutesString(result.recommendedIrrigationHours))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                Text("over the next \(result.dailyBreakdown.count) days")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 4)
-
-            LabeledContent("Forecast crop use") {
-                Text(String(format: "%.1f mm", result.forecastCropUseMm))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            LabeledContent("Effective rainfall") {
-                Text(String(format: "%.1f mm", result.forecastEffectiveRainMm))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            LabeledContent("Net deficit") {
-                Text(String(format: "%.1f mm", result.netDeficitMm))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            LabeledContent("Gross to apply") {
-                Text(String(format: "%.1f mm", result.grossIrrigationMm))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            LabeledContent("Rate") {
-                Text(String(format: "%.2f mm/hr", settings.irrigationApplicationRateMmPerHour))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            if let paddock = selectedPaddock,
-               let lPerHaHr = paddock.litresPerHaPerHour,
-               let mmHr = paddock.mmPerHour, mmHr > 0 {
-                let totalLitres = (result.grossIrrigationMm / mmHr) * lPerHaHr * paddock.areaHectares
-                LabeledContent("Total water") {
-                    Text(String(format: "%.0f L", totalLitres))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-            }
-        }
-    }
-
-    private func dailyBreakdownSection(_ result: IrrigationRecommendationResult) -> some View {
-        Section("Daily Breakdown") {
-            ForEach(result.dailyBreakdown) { day in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(day.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Text(String(format: "%.1f mm deficit", day.dailyDeficitMm))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(day.dailyDeficitMm > 0 ? VineyardTheme.vineRed : VineyardTheme.leafGreen)
-                            .monospacedDigit()
-                    }
-
-                    if useManualInputs {
-                        HStack(spacing: 8) {
-                            manualField(label: "ETo", value: day.forecastEToMm, field: .manualEto(day.date), binding: etoBinding(for: day.date))
-                            manualField(label: "Rain", value: day.forecastRainMm, field: .manualRain(day.date), binding: rainBinding(for: day.date))
-                        }
-                    } else {
-                        HStack {
-                            metric("ETo", String(format: "%.1f", day.forecastEToMm), suffix: "mm")
-                            Divider().frame(height: 20)
-                            metric("Rain", String(format: "%.1f", day.forecastRainMm), suffix: "mm")
-                            Divider().frame(height: 20)
-                            metric("Crop Use", String(format: "%.1f", day.cropUseMm), suffix: "mm")
-                            Divider().frame(height: 20)
-                            metric("Eff. Rain", String(format: "%.1f", day.effectiveRainMm), suffix: "mm")
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-        }
     }
 
     // MARK: - Helpers
@@ -500,53 +600,9 @@ struct IrrigationRecommendationView: View {
 
     private func loadForecast() async {
         guard let lat = latitude, let lon = longitude else { return }
-        forecastConfirmed = false
         await forecastService.fetchForecast(latitude: lat, longitude: lon, days: forecastDuration)
-    }
-
-    private var forecastReviewSheet: some View {
-        NavigationStack {
-            List {
-                if let forecast = forecastService.forecast {
-                    Section {
-                        ForEach(forecast.days) { day in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(day.date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)))
-                                    .font(.subheadline.weight(.semibold))
-                                HStack(spacing: 16) {
-                                    Label(String(format: "%.1f mm ETo", day.forecastEToMm), systemImage: "sun.max.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
-                                    Label(String(format: "%.1f mm rain", day.forecastRainMm), systemImage: "cloud.rain.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.blue)
-                                }
-                                .monospacedDigit()
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    } header: {
-                        Text("\(forecast.days.count)-Day Forecast")
-                    } footer: {
-                        Text("Source: \(forecast.source). Confirm to use this forecast for the irrigation recommendation.")
-                    }
-                }
-            }
-            .navigationTitle("Review Forecast")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showForecastReview = false }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Confirm") {
-                        forecastConfirmed = true
-                        showForecastReview = false
-                    }
-                    .fontWeight(.semibold)
-                }
-            }
-            .presentationDetents([.medium, .large])
+        if forecastService.forecast != nil {
+            lastUpdated = Date()
         }
     }
 
@@ -564,6 +620,8 @@ struct IrrigationRecommendationView: View {
         rainEffText = String(format: "%.0f", s.irrigationRainfallEffectivenessPercent)
         replacementText = String(format: "%.0f", s.irrigationReplacementPercent)
         bufferText = String(format: "%.0f", s.irrigationSoilBufferMm)
+        let saved = s.irrigationForecastDays
+        forecastDuration = durationOptions.contains(saved) ? saved : 5
     }
 
     private func persistParameters() {
@@ -574,6 +632,13 @@ struct IrrigationRecommendationView: View {
         s.irrigationRainfallEffectivenessPercent = parse(rainEffText, default: 80)
         s.irrigationReplacementPercent = parse(replacementText, default: 100)
         s.irrigationSoilBufferMm = parse(bufferText)
+        store.updateSettings(s)
+    }
+
+    private func persistForecastDuration(_ days: Int) {
+        guard didLoadFromSettings else { return }
+        var s = store.settings
+        s.irrigationForecastDays = days
         store.updateSettings(s)
     }
 

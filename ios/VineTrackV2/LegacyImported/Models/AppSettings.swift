@@ -95,6 +95,7 @@ nonisolated struct AppSettings: Codable, Sendable, Identifiable {
     var irrigationRainfallEffectivenessPercent: Double
     var irrigationReplacementPercent: Double
     var irrigationSoilBufferMm: Double
+    var irrigationForecastDays: Int
     var aiSuggestionsEnabled: Bool
 
     init(
@@ -136,6 +137,7 @@ nonisolated struct AppSettings: Codable, Sendable, Identifiable {
         irrigationRainfallEffectivenessPercent: Double = 80,
         irrigationReplacementPercent: Double = 100,
         irrigationSoilBufferMm: Double = 0,
+        irrigationForecastDays: Int = 5,
         aiSuggestionsEnabled: Bool = true
     ) {
         self.id = id
@@ -176,6 +178,7 @@ nonisolated struct AppSettings: Codable, Sendable, Identifiable {
         self.irrigationRainfallEffectivenessPercent = irrigationRainfallEffectivenessPercent
         self.irrigationReplacementPercent = irrigationReplacementPercent
         self.irrigationSoilBufferMm = irrigationSoilBufferMm
+        self.irrigationForecastDays = irrigationForecastDays
         self.aiSuggestionsEnabled = aiSuggestionsEnabled
     }
 
@@ -223,6 +226,7 @@ nonisolated struct AppSettings: Codable, Sendable, Identifiable {
         irrigationRainfallEffectivenessPercent = try container.decodeIfPresent(Double.self, forKey: .irrigationRainfallEffectivenessPercent) ?? 80
         irrigationReplacementPercent = try container.decodeIfPresent(Double.self, forKey: .irrigationReplacementPercent) ?? 100
         irrigationSoilBufferMm = try container.decodeIfPresent(Double.self, forKey: .irrigationSoilBufferMm) ?? 0
+        irrigationForecastDays = try container.decodeIfPresent(Int.self, forKey: .irrigationForecastDays) ?? 5
         aiSuggestionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .aiSuggestionsEnabled) ?? true
     }
 
@@ -235,6 +239,7 @@ nonisolated struct AppSettings: Codable, Sendable, Identifiable {
         case vineyardLatitude, vineyardLongitude, vineyardElevationMetres, useBEDD, calculationMode, resetMode
         case rainAlertEnabled, rainAlertThresholdMm, rainAlertWindowDays
         case irrigationAlertEnabled, irrigationAlertPaddockId, irrigationKc, irrigationEfficiencyPercent, irrigationRainfallEffectivenessPercent, irrigationReplacementPercent, irrigationSoilBufferMm
+        case irrigationForecastDays
         case aiSuggestionsEnabled
     }
 }
