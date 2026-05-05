@@ -18,7 +18,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.headingFilter = 5
         manager.pausesLocationUpdatesAutomatically = false
-        manager.activityType = .automotiveNavigation
+        // .other works better than .automotiveNavigation for slow-moving
+        // tractors — the automotive activity type applies aggressive
+        // smoothing/filtering at low speeds which halves the reported speed
+        // after a short distance.
+        manager.activityType = .other
+        manager.distanceFilter = kCLDistanceFilterNone
         authorizationStatus = manager.authorizationStatus
         applySimulatorMockLocationIfNeeded()
     }

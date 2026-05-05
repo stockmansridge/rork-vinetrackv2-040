@@ -28,7 +28,14 @@ struct ActiveTripView: View {
         store.sprayRecords.first { $0.tripId == trip.id }
     }
 
+    /// Active paddock prefers the live GPS-detected block (so the operator
+    /// always sees the block they are currently in across multi-block trips),
+    /// falling back to the trip's pinned/selected blocks.
     private var currentPaddock: Paddock? {
+        if let liveId = tracking.currentPaddockId,
+           let paddock = store.paddocks.first(where: { $0.id == liveId }) {
+            return paddock
+        }
         if let id = trip.paddockId,
            let paddock = store.paddocks.first(where: { $0.id == id }) {
             return paddock
@@ -37,9 +44,6 @@ struct ActiveTripView: View {
             if let paddock = store.paddocks.first(where: { $0.id == id }) {
                 return paddock
             }
-        }
-        if let liveId = tracking.currentPaddockId {
-            return store.paddocks.first(where: { $0.id == liveId })
         }
         return nil
     }
@@ -67,17 +71,44 @@ struct ActiveTripView: View {
         return nil
     }
 
-    private var leftRowNumber: Int {
-        let path = displayPath ?? trip.currentRowNumber
-        return Int(ceil(path))
+    private var pathForLabels: Double {
+        displayPath ?? trip.currentRowNumber
     }
 
-    private var rightRowNumber: Int {
-        let path = displayPath ?? trip.currentRowNumber
-        return Int(floor(path))
+    /// Lower row number adjacent to the current path. For path X.5 this is X.
+    /// Path 0.5 → “Before row 1”, path (max+0.5) → “After row max”.
+    private var leftRowLabel: String {
+        let path = pathForLabels
+        let lower = Int(floor(path))
+        if lower < 1 { return "Start" }
+        return "Row \(lower)"
+    }
+
+    private var rightRowLabel: String {
+        let path = pathForLabels
+        let upper = Int(floor(path)) + 1
+        let maxRow = trip.rowSequence.isEmpty
+            ? Int.max
+            : Int(trip.rowSequence.map { floor($0) }.max() ?? 0) + 1
+        if upper > maxRow, maxRow != Int.max { return "End" }
+        return "Row \(upper)"
+    }
+
+    /// Show the side row indicator whenever row tracking is enabled and we
+    /// have any usable path — either a live GPS hit OR a stored sequence path.
+    /// This avoids the labels disappearing when GPS detection is briefly lost.
+    private var canShowRowSides: Bool {
+        guard store.settings.rowTrackingEnabled else { return false }
+        return tracking.rowGuidanceAvailable || !trip.rowSequence.isEmpty
     }
 
     private var currentSpeedKmh: Double {
+        // Prefer the smoothed tracking speed (m/s) which falls back to recent
+        // GPS points when CLLocation.speed dips. This is the fix for the
+        // half-speed dropout reported during slow tractor work.
+        if let smoothed = tracking.currentSpeed, smoothed > 0 {
+            return smoothed * 3.6
+        }
         guard let speed = locationService.location?.speed, speed > 0 else { return 0 }
         return speed * 3.6
     }
@@ -118,7 +149,7 @@ struct ActiveTripView: View {
                 }
                 .padding(12)
 
-                if showRowIndicator, tracking.rowGuidanceAvailable, store.settings.rowTrackingEnabled {
+                if showRowIndicator, canShowRowSides {
                     rowIndicatorOverlay
                 }
             }
@@ -324,9 +355,16 @@ struct ActiveTripView: View {
                 }
             }
 
+            // Gradient travelled path: oldest segment red → newest segment
+            // green, so the operator can see direction of travel at a glance.
             if trip.pathPoints.count > 1 {
-                MapPolyline(coordinates: trip.pathPoints.map { $0.coordinate })
-                    .stroke(Color.yellow, lineWidth: 4)
+                let coords = trip.pathPoints.map { $0.coordinate }
+                let segmentCount = max(coords.count - 1, 1)
+                ForEach(0..<(coords.count - 1), id: \.self) { i in
+                    let progress = Double(i) / Double(segmentCount)
+                    MapPolyline(coordinates: [coords[i], coords[i + 1]])
+                        .stroke(travelGradientColor(progress: progress), lineWidth: 4)
+                }
             }
 
             ForEach(store.pins.filter { $0.tripId == trip.id }) { pin in
@@ -348,11 +386,11 @@ struct ActiveTripView: View {
         HStack {
             VStack(spacing: 4) {
                 Image(systemName: "arrow.left").font(.caption2.weight(.bold))
-                Text("Row \(leftRowNumber)")
+                Text(leftRowLabel)
                     .font(.system(.caption, design: .rounded, weight: .bold))
                     .contentTransition(.numericText())
             }
-            .frame(width: 70, height: 60)
+            .frame(width: 78, height: 60)
             .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
             .padding(.leading, 12)
 
@@ -360,17 +398,24 @@ struct ActiveTripView: View {
 
             VStack(spacing: 4) {
                 Image(systemName: "arrow.right").font(.caption2.weight(.bold))
-                Text("Row \(rightRowNumber)")
+                Text(rightRowLabel)
                     .font(.system(.caption, design: .rounded, weight: .bold))
                     .contentTransition(.numericText())
             }
-            .frame(width: 70, height: 60)
+            .frame(width: 78, height: 60)
             .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
             .padding(.trailing, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .allowsHitTesting(false)
         .transition(.opacity)
+    }
+
+    /// Travelled-path colour ramp: 0.0 (oldest) red → 0.5 amber → 1.0 green.
+    private func travelGradientColor(progress: Double) -> Color {
+        let p = min(max(progress, 0), 1)
+        // Linear ramp: red → green, no blue channel — yields red/orange/yellow/green.
+        return Color(red: 1.0 - p, green: p, blue: 0)
     }
 
     // MARK: - Banners
@@ -476,26 +521,34 @@ struct ActiveTripView: View {
     private var tripControls: some View {
         HStack(spacing: 12) {
             if !trip.rowSequence.isEmpty && !trip.isPaused {
-                Button {
-                    advanceRow(by: -1)
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.headline)
-                        .frame(width: 50, height: 50)
-                }
-                .buttonStyle(.bordered)
-                .disabled(trip.sequenceIndex <= 0)
+                // Compact previous/next pair — secondary to the live GPS
+                // auto-advancement, but always available as a manual fallback.
+                HStack(spacing: 6) {
+                    Button {
+                        advanceRow(by: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(width: 36, height: 32)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(trip.sequenceIndex <= 0)
 
-                Button {
-                    advanceRow(by: 1)
-                } label: {
-                    Label("Next Path", systemImage: "chevron.right")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        advanceRow(by: 1)
+                    } label: {
+                        Label("Next Path", systemImage: "chevron.right")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .frame(height: 32)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .clipShape(Capsule())
+                    .disabled(trip.sequenceIndex >= trip.rowSequence.count - 1)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(trip.sequenceIndex >= trip.rowSequence.count - 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else if trip.isPaused {
                 HStack(spacing: 8) {
                     Image(systemName: "pause.fill").foregroundStyle(.orange)

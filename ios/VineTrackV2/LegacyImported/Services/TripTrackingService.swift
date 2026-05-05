@@ -25,6 +25,13 @@ final class TripTrackingService {
     var rowsCoveredCount: Int = 0
     var rowGuidanceAvailable: Bool = false
 
+    /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
+    /// and otherwise from the recent point window. Use this instead of
+    /// `locationService.location?.speed` to avoid the half-speed dropout that
+    /// CoreLocation's automotive smoothing applied at slow tractor speeds.
+    var smoothedSpeed: Double = 0
+    private var recentSpeedSamples: [(date: Date, location: CLLocation)] = []
+
     // MARK: - Dependencies
 
     private weak var store: MigratedDataStore?
@@ -33,6 +40,10 @@ final class TripTrackingService {
     private var trackingTask: Task<Void, Never>?
     private var tickerTask: Task<Void, Never>?
     private var lastObservedLocation: CLLocation?
+
+    // Path-distance tracking for auto path completion (global path → metres).
+    private var pathDistanceMap: [Double: Double] = [:]
+    private var lastTrackingLocation: CLLocation?
 
     // MARK: - Configuration
 
@@ -120,6 +131,10 @@ final class TripTrackingService {
         currentRowDistance = nil
         rowsCoveredCount = 0
         rowGuidanceAvailable = false
+        smoothedSpeed = 0
+        recentSpeedSamples.removeAll()
+        pathDistanceMap.removeAll()
+        lastTrackingLocation = nil
     }
 
     // MARK: - Manual point
@@ -385,8 +400,39 @@ final class TripTrackingService {
 
         store.updateTrip(trip)
         currentDistance = trip.totalDistance
-        currentSpeed = location.speed >= 0 ? location.speed : nil
+        updateSmoothedSpeed(from: location)
+        currentSpeed = smoothedSpeed > 0 ? smoothedSpeed : nil
         lastObservedLocation = location
+    }
+
+    private func updateSmoothedSpeed(from location: CLLocation) {
+        let now = Date()
+        recentSpeedSamples.append((now, location))
+        // Keep ~5s of recent samples.
+        recentSpeedSamples.removeAll { now.timeIntervalSince($0.date) > 5 }
+
+        // Prefer a fresh, valid CLLocation.speed (m/s) when available.
+        if location.speed >= 0, location.timestamp.timeIntervalSinceNow > -2 {
+            // Light blend with previous reading to avoid jitter without
+            // averaging over the full trip.
+            if smoothedSpeed > 0 {
+                smoothedSpeed = smoothedSpeed * 0.4 + location.speed * 0.6
+            } else {
+                smoothedSpeed = location.speed
+            }
+            return
+        }
+
+        // Fallback: derive from the recent sample window.
+        if let first = recentSpeedSamples.first {
+            let dt = now.timeIntervalSince(first.date)
+            let dist = location.distance(from: first.location)
+            if dt > 0.5, dist > 0 {
+                smoothedSpeed = dist / dt
+                return
+            }
+        }
+        smoothedSpeed = 0
     }
 
     // MARK: - Row guidance / coverage
@@ -396,13 +442,13 @@ final class TripTrackingService {
         trip: inout Trip,
         store: MigratedDataStore
     ) {
-        let candidates: [Paddock]
-        if let pinned = trip.paddockId,
-           let paddock = store.paddocks.first(where: { $0.id == pinned }) {
-            candidates = [paddock]
-        } else {
-            candidates = store.paddocks
+        // Resolve all selected paddocks for this trip (multi-block aware).
+        var selectedIds: [UUID] = trip.paddockIds
+        if selectedIds.isEmpty, let id = trip.paddockId { selectedIds = [id] }
+        let selected = selectedIds.compactMap { id in
+            store.paddocks.first(where: { $0.id == id })
         }
+        let candidates: [Paddock] = selected.isEmpty ? store.paddocks : selected
 
         guard let paddock = RowGuidance.paddock(for: coordinate, in: candidates) else {
             currentPaddockId = trip.paddockId
@@ -428,15 +474,122 @@ final class TripTrackingService {
             return
         }
 
-        rowGuidanceAvailable = true
-        currentRowNumber = match.rowNumber
-        currentRowDistance = match.distance
-        trip.currentRowNumber = match.rowNumber
+        // Convert local row hit → global path number that lines up with
+        // trip.rowSequence (which uses combined multi-block paths from
+        // StartTripSheet).
+        let index = GlobalRowIndex(paddocks: candidates)
+        let localRow = Int(match.rowNumber)
+        let globalRow = index.globalRow(paddockId: paddock.id, localRow: localRow)
+            ?? localRow
 
-        let threshold = max(0.5, paddock.rowWidth / 2.0)
-        if match.distance <= threshold, !trip.completedPaths.contains(match.rowNumber) {
-            trip.completedPaths.append(match.rowNumber)
+        let livePath = livePathForSequence(
+            globalRow: globalRow,
+            sequence: trip.rowSequence,
+            currentPath: trip.currentRowNumber
+        ) ?? (Double(globalRow) - 0.5)
+
+        rowGuidanceAvailable = true
+        currentRowNumber = livePath
+        currentRowDistance = match.distance
+        trip.currentRowNumber = livePath
+
+        // Sync sequenceIndex / nextRowNumber when the live path matches a
+        // sequence entry — this is what enables auto path advancement.
+        if !trip.rowSequence.isEmpty,
+           let liveIdx = trip.rowSequence.firstIndex(of: livePath),
+           liveIdx != trip.sequenceIndex {
+            // Mark the path we are leaving as completed if we accumulated
+            // enough distance along it.
+            let leaving = trip.rowSequence[trip.sequenceIndex]
+            finalizeIfThresholdMet(
+                path: leaving,
+                trip: &trip,
+                paddock: paddock,
+                rowWidth: paddock.rowWidth
+            )
+            trip.sequenceIndex = liveIdx
+            if liveIdx + 1 < trip.rowSequence.count {
+                trip.nextRowNumber = trip.rowSequence[liveIdx + 1]
+            } else {
+                trip.nextRowNumber = livePath
+            }
+        }
+
+        // Accumulate distance along the current path for the >= 80 % rule.
+        accumulateDistanceAlong(path: livePath, location: locationService?.location)
+
+        // Auto-complete: row centre is within half a row width AND we have
+        // travelled most of its length.
+        let proximity = max(0.5, paddock.rowWidth / 2.0)
+        if match.distance <= proximity {
+            finalizeIfThresholdMet(
+                path: livePath,
+                trip: &trip,
+                paddock: paddock,
+                rowWidth: paddock.rowWidth
+            )
         }
         rowsCoveredCount = trip.completedPaths.count
+    }
+
+    /// Choose the path (X-0.5 or X+0.5) for a detected global row that lies
+    /// inside the active row sequence and is closest to the current path.
+    private func livePathForSequence(
+        globalRow: Int,
+        sequence: [Double],
+        currentPath: Double
+    ) -> Double? {
+        guard !sequence.isEmpty else { return nil }
+        let candidates = [Double(globalRow) - 0.5, Double(globalRow) + 0.5]
+        let set = Set(sequence)
+        let matches = candidates.filter { set.contains($0) }
+        if matches.isEmpty { return nil }
+        return matches.min(by: { abs($0 - currentPath) < abs($1 - currentPath) })
+    }
+
+    private func accumulateDistanceAlong(path: Double, location: CLLocation?) {
+        guard let location else { return }
+        defer { lastTrackingLocation = location }
+        guard let last = lastTrackingLocation else { return }
+        let segment = location.distance(from: last)
+        // Reject GPS jumps and noise.
+        guard segment > 0.5, segment < 50 else { return }
+        pathDistanceMap[path, default: 0] += segment
+    }
+
+    private func finalizeIfThresholdMet(
+        path: Double,
+        trip: inout Trip,
+        paddock: Paddock,
+        rowWidth: Double
+    ) {
+        guard !trip.completedPaths.contains(path),
+              !trip.skippedPaths.contains(path) else { return }
+        if let length = rowLength(forPath: path, paddock: paddock), length > 1 {
+            let progress = pathDistanceMap[path, default: 0] / length
+            if progress >= 0.8 {
+                trip.completedPaths.append(path)
+            }
+        } else {
+            // Fallback: if we have no row geometry length, treat any reasonable
+            // accumulation as completion (10 metres along the path).
+            if pathDistanceMap[path, default: 0] >= 10 {
+                trip.completedPaths.append(path)
+            }
+        }
+    }
+
+    private func rowLength(forPath path: Double, paddock: Paddock) -> Double? {
+        // Path X.5 sits between rows X and X+1 — use either neighbour for length.
+        let neighbours = [Int(floor(path)), Int(ceil(path))]
+        for number in neighbours {
+            if let row = paddock.rows.first(where: { $0.number == number }) {
+                let a = CLLocation(latitude: row.startPoint.latitude, longitude: row.startPoint.longitude)
+                let b = CLLocation(latitude: row.endPoint.latitude, longitude: row.endPoint.longitude)
+                let length = a.distance(from: b)
+                if length > 1 { return length }
+            }
+        }
+        return nil
     }
 }
