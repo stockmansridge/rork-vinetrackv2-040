@@ -62,6 +62,10 @@ struct TripDetailView: View {
                     statRow("Operator", value: trip.personName, icon: "person")
                 }
                 if !trip.rowSequence.isEmpty {
+                    statRow("Pattern", value: trip.trackingPattern.title, icon: trip.trackingPattern.icon)
+                    if let startDescription = startMidrowDescription {
+                        statRow("Started", value: startDescription, icon: "flag")
+                    }
                     statRow("Paths planned", value: "\(trip.rowSequence.count)", icon: "list.number")
                     statRow("Completed", value: "\(trip.completedPaths.count)", icon: "checkmark.circle")
                     if !trip.skippedPaths.isEmpty {
@@ -246,6 +250,20 @@ struct TripDetailView: View {
             return String(format: "%.1f", value)
         }
         return formatted.joined(separator: ", ")
+    }
+
+    private var startMidrowDescription: String? {
+        guard trip.trackingPattern == .everySecondRow,
+              let startMidrow = trip.rowSequence.first else { return nil }
+        let lowerRow = Int(floor(startMidrow))
+        let upperRow = lowerRow + 1
+        let midrowText: String
+        if startMidrow.truncatingRemainder(dividingBy: 1) == 0 {
+            midrowText = String(format: "%.0f", startMidrow)
+        } else {
+            midrowText = String(format: "%.1f", startMidrow)
+        }
+        return "Between rows \(lowerRow)–\(upperRow) — midrow \(midrowText)"
     }
 
     private func statRow(_ label: String, value: String, icon: String) -> some View {

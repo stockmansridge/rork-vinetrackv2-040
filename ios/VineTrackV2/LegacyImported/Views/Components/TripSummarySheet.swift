@@ -57,6 +57,7 @@ struct TripSummarySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    patternHeader
                     summaryStats
                     if !trip.tankSessions.isEmpty {
                         tankSessionsList
@@ -70,6 +71,35 @@ struct TripSummarySheet: View {
             .navigationTitle("Trip Summary")
             .navigationBarTitleDisplayMode(.inline)
             .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    @ViewBuilder
+    private var patternHeader: some View {
+        if trip.trackingPattern == .everySecondRow,
+           let startMidrow = trip.rowSequence.first {
+            let lowerRow = Int(floor(startMidrow))
+            let upperRow = lowerRow + 1
+            let preview = trip.rowSequence.prefix(4).map { formatPath($0) }.joined(separator: " → ")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: trip.trackingPattern.icon)
+                    Text("Pattern: \(trip.trackingPattern.title)")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(VineyardTheme.leafGreen)
+                Text("Started between rows \(lowerRow)–\(upperRow)")
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                if !preview.isEmpty {
+                    Text("Sequence: \(preview)\(trip.rowSequence.count > 4 ? " …" : "")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
         }
     }
 
