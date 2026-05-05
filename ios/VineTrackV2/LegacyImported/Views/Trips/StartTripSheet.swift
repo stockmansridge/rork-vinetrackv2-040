@@ -21,7 +21,33 @@ struct StartTripSheet: View {
     private var selectedPaddocks: [Paddock] {
         store.paddocks
             .filter { selectedPaddockIds.contains($0.id) }
-            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+            .sorted(by: Self.rowOrderSort)
+    }
+
+    /// Sort blocks by lowest row number first, then by name. Blocks without
+    /// row geometry fall to the end (compared by name).
+    static func rowOrderSort(_ a: Paddock, _ b: Paddock) -> Bool {
+        let aMin = a.rows.map(\.number).min()
+        let bMin = b.rows.map(\.number).min()
+        switch (aMin, bMin) {
+        case let (l?, r?):
+            if l != r { return l < r }
+            return a.name.lowercased() < b.name.lowercased()
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return a.name.lowercased() < b.name.lowercased()
+        }
+    }
+
+    /// Display string for a block's row range, e.g. "Rows 1–24" or
+    /// "Rows not configured" if no row geometry exists.
+    static func rowRangeLabel(for paddock: Paddock) -> String {
+        let numbers = paddock.rows.map(\.number)
+        guard let lo = numbers.min(), let hi = numbers.max() else {
+            return "Rows not configured"
+        }
+        if lo == hi { return "Row \(lo)" }
+        return "Rows \(lo)–\(hi)"
     }
 
     /// Single-paddock convenience used for row guidance / starting row UI.
@@ -33,6 +59,20 @@ struct StartTripSheet: View {
 
     private var totalRows: Int {
         singleSelectedPaddock?.rows.count ?? 0
+    }
+
+    /// Available midrow start positions for "Every Second Row".
+    /// Midrow X.5 sits between rows X and X+1.
+    private var availableMidrows: [Double] {
+        let count = totalRows
+        guard count >= 2 else { return [1.5] }
+        return (1...(count - 1)).map { Double($0) + 0.5 }
+    }
+
+    /// Currently selected midrow, derived from `startingRow`.
+    /// startingRow=2 → 1.5, startingRow=3 → 2.5, etc.
+    private var selectedMidrow: Double {
+        max(1.5, Double(max(startingRow, 2)) - 0.5)
     }
 
     private var totalAreaHectares: Double {
@@ -57,6 +97,9 @@ struct StartTripSheet: View {
                         directionSection
                     }
                     patternSection
+                    if trackingPattern == .everySecondRow, singleSelectedPaddock != nil {
+                        midrowSection
+                    }
                     operatorSection
                     if let error = tracking.errorMessage {
                         Text(error)
@@ -199,20 +242,20 @@ struct StartTripSheet: View {
         let variety = paddock.varietyAllocations.first.map { _ in
             paddock.varietyAllocations.compactMap { allocationName($0) }.joined(separator: ", ")
         } ?? ""
+        let rangeLabel = Self.rowRangeLabel(for: paddock)
         return HStack(spacing: 6) {
+            Text(rangeLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             if !variety.isEmpty {
+                Text("·")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Text(variety)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            } else if paddock.rows.isEmpty {
-                Text("No rows mapped yet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("\(paddock.rows.count) rows")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -290,6 +333,97 @@ struct StartTripSheet: View {
                 .clipShape(.rect(cornerRadius: 12))
             }
         }
+    }
+
+    // MARK: Start midrow (Every Second Row)
+
+    private var midrowSection: some View {
+        sectionContainer(
+            title: "Start Between Rows",
+            icon: "arrow.left.and.right",
+            tint: .purple
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Every Second Row advances by +2. Pick the midrow to start on — the sequence depends on this choice.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Menu {
+                    ForEach(availableMidrows, id: \.self) { midrow in
+                        Button {
+                            startingRow = Int(midrow + 0.5) // midrow X.5 → startingRow X+1
+                        } label: {
+                            HStack {
+                                Text(midrowMenuLabel(midrow))
+                                if abs(midrow - selectedMidrow) < 0.01 {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
+                            .foregroundStyle(.purple)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Start between rows")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text(midrowMenuLabel(selectedMidrow))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(.rect(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+
+                if !midrowPreview.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                            .foregroundStyle(.purple)
+                        Text("Sequence: \(midrowPreview)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
+        }
+    }
+
+    private func midrowMenuLabel(_ midrow: Double) -> String {
+        let lower = Int(midrow - 0.5)
+        let upper = lower + 1
+        return "Between rows \(lower)–\(upper) — \(formatMidrow(midrow))"
+    }
+
+    private func formatMidrow(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.1f", value)
+    }
+
+    private var midrowPreview: String {
+        guard let paddock = singleSelectedPaddock, !paddock.rows.isEmpty else { return "" }
+        let sequence = TrackingPattern.everySecondRow.generateSequence(
+            startRow: max(1, min(startingRow, paddock.rows.count)),
+            totalRows: paddock.rows.count,
+            reversed: reversedDirection
+        )
+        let preview = sequence.prefix(5).map { formatMidrow($0) }
+        return preview.joined(separator: " → ") + (sequence.count > 5 ? " → …" : "")
     }
 
     // MARK: Pattern
@@ -465,7 +599,7 @@ private struct MultiPaddockPickerSheet: View {
     @State private var searchText: String = ""
 
     private var filtered: [Paddock] {
-        let all = store.paddocks.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        let all = store.paddocks.sorted(by: StartTripSheet.rowOrderSort)
         guard !searchText.isEmpty else { return all }
         return all.filter { $0.name.localizedStandardContains(searchText) }
     }
@@ -524,7 +658,7 @@ private struct MultiPaddockPickerSheet: View {
                                             Text(paddock.name)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
-                                            Text("\(paddock.rows.count) rows · \(String(format: "%.2f", paddock.areaHectares)) ha")
+                                            Text("\(StartTripSheet.rowRangeLabel(for: paddock)) · \(String(format: "%.2f", paddock.areaHectares)) ha")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
