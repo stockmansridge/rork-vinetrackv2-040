@@ -368,11 +368,11 @@ struct StartTripSheet: View {
                 .buttonStyle(.plain)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Direction")
+                    Text("Sequence direction")
                         .font(.subheadline.weight(.semibold))
-                    Picker("Direction", selection: $directionHigherFirst) {
-                        Text("Lower rows first").tag(false)
-                        Text("Higher rows first").tag(true)
+                    Picker("Sequence direction", selection: $directionHigherFirst) {
+                        Text("Count down first").tag(false)
+                        Text("Count up first").tag(true)
                     }
                     .pickerStyle(.segmented)
                 }
