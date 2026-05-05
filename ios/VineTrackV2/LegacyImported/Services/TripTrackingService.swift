@@ -45,6 +45,33 @@ final class TripTrackingService {
     private var pathDistanceMap: [Double: Double] = [:]
     private var lastTrackingLocation: CLLocation?
 
+    // Cached GlobalRowIndex per selected paddock-id set. Built once per
+    // selection change instead of every GPS tick.
+    private var cachedRowIndex: GlobalRowIndex?
+    private var cachedRowIndexKey: [UUID] = []
+
+    // Hard cap on retained recent-speed samples in addition to the time window.
+    private let maxRecentSpeedSamples: Int = 30
+
+    // Cooldown to prevent the same path completing twice in quick succession.
+    private var lastAutoCompletePath: Double?
+    private var lastAutoCompleteAt: Date?
+    private let autoCompleteCooldown: TimeInterval = 2.5
+
+    // MARK: - Diagnostics (DEBUG only)
+    #if DEBUG
+    private(set) var diagLocationUpdateCount: Int = 0
+    private(set) var diagAutoCompleteFiredCount: Int = 0
+    private(set) var diagSequenceIndexChanges: Int = 0
+    private(set) var diagRowIndexBuildCount: Int = 0
+    private var lastDiagLogAt: Date = .distantPast
+    private func breadcrumb(_ message: @autoclosure () -> String) {
+        print("[ActiveTrip] \(message())")
+    }
+    #else
+    @inline(__always) private func breadcrumb(_ message: @autoclosure () -> String) {}
+    #endif
+
     // MARK: - Configuration
 
     func configure(store: MigratedDataStore, locationService: LocationService) {
@@ -135,6 +162,11 @@ final class TripTrackingService {
         recentSpeedSamples.removeAll()
         pathDistanceMap.removeAll()
         lastTrackingLocation = nil
+        cachedRowIndex = nil
+        cachedRowIndexKey = []
+        lastAutoCompletePath = nil
+        lastAutoCompleteAt = nil
+        breadcrumb("endTrip")
     }
 
     // MARK: - Manual point
@@ -319,6 +351,7 @@ final class TripTrackingService {
 
         locationService.startUpdating()
         locationService.startBackgroundUpdating()
+        breadcrumb("beginTracking")
         isTracking = true
         isPaused = false
         lastObservedLocation = locationService.location
@@ -376,6 +409,9 @@ final class TripTrackingService {
 
     private func appendPoint(from location: CLLocation, force: Bool) {
         guard let store, var trip = activeTrip, !trip.isPaused else { return }
+        #if DEBUG
+        diagLocationUpdateCount += 1
+        #endif
 
         let newPoint = CoordinatePoint(coordinate: location.coordinate)
         if let last = trip.pathPoints.last {
@@ -408,8 +444,11 @@ final class TripTrackingService {
     private func updateSmoothedSpeed(from location: CLLocation) {
         let now = Date()
         recentSpeedSamples.append((now, location))
-        // Keep ~5s of recent samples.
+        // Keep ~5s of recent samples, with a hard cap as a safety net.
         recentSpeedSamples.removeAll { now.timeIntervalSince($0.date) > 5 }
+        if recentSpeedSamples.count > maxRecentSpeedSamples {
+            recentSpeedSamples.removeFirst(recentSpeedSamples.count - maxRecentSpeedSamples)
+        }
 
         // Prefer a fresh, valid CLLocation.speed (m/s) when available.
         if location.speed >= 0, location.timestamp.timeIntervalSinceNow > -2 {
@@ -476,8 +515,9 @@ final class TripTrackingService {
 
         // Convert local row hit → global path number that lines up with
         // trip.rowSequence (which uses combined multi-block paths from
-        // StartTripSheet).
-        let index = GlobalRowIndex(paddocks: candidates)
+        // StartTripSheet). The index is cached per selection so we don't
+        // rebuild it on every GPS tick.
+        let index = rowIndex(for: candidates)
         let localRow = Int(match.rowNumber)
         let globalRow = index.globalRow(paddockId: paddock.id, localRow: localRow)
             ?? localRow
@@ -498,6 +538,10 @@ final class TripTrackingService {
         if !trip.rowSequence.isEmpty,
            let liveIdx = trip.rowSequence.firstIndex(of: livePath),
            liveIdx != trip.sequenceIndex {
+            #if DEBUG
+            diagSequenceIndexChanges += 1
+            breadcrumb("sequenceIndex \(trip.sequenceIndex) -> \(liveIdx) path=\(livePath)")
+            #endif
             // Mark the path we are leaving as completed if we accumulated
             // enough distance along it.
             let leaving = trip.rowSequence[trip.sequenceIndex]
@@ -532,6 +576,31 @@ final class TripTrackingService {
             )
         }
         rowsCoveredCount = trip.completedPaths.count
+        #if DEBUG
+        if Date().timeIntervalSince(lastDiagLogAt) > 10 {
+            lastDiagLogAt = Date()
+            breadcrumb(
+                "diag updates=\(diagLocationUpdateCount) trailPts=\(trip.pathPoints.count) " +
+                "autoCompletes=\(diagAutoCompleteFiredCount) seqChanges=\(diagSequenceIndexChanges) " +
+                "rowIndexBuilds=\(diagRowIndexBuildCount) selectedPaddocks=\(candidates.count)"
+            )
+        }
+        #endif
+    }
+
+    private func rowIndex(for candidates: [Paddock]) -> GlobalRowIndex {
+        let key = candidates.map(\.id)
+        if let cached = cachedRowIndex, key == cachedRowIndexKey {
+            return cached
+        }
+        let built = GlobalRowIndex(paddocks: candidates)
+        cachedRowIndex = built
+        cachedRowIndexKey = key
+        #if DEBUG
+        diagRowIndexBuildCount += 1
+        breadcrumb("rowIndex rebuilt entries=\(built.entries.count) totalRows=\(built.totalRows)")
+        #endif
+        return built
     }
 
     /// Choose the path (X-0.5 or X+0.5) for a detected global row that lies
@@ -574,6 +643,14 @@ final class TripTrackingService {
         guard !trip.completedPaths.contains(path),
               !trip.skippedPaths.contains(path) else { return }
 
+        // Cooldown: never auto-complete the same path twice within a few
+        // seconds, even if upstream calls us repeatedly.
+        if let last = lastAutoCompletePath, last == path,
+           let lastAt = lastAutoCompleteAt,
+           Date().timeIntervalSince(lastAt) < autoCompleteCooldown {
+            return
+        }
+
         let accumulated = pathDistanceMap[path, default: 0]
         let length = rowLength(forPath: path, paddock: paddock)
 
@@ -610,6 +687,14 @@ final class TripTrackingService {
                 trip.completedPaths.append(path)
                 didComplete = true
             }
+        }
+
+        if didComplete {
+            lastAutoCompletePath = path
+            lastAutoCompleteAt = Date()
+            #if DEBUG
+            diagAutoCompleteFiredCount += 1
+            #endif
         }
 
         #if DEBUG

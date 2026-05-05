@@ -355,16 +355,21 @@ struct ActiveTripView: View {
                 }
             }
 
-            // Gradient travelled path: oldest segment red → newest segment
-            // green, so the operator can see direction of travel at a glance.
-            if trip.pathPoints.count > 1 {
-                let coords = trip.pathPoints.map { $0.coordinate }
-                let segmentCount = max(coords.count - 1, 1)
-                ForEach(0..<(coords.count - 1), id: \.self) { i in
-                    let progress = Double(i) / Double(segmentCount)
-                    MapPolyline(coordinates: [coords[i], coords[i + 1]])
-                        .stroke(travelGradientColor(progress: progress), lineWidth: 4)
-                }
+            // Gradient travelled path bucketed into 3 polylines (red/amber/green)
+            // instead of one MapPolyline per GPS segment. This caps the overlay
+            // count regardless of trip length and prevents map/SwiftUI freeze.
+            let buckets = trailBuckets
+            if !buckets.red.isEmpty {
+                MapPolyline(coordinates: buckets.red)
+                    .stroke(Color(red: 1.0, green: 0.15, blue: 0.1), lineWidth: 4)
+            }
+            if !buckets.amber.isEmpty {
+                MapPolyline(coordinates: buckets.amber)
+                    .stroke(Color(red: 1.0, green: 0.65, blue: 0.0), lineWidth: 4)
+            }
+            if !buckets.green.isEmpty {
+                MapPolyline(coordinates: buckets.green)
+                    .stroke(Color(red: 0.15, green: 0.8, blue: 0.2), lineWidth: 4)
             }
 
             ForEach(store.pins.filter { $0.tripId == trip.id }) { pin in
@@ -411,11 +416,55 @@ struct ActiveTripView: View {
         .transition(.opacity)
     }
 
-    /// Travelled-path colour ramp: 0.0 (oldest) red → 0.5 amber → 1.0 green.
-    private func travelGradientColor(progress: Double) -> Color {
-        let p = min(max(progress, 0), 1)
-        // Linear ramp: red → green, no blue channel — yields red/orange/yellow/green.
-        return Color(red: 1.0 - p, green: p, blue: 0)
+    /// Hard cap on points displayed on the map. Older points are downsampled
+    /// (every Nth) so a long trip still shows the full shape without producing
+    /// thousands of MapPolyline overlays.
+    private static let maxDisplayedTrailPoints = 600
+
+    /// Bucketed travelled path. Splits the displayed trail into oldest/middle/
+    /// newest thirds, each rendered as a single MapPolyline. Three overlays
+    /// total no matter how long the trip is.
+    private var trailBuckets: (red: [CLLocationCoordinate2D], amber: [CLLocationCoordinate2D], green: [CLLocationCoordinate2D]) {
+        let points = trip.pathPoints
+        guard points.count > 1 else { return ([], [], []) }
+
+        // Downsample if we exceed the cap. Keep first/last; pick stride that
+        // bounds output length.
+        let coords: [CLLocationCoordinate2D]
+        if points.count <= Self.maxDisplayedTrailPoints {
+            coords = points.map { $0.coordinate }
+        } else {
+            let stride = max(1, points.count / Self.maxDisplayedTrailPoints)
+            var sampled: [CLLocationCoordinate2D] = []
+            sampled.reserveCapacity(Self.maxDisplayedTrailPoints + 2)
+            var i = 0
+            while i < points.count {
+                sampled.append(points[i].coordinate)
+                i += stride
+            }
+            if let last = points.last?.coordinate,
+               sampled.last?.latitude != last.latitude || sampled.last?.longitude != last.longitude {
+                sampled.append(last)
+            }
+            coords = sampled
+        }
+
+        let n = coords.count
+        guard n > 1 else { return ([], [], []) }
+
+        // Split into 3 contiguous segments. Overlap by 1 point so the polylines
+        // visually join without gaps at the bucket boundaries.
+        let third = max(1, n / 3)
+        let redEnd = min(third, n)
+        let amberEnd = min(third * 2, n)
+
+        let red = Array(coords[0..<redEnd])
+        let amberStart = max(redEnd - 1, 0)
+        let amber = amberEnd > amberStart ? Array(coords[amberStart..<amberEnd]) : []
+        let greenStart = max(amberEnd - 1, 0)
+        let green = greenStart < n ? Array(coords[greenStart..<n]) : []
+
+        return (red, amber.count > 1 ? amber : [], green.count > 1 ? green : [])
     }
 
     // MARK: - Banners
