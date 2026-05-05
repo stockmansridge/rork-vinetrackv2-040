@@ -54,6 +54,15 @@ final class ManagementSyncMetadata {
         save()
     }
 
+    /// Reset all per-vineyard last-sync timestamps so the next sync is treated
+    /// as an initial sync. Used by one-time migrations that need to re-attempt
+    /// the initial seed push for data that pre-dates the sync wiring.
+    func resetAllLastSync() {
+        guard !state.lastSyncByVineyard.isEmpty else { return }
+        state.lastSyncByVineyard = [:]
+        save()
+    }
+
     private func save() { persistence.save(state, key: key) }
 }
 
@@ -458,6 +467,16 @@ final class TractorSyncService {
     init(repository: (any TractorSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseTractorSyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_tractor_sync_metadata")
+
+        // One-time recovery: existing devices may have a stored lastSync from
+        // a previous failed initial seed (tractors created before sync was
+        // wired never reached Supabase). Reset lastSync once so the next sync
+        // treats it as a fresh initial sync and re-attempts the seed push.
+        let migrationKey = "vinetrack_tractor_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -527,20 +546,40 @@ final class TractorSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+
+        // Initial sync: push any local tractors that don't yet exist remotely.
+        // Previously this only ran when `remote.isEmpty`, which missed cases
+        // where some (but not all) local tractors had been pushed.
+        if lastSync == nil {
+            let allRemote: [BackendTractor]
+            if remote.isEmpty {
+                allRemote = remote
+            } else {
+                // `remote` already contains every row for this vineyard when
+                // since is nil, so we can reuse it.
+                allRemote = remote
+            }
+            let remoteIds = Set(allRemote.map { $0.id })
             let local = store.tractors.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendTractor.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendTractor.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[TractorSync] initial seed pushed \(payloads.count) local tractor(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[TractorSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
+
         for item in remote {
             if item.deletedAt != nil {
                 store.applyRemoteTractorDelete(item.id)

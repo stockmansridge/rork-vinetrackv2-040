@@ -343,6 +343,7 @@ struct EquipmentFormSheet: View {
 struct TractorFormSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MigratedDataStore.self) private var store
+    @Environment(TractorSyncService.self) private var tractorSync
 
     let tractor: Tractor?
 
@@ -478,6 +479,9 @@ struct TractorFormSheet: View {
         } else {
             store.addTractor(Tractor(name: displayName, brand: brand, model: model, modelYear: parsedYear, fuelUsageLPerHour: usage))
         }
+        // Push immediately so other devices see the change without waiting for
+        // a scene-phase active event or vineyard switch.
+        Task { await tractorSync.syncForSelectedVineyard() }
     }
 }
 
