@@ -25,6 +25,7 @@ final class PaddockSyncService {
     private let repository: any PaddockSyncRepositoryProtocol
     private let metadata: PaddockSyncMetadata
     private var isConfigured: Bool = false
+    private var needsForceRepushMigration: Bool = false
 
     init(
         repository: (any PaddockSyncRepositoryProtocol)? = nil,
@@ -32,6 +33,19 @@ final class PaddockSyncService {
     ) {
         self.repository = repository ?? SupabasePaddockSyncRepository()
         self.metadata = metadata ?? PaddockSyncMetadata()
+
+        // One-time recovery: paddocks created/edited before newer columns
+        // (e.g. intermediate_post_spacing) were wired into the upsert payload
+        // may sit in Supabase without those values, so other devices pull
+        // incomplete rows. Reset lastSync once and force-mark all local
+        // paddocks dirty in configure(...) so they get re-pushed with the
+        // current schema.
+        let migrationKey = "vinetrack_paddock_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            self.needsForceRepushMigration = true
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     // MARK: - Configuration
@@ -46,6 +60,16 @@ final class PaddockSyncService {
         }
         store.onPaddockDeleted = { [weak self] id in
             self?.markPaddockDeleted(id)
+        }
+        if needsForceRepushMigration {
+            needsForceRepushMigration = false
+            let now = Date()
+            for paddock in store.paddocks {
+                metadata.markDirty(paddock.id, at: now)
+            }
+            #if DEBUG
+            print("[PaddockSync] force-repush migration: marked \(store.paddocks.count) paddock(s) dirty for re-push")
+            #endif
         }
     }
 
@@ -151,19 +175,32 @@ final class PaddockSyncService {
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetchPaddocks(vineyardId: vineyardId, since: lastSync)
 
-        // Initial sync: if remote is empty AND we have local paddocks AND we have
-        // never synced before, push them all up so the cloud picks them up.
-        if remote.isEmpty, lastSync == nil {
+        // Initial sync: push any local paddocks that don't yet exist remotely.
+        // Previously this only ran when `remote.isEmpty`, which missed the
+        // partial-remote case where some local paddocks were already pushed
+        // but others (or newer fields) were never persisted to Supabase.
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let localForVineyard = store.paddocks.filter { $0.vineyardId == vineyardId }
-            if !localForVineyard.isEmpty {
+            let missing = localForVineyard.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = localForVineyard.map {
+                let payloads = missing.map {
                     BackendPaddock.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now)
                 }
-                try await repository.upsertPaddocks(payloads)
+                do {
+                    try await repository.upsertPaddocks(payloads)
+                    #if DEBUG
+                    print("[PaddockSync] initial seed pushed \(payloads.count) local paddock(s) missing remotely")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[PaddockSync] initial seed push failed: \(error.localizedDescription)")
+                    #endif
+                }
             }
-            return
+            if remote.isEmpty { return }
         }
 
         for backendPaddock in remote {
@@ -243,6 +280,14 @@ final class PaddockSyncMetadata {
     func clearDeleted(_ ids: [UUID]) {
         guard !ids.isEmpty else { return }
         for id in ids { state.pendingDeletes.removeValue(forKey: id) }
+        save()
+    }
+
+    /// One-time migration helper: clear all stored lastSync timestamps so the
+    /// next sync is treated as a fresh initial sync. Does NOT touch local
+    /// paddock data or pending dirty/delete sets.
+    func resetAllLastSync() {
+        state.lastSyncByVineyard = [:]
         save()
     }
 
