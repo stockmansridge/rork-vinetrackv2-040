@@ -11,20 +11,40 @@ struct StartTripSheet: View {
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selectedPaddockId: UUID?
+    @State private var selectedPaddockIds: Set<UUID> = []
     @State private var trackingPattern: TrackingPattern = .sequential
     @State private var startingRow: Int = 1
     @State private var reversedDirection: Bool = false
     @State private var personName: String = ""
     @State private var showPaddockPicker: Bool = false
 
-    private var selectedPaddock: Paddock? {
-        guard let id = selectedPaddockId else { return nil }
-        return store.paddocks.first(where: { $0.id == id })
+    private var selectedPaddocks: [Paddock] {
+        store.paddocks
+            .filter { selectedPaddockIds.contains($0.id) }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+    }
+
+    /// Single-paddock convenience used for row guidance / starting row UI.
+    /// Only non-nil when exactly one block is selected.
+    private var singleSelectedPaddock: Paddock? {
+        guard selectedPaddocks.count == 1 else { return nil }
+        return selectedPaddocks.first
     }
 
     private var totalRows: Int {
-        selectedPaddock?.rows.count ?? 0
+        singleSelectedPaddock?.rows.count ?? 0
+    }
+
+    private var totalAreaHectares: Double {
+        selectedPaddocks.reduce(0) { $0 + $1.areaHectares }
+    }
+
+    private var totalRowsAcrossSelection: Int {
+        selectedPaddocks.reduce(0) { $0 + $1.rows.count }
+    }
+
+    private var totalVinesAcrossSelection: Int {
+        selectedPaddocks.reduce(0) { $0 + $1.effectiveVineCount }
     }
 
     var body: some View {
@@ -33,7 +53,7 @@ struct StartTripSheet: View {
                 VStack(spacing: 20) {
                     heroHeader
                     blockSection
-                    if selectedPaddock != nil {
+                    if singleSelectedPaddock != nil {
                         directionSection
                     }
                     patternSection
@@ -63,12 +83,12 @@ struct StartTripSheet: View {
                 if personName.isEmpty, let name = auth.userName {
                     personName = name
                 }
-                if selectedPaddockId == nil {
-                    selectedPaddockId = store.paddocks.first?.id
+                if selectedPaddockIds.isEmpty, let first = store.paddocks.first?.id {
+                    selectedPaddockIds = [first]
                 }
             }
             .sheet(isPresented: $showPaddockPicker) {
-                PaddockPickerSheet(selectedId: $selectedPaddockId)
+                MultiPaddockPickerSheet(selectedIds: $selectedPaddockIds)
             }
         }
         .presentationDetents([.large])
@@ -114,19 +134,29 @@ struct StartTripSheet: View {
                             .frame(width: 44, height: 44)
                         GrapeLeafIcon(size: 22, color: VineyardTheme.leafGreen)
                     }
-                    if let paddock = selectedPaddock {
+                    if let paddock = singleSelectedPaddock {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(paddock.name)
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
                             blockMetaLine(for: paddock)
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("No block selected")
+                    } else if !selectedPaddocks.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(selectedPaddocks.count) blocks selected")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                            Text("Tap to choose a block (optional)")
+                            Text(selectedPaddocks.map(\.name).joined(separator: ", "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("No blocks selected")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("Tap to choose one or more blocks (optional)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -142,10 +172,27 @@ struct StartTripSheet: View {
             }
             .buttonStyle(.plain)
 
-            if let paddock = selectedPaddock, !paddock.rows.isEmpty {
+            if let paddock = singleSelectedPaddock, !paddock.rows.isEmpty {
                 blockStatsRow(for: paddock)
+            } else if selectedPaddocks.count > 1 {
+                multiBlockStatsRow
             }
         }
+    }
+
+    private var multiBlockStatsRow: some View {
+        HStack(spacing: 0) {
+            statCell(value: "\(selectedPaddocks.count)", label: "Blocks")
+            Divider().frame(height: 32)
+            statCell(value: String(format: "%.2f", totalAreaHectares), label: "Hectares")
+            Divider().frame(height: 32)
+            statCell(value: "\(totalRowsAcrossSelection)", label: "Rows")
+            Divider().frame(height: 32)
+            statCell(value: "\(totalVinesAcrossSelection)", label: "Vines")
+        }
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 12))
     }
 
     private func blockMetaLine(for paddock: Paddock) -> some View {
@@ -364,31 +411,43 @@ struct StartTripSheet: View {
     }
 
     private func handleStart() {
-        let paddockName: String = selectedPaddock?.name ?? ""
+        // Primary paddock = the only selected, or the first sorted when multiple.
+        let primary: Paddock? = singleSelectedPaddock ?? selectedPaddocks.first
+        let paddockName: String
+        if selectedPaddocks.count > 1 {
+            paddockName = selectedPaddocks.map(\.name).joined(separator: ", ")
+        } else {
+            paddockName = primary?.name ?? ""
+        }
 
         tracking.startTrip(
             type: .maintenance,
-            paddockId: selectedPaddockId,
+            paddockId: primary?.id,
             paddockName: paddockName,
             trackingPattern: trackingPattern,
             personName: personName
         )
 
-        if let paddock = selectedPaddock,
-           !paddock.rows.isEmpty,
-           var trip = tracking.activeTrip {
-            let sequence = trackingPattern.generateSequence(
-                startRow: max(1, min(startingRow, paddock.rows.count)),
-                totalRows: paddock.rows.count,
-                reversed: reversedDirection
-            )
-            if let first = sequence.first {
-                trip.rowSequence = sequence
-                trip.sequenceIndex = 0
-                trip.currentRowNumber = first
-                trip.nextRowNumber = sequence.dropFirst().first ?? first
-                store.updateTrip(trip)
+        // Persist the full multi-block selection on the active trip and apply
+        // row sequence only when exactly one block is selected (row guidance
+        // is single-block by design).
+        if var trip = tracking.activeTrip {
+            trip.paddockIds = Array(selectedPaddockIds)
+
+            if let paddock = singleSelectedPaddock, !paddock.rows.isEmpty {
+                let sequence = trackingPattern.generateSequence(
+                    startRow: max(1, min(startingRow, paddock.rows.count)),
+                    totalRows: paddock.rows.count,
+                    reversed: reversedDirection
+                )
+                if let first = sequence.first {
+                    trip.rowSequence = sequence
+                    trip.sequenceIndex = 0
+                    trip.currentRowNumber = first
+                    trip.nextRowNumber = sequence.dropFirst().first ?? first
+                }
             }
+            store.updateTrip(trip)
         }
 
         if tracking.errorMessage == nil {
@@ -397,18 +456,22 @@ struct StartTripSheet: View {
     }
 }
 
-// MARK: - Paddock Picker Sheet
+// MARK: - Multi Paddock Picker Sheet
 
-private struct PaddockPickerSheet: View {
+private struct MultiPaddockPickerSheet: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @Binding var selectedId: UUID?
+    @Binding var selectedIds: Set<UUID>
     @State private var searchText: String = ""
 
     private var filtered: [Paddock] {
         let all = store.paddocks.sorted { $0.name.lowercased() < $1.name.lowercased() }
         guard !searchText.isEmpty else { return all }
         return all.filter { $0.name.localizedStandardContains(searchText) }
+    }
+
+    private var allSelected: Bool {
+        !store.paddocks.isEmpty && selectedIds.count == store.paddocks.count
     }
 
     var body: some View {
@@ -418,36 +481,44 @@ private struct PaddockPickerSheet: View {
                     ContentUnavailableView {
                         Label("No Blocks", systemImage: "square.grid.2x2")
                     } description: {
-                        Text("Create blocks first to assign trips to a specific block.")
+                        Text("Create blocks first to assign trips to specific blocks.")
                     }
                 } else {
                     List {
                         Section {
                             Button {
-                                selectedId = nil
-                                dismiss()
+                                if allSelected {
+                                    selectedIds.removeAll()
+                                } else {
+                                    selectedIds = Set(store.paddocks.map(\.id))
+                                }
                             } label: {
                                 HStack {
-                                    Image(systemName: "minus.circle")
-                                        .foregroundStyle(.secondary)
-                                    Text("No block (general trip)")
+                                    Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(allSelected ? AnyShapeStyle(.blue) : AnyShapeStyle(.secondary))
+                                    Text(allSelected ? "Deselect All" : "Select All")
                                         .foregroundStyle(.primary)
                                     Spacer()
-                                    if selectedId == nil {
-                                        Image(systemName: "checkmark")
-                                            .foregroundStyle(.blue)
-                                    }
+                                    Text("\(selectedIds.count) of \(store.paddocks.count)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
 
                         Section {
                             ForEach(filtered) { paddock in
+                                let isSelected = selectedIds.contains(paddock.id)
                                 Button {
-                                    selectedId = paddock.id
-                                    dismiss()
+                                    if isSelected {
+                                        selectedIds.remove(paddock.id)
+                                    } else {
+                                        selectedIds.insert(paddock.id)
+                                    }
                                 } label: {
                                     HStack(spacing: 12) {
+                                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(isSelected ? AnyShapeStyle(.blue) : AnyShapeStyle(.tertiary))
                                         GrapeLeafIcon(size: 20, color: VineyardTheme.leafGreen)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(paddock.name)
@@ -458,12 +529,9 @@ private struct PaddockPickerSheet: View {
                                                 .foregroundStyle(.secondary)
                                         }
                                         Spacer()
-                                        if selectedId == paddock.id {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(.blue)
-                                        }
                                     }
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -471,11 +539,15 @@ private struct PaddockPickerSheet: View {
                     .searchable(text: $searchText, prompt: "Search blocks")
                 }
             }
-            .navigationTitle("Select Block")
+            .navigationTitle("Select Blocks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .fontWeight(.semibold)
                 }
             }
         }
