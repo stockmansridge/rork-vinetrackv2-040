@@ -505,7 +505,8 @@ final class TripTrackingService {
                 path: leaving,
                 trip: &trip,
                 paddock: paddock,
-                rowWidth: paddock.rowWidth
+                rowWidth: paddock.rowWidth,
+                location: locationService?.location
             )
             trip.sequenceIndex = liveIdx
             if liveIdx + 1 < trip.rowSequence.count {
@@ -526,7 +527,8 @@ final class TripTrackingService {
                 path: livePath,
                 trip: &trip,
                 paddock: paddock,
-                rowWidth: paddock.rowWidth
+                rowWidth: paddock.rowWidth,
+                location: locationService?.location
             )
         }
         rowsCoveredCount = trip.completedPaths.count
@@ -557,26 +559,86 @@ final class TripTrackingService {
         pathDistanceMap[path, default: 0] += segment
     }
 
+    /// Rows shorter than this are considered "short" and use a more
+    /// forgiving auto-completion rule that accounts for GPS drift, turning
+    /// radius and slow tractor speed at the row ends.
+    private let shortRowThresholdMetres: Double = 25.0
+
     private func finalizeIfThresholdMet(
         path: Double,
         trip: inout Trip,
         paddock: Paddock,
-        rowWidth: Double
+        rowWidth: Double,
+        location: CLLocation?
     ) {
         guard !trip.completedPaths.contains(path),
               !trip.skippedPaths.contains(path) else { return }
-        if let length = rowLength(forPath: path, paddock: paddock), length > 1 {
-            let progress = pathDistanceMap[path, default: 0] / length
-            if progress >= 0.8 {
-                trip.completedPaths.append(path)
+
+        let accumulated = pathDistanceMap[path, default: 0]
+        let length = rowLength(forPath: path, paddock: paddock)
+
+        var ruleUsed: String
+        var requiredDistance: Double
+        var didComplete = false
+
+        if let length, length > 1 {
+            if length <= shortRowThresholdMetres {
+                // Short-row rule: complete on either
+                //  • ~60 % of the row length covered (min 4 m), OR
+                //  • operator is within ~3 m of either row end.
+                ruleUsed = "shortRow"
+                requiredDistance = max(4.0, length * 0.6)
+                let nearEnd = isNearPathEnd(path: path, paddock: paddock, location: location, tolerance: 3.0)
+                if accumulated >= requiredDistance || nearEnd {
+                    trip.completedPaths.append(path)
+                    didComplete = true
+                }
+            } else {
+                // Long-row rule: original 80 % progress threshold.
+                ruleUsed = "longRow"
+                requiredDistance = length * 0.8
+                if accumulated >= requiredDistance {
+                    trip.completedPaths.append(path)
+                    didComplete = true
+                }
             }
         } else {
-            // Fallback: if we have no row geometry length, treat any reasonable
-            // accumulation as completion (10 metres along the path).
-            if pathDistanceMap[path, default: 0] >= 10 {
+            // Fallback: no usable geometry length — 10 m of accumulation.
+            ruleUsed = "fallback"
+            requiredDistance = 10.0
+            if accumulated >= requiredDistance {
                 trip.completedPaths.append(path)
+                didComplete = true
             }
         }
+
+        #if DEBUG
+        let lengthStr = length.map { String(format: "%.1f", $0) } ?? "nil"
+        print(
+            "[TripAutoComplete] path=\(path) rowLength=\(lengthStr)m rule=\(ruleUsed) " +
+            "required=\(String(format: "%.1f", requiredDistance))m " +
+            "accumulated=\(String(format: "%.1f", accumulated))m " +
+            "autoComplete=\(didComplete)"
+        )
+        #endif
+    }
+
+    private func isNearPathEnd(
+        path: Double,
+        paddock: Paddock,
+        location: CLLocation?,
+        tolerance: Double
+    ) -> Bool {
+        guard let location else { return false }
+        let neighbours = [Int(floor(path)), Int(ceil(path))]
+        for number in neighbours {
+            guard let row = paddock.rows.first(where: { $0.number == number }) else { continue }
+            let start = CLLocation(latitude: row.startPoint.latitude, longitude: row.startPoint.longitude)
+            let end = CLLocation(latitude: row.endPoint.latitude, longitude: row.endPoint.longitude)
+            if location.distance(from: start) <= tolerance { return true }
+            if location.distance(from: end) <= tolerance { return true }
+        }
+        return false
     }
 
     private func rowLength(forPath path: Double, paddock: Paddock) -> Double? {
