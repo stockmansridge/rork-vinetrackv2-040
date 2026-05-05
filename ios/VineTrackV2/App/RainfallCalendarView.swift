@@ -374,6 +374,7 @@ struct RainfallCalendarView: View {
 
             ScrollView(.horizontal, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 6) {
+                    summaryHeaderRow(months: months)
                     summaryRow(label: "TOTALS",     months: months) { mmString($0.totalMm) }
                     summaryRow(label: "Rain days",  months: months) { "\($0.rainDays)" }
                     summaryRow(label: "Wettest day", months: months) {
@@ -387,6 +388,19 @@ struct RainfallCalendarView: View {
             }
 
             annualCard(annual)
+        }
+    }
+
+    private func summaryHeaderRow(months: [RainfallMonthSummary]) -> some View {
+        HStack(spacing: 0) {
+            Text("")
+                .frame(width: dayColumnWidth + 60, alignment: .leading)
+            ForEach(months, id: \.month) { entry in
+                Text(monthAbbrev(entry.month))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: monthColumnWidth, alignment: .center)
+            }
         }
     }
 
