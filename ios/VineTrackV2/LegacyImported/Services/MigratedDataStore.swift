@@ -196,6 +196,7 @@ final class MigratedDataStore {
 
         grapeVarieties = Self.dedupById(grapeVarieties) { $0.id }
         operatorCategories = Self.dedupById(operatorCategories) { $0.id }
+        operatorCategories = Self.dedupOperatorCategoriesByVineyardAndName(operatorCategories)
         buttonTemplates = Self.dedupById(buttonTemplates) { $0.id }
         buttonTemplates = Self.dedupTemplatesByNameModeVineyard(buttonTemplates)
         buttonTemplates = Self.collapseDefaultTemplates(buttonTemplates)
@@ -252,6 +253,29 @@ final class MigratedDataStore {
                     result.append(item)
                 }
             } else {
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    /// Collapse operator categories that share the same (vineyardId, lowercased name).
+    /// Keeps the entry with the highest costPerHour; ties keep the first occurrence.
+    /// Used at load time to clean up duplicates accumulated from earlier sync bugs
+    /// or cross-client creates with the same name.
+    private static func dedupOperatorCategoriesByVineyardAndName(_ items: [OperatorCategory]) -> [OperatorCategory] {
+        var seen: [String: Int] = [:]
+        var result: [OperatorCategory] = []
+        result.reserveCapacity(items.count)
+        for item in items {
+            let trimmed = item.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let key = "\(item.vineyardId.uuidString)|\(trimmed)"
+            if let idx = seen[key] {
+                if item.costPerHour > result[idx].costPerHour {
+                    result[idx] = item
+                }
+            } else {
+                seen[key] = result.count
                 result.append(item)
             }
         }

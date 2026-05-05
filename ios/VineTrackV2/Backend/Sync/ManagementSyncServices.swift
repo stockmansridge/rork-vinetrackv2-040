@@ -898,5 +898,8 @@ final class OperatorCategorySyncService {
             store.applyRemoteOperatorCategoryUpsert(item.toOperatorCategory())
             metadata.clearDirty([item.id])
         }
+        // After applying remote upserts, collapse any duplicate operator categories
+        // (same vineyard, same name) so the next push will soft-delete the losers.
+        _ = store.deduplicateOperatorCategories()
     }
 }
