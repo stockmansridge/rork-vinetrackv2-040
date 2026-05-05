@@ -13,8 +13,12 @@ struct StartTripSheet: View {
 
     @State private var selectedPaddockIds: Set<UUID> = []
     @State private var trackingPattern: TrackingPattern = .sequential
-    @State private var startingRow: Int = 1
-    @State private var reversedDirection: Bool = false
+    /// Selected start path (e.g. 0.5, 1.5, … N+0.5). Path X.5 sits between rows X and X+1.
+    /// Path 0.5 is before row 1; path (totalRows+0.5) is after the last row.
+    @State private var startPath: Double = 0.5
+    /// Direction selector for traversal. true = higher rows first (ascending),
+    /// false = lower rows first (descending). Replaces the old "Reverse direction" toggle.
+    @State private var directionHigherFirst: Bool = true
     @State private var personName: String = ""
     @State private var showPaddockPicker: Bool = false
 
@@ -57,32 +61,38 @@ struct StartTripSheet: View {
         return selectedPaddocks.first
     }
 
-    /// Primary paddock used to drive row guidance when one or more blocks are
-    /// selected. Picks the first sorted block that actually has row geometry,
-    /// falling back to the first selected block.
-    private var primaryPaddock: Paddock? {
-        if let withRows = selectedPaddocks.first(where: { !$0.rows.isEmpty }) {
-            return withRows
-        }
-        return selectedPaddocks.first
+    /// Whether any selected block has row geometry. Used to gate the
+    /// row-guidance sections.
+    private var hasAnyRowGeometry: Bool {
+        selectedPaddocks.contains { !$0.rows.isEmpty }
     }
 
-    private var totalRows: Int {
-        primaryPaddock?.rows.count ?? 0
+    /// Combined total row count across every selected block. This drives the
+    /// global path range for multi-block trips.
+    private var combinedTotalRows: Int {
+        selectedPaddocks.reduce(0) { $0 + $1.rows.count }
     }
 
-    /// Available midrow start positions for "Every Second Row".
-    /// Midrow X.5 sits between rows X and X+1.
-    private var availableMidrows: [Double] {
-        let count = totalRows
-        guard count >= 2 else { return [1.5] }
-        return (1...(count - 1)).map { Double($0) + 0.5 }
+    /// Available start paths across the full selection: 0.5 (before row 1),
+    /// 1.5 (between rows 1–2), … N+0.5 (after the last row), where N is the
+    /// total row count across all selected blocks.
+    private var availablePaths: [Double] {
+        let n = combinedTotalRows
+        guard n > 0 else { return [0.5] }
+        return (0...n).map { Double($0) + 0.5 }
     }
 
-    /// Currently selected midrow, derived from `startingRow`.
-    /// startingRow=2 → 1.5, startingRow=3 → 2.5, etc.
-    private var selectedMidrow: Double {
-        max(1.5, Double(max(startingRow, 2)) - 0.5)
+    /// Combined row range label: "Rows 1–108" / "Paths 0.5–108.5".
+    private var combinedRangeLabel: String {
+        let n = combinedTotalRows
+        guard n > 0 else { return "Rows not configured" }
+        return "Rows 1–\(n)"
+    }
+
+    private var combinedPathsLabel: String {
+        let n = combinedTotalRows
+        guard n > 0 else { return "" }
+        return "Paths 0.5–\(formatPath(Double(n) + 0.5))"
     }
 
     private var totalAreaHectares: Double {
@@ -103,13 +113,11 @@ struct StartTripSheet: View {
                 VStack(spacing: 20) {
                     heroHeader
                     blockSection
-                    if let primary = primaryPaddock, !primary.rows.isEmpty {
+                    if hasAnyRowGeometry {
                         directionSection
                     }
                     patternSection
-                    if trackingPattern == .everySecondRow,
-                       let primary = primaryPaddock,
-                       !primary.rows.isEmpty {
+                    if trackingPattern == .everySecondRow, hasAnyRowGeometry {
                         midrowSection
                     }
                     operatorSection
@@ -141,6 +149,10 @@ struct StartTripSheet: View {
                 if selectedPaddockIds.isEmpty, let first = store.paddocks.first?.id {
                     selectedPaddockIds = [first]
                 }
+                clampStartPath()
+            }
+            .onChange(of: selectedPaddockIds) { _, _ in
+                clampStartPath()
             }
             .sheet(isPresented: $showPaddockPicker) {
                 MultiPaddockPickerSheet(selectedIds: $selectedPaddockIds)
@@ -302,83 +314,29 @@ struct StartTripSheet: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: Direction & starting row
+    // MARK: Start path & direction
 
     private var directionSection: some View {
-        sectionContainer(title: "Starting Row & Direction", icon: "arrow.up.arrow.down", tint: .blue) {
+        sectionContainer(title: "Start Path & Direction", icon: "arrow.up.arrow.down", tint: .blue) {
             VStack(spacing: 10) {
-                if selectedPaddocks.count > 1, let primary = primaryPaddock {
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .font(.caption2)
-                        Text("Row guidance follows \(primary.name) (\(Self.rowRangeLabel(for: primary)))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        Spacer()
-                    }
-                }
-                HStack(spacing: 12) {
-                    Text("Start Row")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Stepper(value: $startingRow, in: 1...max(totalRows, 1)) {
-                        Text("\(startingRow)")
-                            .font(.subheadline.weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.primary)
-                    }
-                    .labelsHidden()
-                    Text("\(startingRow) of \(max(totalRows, 1))")
-                        .font(.caption.monospacedDigit())
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                    Text(rowGuidanceHelperText)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
                 }
-                .padding(14)
-                .background(Color(.secondarySystemGroupedBackground))
-                .clipShape(.rect(cornerRadius: 12))
-
-                Toggle(isOn: $reversedDirection) {
-                    HStack(spacing: 8) {
-                        Image(systemName: reversedDirection ? "arrow.left" : "arrow.right")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.blue)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Reverse direction")
-                                .font(.subheadline.weight(.semibold))
-                            Text(reversedDirection ? "Run sequence in reverse" : "Run sequence forwards")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(14)
-                .background(Color(.secondarySystemGroupedBackground))
-                .clipShape(.rect(cornerRadius: 12))
-            }
-        }
-    }
-
-    // MARK: Start midrow (Every Second Row)
-
-    private var midrowSection: some View {
-        sectionContainer(
-            title: "Start Between Rows",
-            icon: "arrow.left.and.right",
-            tint: .purple
-        ) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Every Second Row advances by +2. Pick the midrow to start on — the sequence depends on this choice.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 Menu {
-                    ForEach(availableMidrows, id: \.self) { midrow in
+                    ForEach(availablePaths, id: \.self) { path in
                         Button {
-                            startingRow = Int(midrow + 0.5) // midrow X.5 → startingRow X+1
+                            startPath = path
                         } label: {
                             HStack {
-                                Text(midrowMenuLabel(midrow))
-                                if abs(midrow - selectedMidrow) < 0.01 {
+                                Text(pathMenuLabel(path))
+                                if abs(path - startPath) < 0.01 {
                                     Spacer()
                                     Image(systemName: "checkmark")
                                 }
@@ -388,13 +346,13 @@ struct StartTripSheet: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "point.topleft.down.to.point.bottomright.curvepath")
-                            .foregroundStyle(.purple)
+                            .foregroundStyle(.blue)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Start between rows")
+                            Text("Start path")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                            Text(midrowMenuLabel(selectedMidrow))
+                            Text(pathMenuLabel(startPath))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -409,6 +367,78 @@ struct StartTripSheet: View {
                 }
                 .buttonStyle(.plain)
 
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Direction")
+                        .font(.subheadline.weight(.semibold))
+                    Picker("Direction", selection: $directionHigherFirst) {
+                        Text("Lower rows first").tag(false)
+                        Text("Higher rows first").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(.rect(cornerRadius: 12))
+            }
+        }
+    }
+
+    private var rowGuidanceHelperText: String {
+        let n = combinedTotalRows
+        guard n > 0 else { return "Row guidance unavailable for the selected blocks" }
+        if selectedPaddocks.count > 1 {
+            return "Row guidance follows all selected blocks (\(combinedRangeLabel) · \(combinedPathsLabel))"
+        }
+        return "Row guidance follows selected block (\(combinedRangeLabel) · \(combinedPathsLabel))"
+    }
+
+    private func pathMenuLabel(_ path: Double) -> String {
+        let n = combinedTotalRows
+        let pathStr = formatPath(path)
+        if path < 1.0 {
+            return "Path before row 1 — \(pathStr)"
+        }
+        if n > 0, path > Double(n) {
+            return "Path after row \(n) — \(pathStr)"
+        }
+        let lower = Int(floor(path))
+        let upper = lower + 1
+        return "Between rows \(lower)–\(upper) — \(pathStr)"
+    }
+
+    private func formatPath(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.1f", value)
+    }
+
+    private func clampStartPath() {
+        let paths = availablePaths
+        guard let first = paths.first, let last = paths.last else { return }
+        if startPath < first { startPath = first }
+        if startPath > last { startPath = last }
+        // Snap to nearest valid X.5
+        let rounded = (startPath - 0.5).rounded() + 0.5
+        if abs(rounded - startPath) > 0.01 {
+            startPath = min(max(rounded, first), last)
+        }
+    }
+
+    // MARK: Every Second Row preview
+
+    private var midrowSection: some View {
+        sectionContainer(
+            title: "Every Second Row Preview",
+            icon: "arrow.left.and.right",
+            tint: .purple
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Every Second Row advances by +2 in the chosen direction, then wraps to cover the remaining same-parity paths.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if !midrowPreview.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles")
@@ -420,33 +450,68 @@ struct StartTripSheet: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(.rect(cornerRadius: 12))
                 }
             }
         }
     }
 
-    private func midrowMenuLabel(_ midrow: Double) -> String {
-        let lower = Int(midrow - 0.5)
-        let upper = lower + 1
-        return "Between rows \(lower)–\(upper) — \(formatMidrow(midrow))"
-    }
-
-    private func formatMidrow(_ value: Double) -> String {
-        if value.truncatingRemainder(dividingBy: 1) == 0 {
-            return String(format: "%.0f", value)
-        }
-        return String(format: "%.1f", value)
-    }
-
     private var midrowPreview: String {
-        guard let paddock = primaryPaddock, !paddock.rows.isEmpty else { return "" }
-        let sequence = TrackingPattern.everySecondRow.generateSequence(
-            startRow: max(1, min(startingRow, paddock.rows.count)),
-            totalRows: paddock.rows.count,
-            reversed: reversedDirection
-        )
-        let preview = sequence.prefix(5).map { formatMidrow($0) }
+        let sequence = generatedSequence()
+        let preview = sequence.prefix(5).map { formatPath($0) }
         return preview.joined(separator: " → ") + (sequence.count > 5 ? " → …" : "")
+    }
+
+    /// Generate the full traversal sequence for the current pattern, start path,
+    /// and direction. For Every Second Row this is computed against the combined
+    /// multi-block path range with parity-preserving wrap. Other patterns fall
+    /// back to the existing engine using combined totalRows.
+    private func generatedSequence() -> [Double] {
+        let n = combinedTotalRows
+        guard n > 0 else { return [] }
+        if trackingPattern == .everySecondRow {
+            return Self.everySecondRowSequence(
+                paths: availablePaths,
+                startPath: startPath,
+                higherFirst: directionHigherFirst
+            )
+        }
+        // Map startPath (X.5) → startRow (X+1) for the existing engine.
+        let startRow = max(1, min(Int(startPath + 0.5), n))
+        // engine "reversed" = false means ascending. We want higherFirst = true to be ascending.
+        return trackingPattern.generateSequence(
+            startRow: startRow,
+            totalRows: n,
+            reversed: !directionHigherFirst
+        )
+    }
+
+    /// Every Second Row, parity-preserving sequence across the combined paths.
+    /// - Direction lower-first: start, start-2, start-4, …, then wrap to highest
+    ///   missed same-parity path and continue downward toward start+2.
+    /// - Direction higher-first: start, start+2, start+4, …, then wrap to lowest
+    ///   missed same-parity path and continue upward toward start-2.
+    static func everySecondRowSequence(paths: [Double], startPath: Double, higherFirst: Bool) -> [Double] {
+        guard !paths.isEmpty else { return [] }
+        let sorted = paths.sorted()
+        // Same-parity = even integer distance from startPath.
+        let sameParity = sorted.filter { p in
+            let diff = Int(round(p - startPath))
+            return diff % 2 == 0
+        }
+        guard !sameParity.isEmpty else { return [] }
+        if higherFirst {
+            let firstRun = sameParity.filter { $0 >= startPath }.sorted()
+            let wrap = sameParity.filter { $0 < startPath }.sorted()
+            return firstRun + wrap
+        } else {
+            let firstRun = sameParity.filter { $0 <= startPath }.sorted(by: >)
+            let wrap = sameParity.filter { $0 > startPath }.sorted(by: >)
+            return firstRun + wrap
+        }
     }
 
     // MARK: Pattern
@@ -586,17 +651,12 @@ struct StartTripSheet: View {
         )
 
         // Persist the full multi-block selection on the active trip and apply
-        // row sequence only when exactly one block is selected (row guidance
-        // is single-block by design).
+        // a row sequence generated against the combined multi-block path range.
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
-            if let paddock = primaryPaddock, !paddock.rows.isEmpty {
-                let sequence = trackingPattern.generateSequence(
-                    startRow: max(1, min(startingRow, paddock.rows.count)),
-                    totalRows: paddock.rows.count,
-                    reversed: reversedDirection
-                )
+            if hasAnyRowGeometry {
+                let sequence = generatedSequence()
                 if let first = sequence.first {
                     trip.rowSequence = sequence
                     trip.sequenceIndex = 0
