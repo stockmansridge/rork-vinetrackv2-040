@@ -102,6 +102,14 @@ final class SavedChemicalSyncService {
     init(repository: (any SavedChemicalSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseSavedChemicalSyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_saved_chemical_sync_metadata")
+
+        // One-time recovery: re-attempt initial seed push for rows that
+        // pre-date sync wiring but were never pushed remotely.
+        let migrationKey = "vinetrack_saved_chemical_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -173,22 +181,26 @@ final class SavedChemicalSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.savedChemicals.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendSavedChemical.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                let payloads = missing.map { BackendSavedChemical.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
                 do {
                     try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[SavedChemicalSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
                 } catch {
-                    // Likely RLS — operator can't write. Ignore default seeding push.
                     #if DEBUG
                     print("[SavedChemicalSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -227,6 +239,12 @@ final class SavedSprayPresetSyncService {
     init(repository: (any SavedSprayPresetSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseSavedSprayPresetSyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_saved_spray_preset_sync_metadata")
+
+        let migrationKey = "vinetrack_saved_spray_preset_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -296,19 +314,26 @@ final class SavedSprayPresetSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.savedSprayPresets.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendSavedSprayPreset.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendSavedSprayPreset.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[SavedSprayPresetSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[SavedSprayPresetSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -347,6 +372,12 @@ final class SprayEquipmentSyncService {
     init(repository: (any SprayEquipmentSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseSprayEquipmentSyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_spray_equipment_sync_metadata")
+
+        let migrationKey = "vinetrack_spray_equipment_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -416,19 +447,26 @@ final class SprayEquipmentSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.sprayEquipment.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendSprayEquipment.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendSprayEquipment.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[SprayEquipmentSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[SprayEquipmentSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -617,6 +655,12 @@ final class FuelPurchaseSyncService {
     init(repository: (any FuelPurchaseSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseFuelPurchaseSyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_fuel_purchase_sync_metadata")
+
+        let migrationKey = "vinetrack_fuel_purchase_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -686,19 +730,26 @@ final class FuelPurchaseSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.fuelPurchases.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendFuelPurchase.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendFuelPurchase.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[FuelPurchaseSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[FuelPurchaseSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -737,6 +788,12 @@ final class OperatorCategorySyncService {
     init(repository: (any OperatorCategorySyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseOperatorCategorySyncRepository()
         self.metadata = ManagementSyncMetadata(key: "vinetrack_operator_category_sync_metadata")
+
+        let migrationKey = "vinetrack_operator_category_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -806,19 +863,26 @@ final class OperatorCategorySyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.operatorCategories.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendOperatorCategory.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendOperatorCategory.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[OperatorCategorySync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[OperatorCategorySync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {

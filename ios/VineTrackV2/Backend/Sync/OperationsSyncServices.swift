@@ -40,6 +40,16 @@ final class OperationsSyncMetadata {
         guard !ids.isEmpty else { return }
         for id in ids { state.pendingDeletes.removeValue(forKey: id) }; save()
     }
+
+    /// Reset all per-vineyard last-sync timestamps so the next sync is treated
+    /// as an initial sync. Used by one-time recovery migrations for rows that
+    /// pre-date sync wiring and were never pushed.
+    func resetAllLastSync() {
+        guard !state.lastSyncByVineyard.isEmpty else { return }
+        state.lastSyncByVineyard = [:]
+        save()
+    }
+
     private func save() { persistence.save(state, key: key) }
 }
 
@@ -75,6 +85,14 @@ final class WorkTaskSyncService {
     init(repository: (any WorkTaskSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseWorkTaskSyncRepository()
         self.metadata = OperationsSyncMetadata(key: "vinetrack_work_task_sync_metadata")
+
+        // One-time recovery: re-attempt initial seed push for rows that
+        // pre-date sync wiring but never reached Supabase.
+        let migrationKey = "vinetrack_work_task_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -141,19 +159,26 @@ final class WorkTaskSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.workTasks.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendWorkTask.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendWorkTask.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[WorkTaskSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[WorkTaskSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -195,6 +220,12 @@ final class MaintenanceLogSyncService {
         self.repository = repository ?? SupabaseMaintenanceLogSyncRepository()
         self.metadata = OperationsSyncMetadata(key: "vinetrack_maintenance_log_sync_metadata")
         self.photoStorage = photoStorage ?? MaintenancePhotoStorageService()
+
+        let migrationKey = "vinetrack_maintenance_log_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -290,19 +321,26 @@ final class MaintenanceLogSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.maintenanceLogs.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendMaintenanceLog.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendMaintenanceLog.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[MaintenanceLogSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[MaintenanceLogSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -383,6 +421,12 @@ final class YieldEstimationSessionSyncService {
     init(repository: (any YieldEstimationSessionSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseYieldEstimationSessionSyncRepository()
         self.metadata = OperationsSyncMetadata(key: "vinetrack_yield_session_sync_metadata")
+
+        let migrationKey = "vinetrack_yield_session_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -449,19 +493,26 @@ final class YieldEstimationSessionSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.yieldSessions.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendYieldEstimationSession.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendYieldEstimationSession.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[YieldSessionSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[YieldSessionSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -499,6 +550,12 @@ final class DamageRecordSyncService {
     init(repository: (any DamageRecordSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseDamageRecordSyncRepository()
         self.metadata = OperationsSyncMetadata(key: "vinetrack_damage_record_sync_metadata")
+
+        let migrationKey = "vinetrack_damage_record_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -565,19 +622,26 @@ final class DamageRecordSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.damageRecords.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendDamageRecord.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendDamageRecord.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[DamageRecordSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[DamageRecordSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
@@ -614,6 +678,12 @@ final class HistoricalYieldRecordSyncService {
     init(repository: (any HistoricalYieldRecordSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseHistoricalYieldRecordSyncRepository()
         self.metadata = OperationsSyncMetadata(key: "vinetrack_historical_yield_sync_metadata")
+
+        let migrationKey = "vinetrack_historical_yield_sync_reset_v1"
+        if !UserDefaults.standard.bool(forKey: migrationKey) {
+            self.metadata.resetAllLastSync()
+            UserDefaults.standard.set(true, forKey: migrationKey)
+        }
     }
 
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
@@ -680,19 +750,26 @@ final class HistoricalYieldRecordSyncService {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
-        if remote.isEmpty, lastSync == nil {
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
             let local = store.historicalYieldRecords.filter { $0.vineyardId == vineyardId }
-            if !local.isEmpty {
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId
-                let payloads = local.map { BackendHistoricalYieldRecord.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
-                do { try await repository.upsertMany(payloads) } catch {
+                let payloads = missing.map { BackendHistoricalYieldRecord.upsert(from: $0, createdBy: createdBy, clientUpdatedAt: now) }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[HistoricalYieldSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
                     #if DEBUG
                     print("[HistoricalYieldSync] initial seed push failed: \(error.localizedDescription)")
                     #endif
                 }
             }
-            return
+            if remote.isEmpty { return }
         }
         for item in remote {
             if item.deletedAt != nil {
