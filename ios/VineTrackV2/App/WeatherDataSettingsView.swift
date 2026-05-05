@@ -417,7 +417,13 @@ struct WeatherDataSettingsView: View {
 
     private var davisSection: some View {
         let savedAndNotEditing = config.davisHasCredentials && !isEditingDavisCredentials
+        // The vineyard already has a server-side secret — no need for
+        // local Keychain credentials on this device. Reads go through
+        // the davis-proxy Edge Function for everyone.
+        let vineyardHasServerCreds = config.davisIsVineyardShared
+            && config.davisVineyardHasServerCredentials
         let hasOrphanStation = !config.davisHasCredentials
+            && !vineyardHasServerCreds
             && ((config.davisStationName?.isEmpty == false)
                 || (config.davisStationId?.isEmpty == false))
 
@@ -482,8 +488,13 @@ struct WeatherDataSettingsView: View {
                 .padding(.vertical, 4)
             }
 
-            // 1. Saved status card on top
-            if savedAndNotEditing && canEdit {
+            // Vineyard-shared status card — visible to owner/manager when
+            // the vineyard already has a stored Davis secret on the
+            // server (no local Keychain required on this device).
+            if vineyardHasServerCreds && canEdit && !isEditingDavisCredentials {
+                vineyardSharedStatusCard
+            } else if savedAndNotEditing && canEdit {
+                // Legacy local-only saved card (per-device Keychain).
                 savedStatusCard
             }
 
@@ -817,6 +828,31 @@ struct WeatherDataSettingsView: View {
         }
     }
 
+    private var vineyardSharedStatusCard: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "icloud.and.arrow.down.fill")
+                .font(.title3)
+                .foregroundStyle(.indigo)
+                .frame(width: 32, height: 32)
+                .background(Color.indigo.opacity(0.12), in: .rect(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Connected via vineyard-shared credentials")
+                    .font(.subheadline.weight(.semibold))
+                Text("This vineyard's Davis API secret is stored securely on the server. You don't need to re-enter credentials on this device — rainfall, current conditions and leaf wetness are fetched through a secure proxy.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let name = config.davisStationName, !name.isEmpty {
+                    Text("Station: \(name)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+    }
+
     private var savedStatusCard: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "checkmark.shield.fill")
@@ -978,12 +1014,15 @@ struct WeatherDataSettingsView: View {
             vineyardIntegration = integ
             vineyardIntegrationError = nil
             applyIntegrationToConfig(integ)
-            // Offer the migration prompt if this device has Keychain creds
-            // but the vineyard has none yet, and the caller may write.
+            // If this device has Keychain credentials and the vineyard
+            // doesn't yet have a server-side secret, automatically push
+            // them to the vineyard so other members/devices can fetch
+            // via davis-proxy. We still show a confirmation message
+            // afterwards so the owner/manager knows it happened.
             if canEdit,
                WeatherKeychain.hasCredentials,
                (integ?.hasApiSecret != true) {
-                showMigratePrompt = true
+                await runMigrationToVineyard(silent: true)
             }
         } catch {
             vineyardIntegration = nil
@@ -1061,13 +1100,13 @@ struct WeatherDataSettingsView: View {
         }
     }
 
-    private func runMigrationToVineyard() async {
+    private func runMigrationToVineyard(silent: Bool = false) async {
         guard canEdit, let vid = vineyardId,
               let apiKey = WeatherKeychain.get(.apiKey),
               let apiSecret = WeatherKeychain.get(.apiSecret),
               !apiKey.isEmpty, !apiSecret.isEmpty else { return }
-        isMigrating = true
-        defer { isMigrating = false }
+        if !silent { isMigrating = true }
+        defer { if !silent { isMigrating = false } }
         do {
             let payload = VineyardWeatherIntegrationSave(
                 p_vineyard_id: vid,
@@ -1089,11 +1128,21 @@ struct WeatherDataSettingsView: View {
             )
             try await integrationRepository.save(payload)
             VineyardWeatherIntegrationCache.shared.invalidate(vid)
-            migrationMessage = "Davis setup moved to this vineyard. All members now use the same station."
+            migrationMessage = silent
+                ? "Davis credentials are now shared with this vineyard. Other members and devices will use the same station automatically."
+                : "Davis setup moved to this vineyard. All members now use the same station."
             showMigratePrompt = false
-            await loadVineyardIntegration(for: vid)
+            // Refresh in-place without re-triggering migration.
+            if let integ = try? await integrationRepository.fetch(
+                vineyardId: vid, provider: "davis_weatherlink"
+            ) {
+                vineyardIntegration = integ
+                applyIntegrationToConfig(integ)
+            }
         } catch {
-            migrationMessage = "Could not save vineyard integration — \(error.localizedDescription)"
+            if !silent {
+                migrationMessage = "Could not save vineyard integration — \(error.localizedDescription)"
+            }
         }
     }
 
