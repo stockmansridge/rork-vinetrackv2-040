@@ -57,8 +57,18 @@ struct StartTripSheet: View {
         return selectedPaddocks.first
     }
 
+    /// Primary paddock used to drive row guidance when one or more blocks are
+    /// selected. Picks the first sorted block that actually has row geometry,
+    /// falling back to the first selected block.
+    private var primaryPaddock: Paddock? {
+        if let withRows = selectedPaddocks.first(where: { !$0.rows.isEmpty }) {
+            return withRows
+        }
+        return selectedPaddocks.first
+    }
+
     private var totalRows: Int {
-        singleSelectedPaddock?.rows.count ?? 0
+        primaryPaddock?.rows.count ?? 0
     }
 
     /// Available midrow start positions for "Every Second Row".
@@ -93,11 +103,13 @@ struct StartTripSheet: View {
                 VStack(spacing: 20) {
                     heroHeader
                     blockSection
-                    if singleSelectedPaddock != nil {
+                    if let primary = primaryPaddock, !primary.rows.isEmpty {
                         directionSection
                     }
                     patternSection
-                    if trackingPattern == .everySecondRow, singleSelectedPaddock != nil {
+                    if trackingPattern == .everySecondRow,
+                       let primary = primaryPaddock,
+                       !primary.rows.isEmpty {
                         midrowSection
                     }
                     operatorSection
@@ -295,6 +307,17 @@ struct StartTripSheet: View {
     private var directionSection: some View {
         sectionContainer(title: "Starting Row & Direction", icon: "arrow.up.arrow.down", tint: .blue) {
             VStack(spacing: 10) {
+                if selectedPaddocks.count > 1, let primary = primaryPaddock {
+                    HStack(spacing: 6) {
+                        Image(systemName: "info.circle")
+                            .font(.caption2)
+                        Text("Row guidance follows \(primary.name) (\(Self.rowRangeLabel(for: primary)))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                        Spacer()
+                    }
+                }
                 HStack(spacing: 12) {
                     Text("Start Row")
                         .font(.subheadline.weight(.semibold))
@@ -416,7 +439,7 @@ struct StartTripSheet: View {
     }
 
     private var midrowPreview: String {
-        guard let paddock = singleSelectedPaddock, !paddock.rows.isEmpty else { return "" }
+        guard let paddock = primaryPaddock, !paddock.rows.isEmpty else { return "" }
         let sequence = TrackingPattern.everySecondRow.generateSequence(
             startRow: max(1, min(startingRow, paddock.rows.count)),
             totalRows: paddock.rows.count,
@@ -568,7 +591,7 @@ struct StartTripSheet: View {
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
-            if let paddock = singleSelectedPaddock, !paddock.rows.isEmpty {
+            if let paddock = primaryPaddock, !paddock.rows.isEmpty {
                 let sequence = trackingPattern.generateSequence(
                     startRow: max(1, min(startingRow, paddock.rows.count)),
                     totalRows: paddock.rows.count,
