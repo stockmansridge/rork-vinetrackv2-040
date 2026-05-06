@@ -75,6 +75,36 @@ struct VineTrackV2Tests {
 
     /// Multi-block range no longer collapses to the first block: with 108 rows
     /// the user can pick a high start path like 107.5 and get a valid sequence.
+    /// Single block whose actual rows are 69–108: available paths run from
+    /// 68.5 to 108.5 (not 0.5–40.5). Verify Every Second Row honours those
+    /// actual numbers.
+    @Test func everySecondRow_singleBlock_rows69to108_actualNumbers() {
+        // Mimic StartTripSheet's availablePaths for a paddock with rows 69–108.
+        let rowNumbers = Array(69...108)
+        var set = Set<Double>()
+        for n in rowNumbers {
+            set.insert(Double(n) - 0.5)
+            set.insert(Double(n) + 0.5)
+        }
+        let paths = set.sorted()
+        #expect(paths.first == 68.5)
+        #expect(paths.last == 108.5)
+        #expect(paths.count == 41)
+
+        let seq = StartTripSheet.everySecondRowSequence(
+            paths: paths,
+            startPath: 100.5,
+            higherFirst: false
+        )
+        #expect(seq.first == 100.5)
+        #expect(Array(seq.prefix(3)) == [100.5, 98.5, 96.5])
+        // First run descends to 68.5 then wraps to highest same-parity path.
+        if let zeroIdx = seq.firstIndex(of: 68.5) {
+            #expect(seq[zeroIdx + 1] == 108.5)
+        }
+        #expect(seq.last == 102.5)
+    }
+
     @Test func everySecondRow_multiBlock_allowsHighStartPath() {
         let paths = (0...108).map { Double($0) + 0.5 }
         let seq = StartTripSheet.everySecondRowSequence(
