@@ -258,6 +258,51 @@ Before shipping, the portal must:
 - [ ] Hide / disable credential management UI for `operator` and
       `supervisor` roles.
 
+## 8. Duplicate integration audit
+
+The schema should enforce one row per vineyard/provider. This query should
+normally return no rows:
+
+```sql
+select
+  vineyard_id,
+  provider,
+  count(*) as row_count
+from public.vineyard_weather_integrations
+group by vineyard_id, provider
+having count(*) > 1;
+```
+
+Expected result: **No rows.**
+
+If rows are returned, **stop before enabling portal edits** and investigate /
+clean duplicates first. The unique constraint on `(vineyard_id, provider)`
+should make this impossible — any rows here indicate a schema drift that
+needs to be resolved before the portal writes new data.
+
+### Quick status check
+
+Useful read-only snapshot of all configured Davis integrations:
+
+```sql
+select
+  vineyard_id,
+  provider,
+  station_id,
+  station_name,
+  is_active,
+  last_tested_at,
+  last_test_status,
+  updated_at
+from public.vineyard_weather_integrations
+where provider = 'davis_weatherlink'
+order by updated_at desc;
+```
+
+> **Important:** never include `api_key` or `api_secret` in audit queries,
+> dashboards, or logs. The columns above are the only safe fields to
+> surface outside the secure RPC / edge-function path.
+
 ---
 
 For the full schema, see [`docs/supabase-schema.md`](./supabase-schema.md)
