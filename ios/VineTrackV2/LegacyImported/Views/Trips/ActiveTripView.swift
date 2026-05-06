@@ -24,6 +24,20 @@ struct ActiveTripView: View {
     @State private var fillElapsed: TimeInterval = 0
     @State private var showEndTankConfirmation: Bool = false
 
+    /// Display-only trail segments. Recomputed on a 1Hz throttled timer rather
+    /// than every GPS tick or every SwiftUI body invocation.
+    @State private var displayTrailSegments: [TrailSegment] = []
+    @State private var trailUpdateTimer: Timer?
+    @State private var lastTrailUpdate: Date?
+    @State private var trailDiagFullCount: Int = 0
+    @State private var trailDiagDisplayCount: Int = 0
+
+    /// Throttle interval for the live trail render. Location updates can keep
+    /// flowing in faster than this — only the on-screen polylines are paced.
+    private static let trailUpdateInterval: TimeInterval = 1.0
+    private static let maxDisplayTrailPoints: Int = 500
+    private static let maxTrailBuckets: Int = 5
+
     private var sprayRecord: SprayRecord? {
         store.sprayRecords.first { $0.tripId == trip.id }
     }
@@ -197,10 +211,14 @@ struct ActiveTripView: View {
         .onAppear {
             elapsedTimer = trip.activeDuration
             startTicker()
+            startTrailUpdater()
+            refreshDisplayTrail()
         }
         .onDisappear {
             ticker?.invalidate()
             ticker = nil
+            trailUpdateTimer?.invalidate()
+            trailUpdateTimer = nil
         }
         .onMapCameraChange { _ in
             isFollowingUser = false
@@ -355,21 +373,13 @@ struct ActiveTripView: View {
                 }
             }
 
-            // Gradient travelled path bucketed into 3 polylines (red/amber/green)
-            // instead of one MapPolyline per GPS segment. This caps the overlay
-            // count regardless of trip length and prevents map/SwiftUI freeze.
-            let buckets = trailBuckets
-            if !buckets.red.isEmpty {
-                MapPolyline(coordinates: buckets.red)
-                    .stroke(Color(red: 1.0, green: 0.15, blue: 0.1), lineWidth: 4)
-            }
-            if !buckets.amber.isEmpty {
-                MapPolyline(coordinates: buckets.amber)
-                    .stroke(Color(red: 1.0, green: 0.65, blue: 0.0), lineWidth: 4)
-            }
-            if !buckets.green.isEmpty {
-                MapPolyline(coordinates: buckets.green)
-                    .stroke(Color(red: 0.15, green: 0.8, blue: 0.2), lineWidth: 4)
+            // Display trail is precomputed off-body on a 1Hz throttle. Map
+            // renders at most `maxTrailBuckets` polylines (3–5) regardless of
+            // trip length, preventing the per-GPS-tick overlay explosion that
+            // froze SwiftUI/MapKit.
+            ForEach(displayTrailSegments) { segment in
+                MapPolyline(coordinates: segment.coordinates)
+                    .stroke(segment.color, lineWidth: 4)
             }
 
             ForEach(store.pins.filter { $0.tripId == trip.id }) { pin in
@@ -416,55 +426,42 @@ struct ActiveTripView: View {
         .transition(.opacity)
     }
 
-    /// Hard cap on points displayed on the map. Older points are downsampled
-    /// (every Nth) so a long trip still shows the full shape without producing
-    /// thousands of MapPolyline overlays.
-    private static let maxDisplayedTrailPoints = 600
+    // MARK: - Trail throttling
 
-    /// Bucketed travelled path. Splits the displayed trail into oldest/middle/
-    /// newest thirds, each rendered as a single MapPolyline. Three overlays
-    /// total no matter how long the trip is.
-    private var trailBuckets: (red: [CLLocationCoordinate2D], amber: [CLLocationCoordinate2D], green: [CLLocationCoordinate2D]) {
-        let points = trip.pathPoints
-        guard points.count > 1 else { return ([], [], []) }
-
-        // Downsample if we exceed the cap. Keep first/last; pick stride that
-        // bounds output length.
-        let coords: [CLLocationCoordinate2D]
-        if points.count <= Self.maxDisplayedTrailPoints {
-            coords = points.map { $0.coordinate }
-        } else {
-            let stride = max(1, points.count / Self.maxDisplayedTrailPoints)
-            var sampled: [CLLocationCoordinate2D] = []
-            sampled.reserveCapacity(Self.maxDisplayedTrailPoints + 2)
-            var i = 0
-            while i < points.count {
-                sampled.append(points[i].coordinate)
-                i += stride
+    /// Schedule the throttled display-trail rebuild. Location updates and
+    /// `trip.pathPoints` mutations keep happening; the on-screen polylines
+    /// only refresh at most once per `trailUpdateInterval`.
+    private func startTrailUpdater() {
+        trailUpdateTimer?.invalidate()
+        trailUpdateTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.trailUpdateInterval,
+            repeats: true
+        ) { _ in
+            Task { @MainActor in
+                refreshDisplayTrail()
             }
-            if let last = points.last?.coordinate,
-               sampled.last?.latitude != last.latitude || sampled.last?.longitude != last.longitude {
-                sampled.append(last)
-            }
-            coords = sampled
         }
+    }
 
-        let n = coords.count
-        guard n > 1 else { return ([], [], []) }
-
-        // Split into 3 contiguous segments. Overlap by 1 point so the polylines
-        // visually join without gaps at the bucket boundaries.
-        let third = max(1, n / 3)
-        let redEnd = min(third, n)
-        let amberEnd = min(third * 2, n)
-
-        let red = Array(coords[0..<redEnd])
-        let amberStart = max(redEnd - 1, 0)
-        let amber = amberEnd > amberStart ? Array(coords[amberStart..<amberEnd]) : []
-        let greenStart = max(amberEnd - 1, 0)
-        let green = greenStart < n ? Array(coords[greenStart..<n]) : []
-
-        return (red, amber.count > 1 ? amber : [], green.count > 1 ? green : [])
+    /// Recompute display segments off the SwiftUI body. The full
+    /// `trip.pathPoints` array is left untouched so trip history, export and
+    /// sync still see every recorded point.
+    private func refreshDisplayTrail() {
+        let live = tracking.activeTrip ?? trip
+        let points = live.pathPoints
+        let segments = TrailDisplayProcessor.makeDisplayTrailSegments(
+            points: points,
+            maxDisplayPoints: Self.maxDisplayTrailPoints,
+            maxColourBuckets: Self.maxTrailBuckets
+        )
+        displayTrailSegments = segments
+        lastTrailUpdate = Date()
+        trailDiagFullCount = points.count
+        trailDiagDisplayCount = segments.reduce(0) { $0 + $1.coordinates.count }
+        #if DEBUG
+        print("[Trail] full=\(trailDiagFullCount) display=\(trailDiagDisplayCount) " +
+              "polylines=\(segments.count) interval=\(Self.trailUpdateInterval)s mode=bucketed")
+        #endif
     }
 
     // MARK: - Banners

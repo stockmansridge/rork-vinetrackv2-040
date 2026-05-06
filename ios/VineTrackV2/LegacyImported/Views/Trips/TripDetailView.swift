@@ -10,6 +10,10 @@ struct TripDetailView: View {
     @State private var showDeleteConfirmation: Bool = false
     @State private var position: MapCameraPosition = .automatic
     @State private var isExporting: Bool = false
+    @State private var displayTrailSegments: [TrailSegment] = []
+
+    private static let maxDisplayTrailPoints: Int = 500
+    private static let maxTrailBuckets: Int = 5
 
     private var sprayRecord: SprayRecord? {
         store.sprayRecords.first { $0.tripId == trip.id }
@@ -104,10 +108,9 @@ struct TripDetailView: View {
             if trip.pathPoints.count > 1 {
                 Section("Path") {
                     Map(position: $position) {
-                        let coords = trip.pathPoints.map { $0.coordinate }
-                        if coords.count > 1 {
-                            MapPolyline(coordinates: coords)
-                                .stroke(VineyardTheme.leafGreen, lineWidth: 4)
+                        ForEach(displayTrailSegments) { segment in
+                            MapPolyline(coordinates: segment.coordinates)
+                                .stroke(segment.color, lineWidth: 4)
                         }
                     }
                     .mapStyle(.hybrid)
@@ -198,6 +201,7 @@ struct TripDetailView: View {
             Text("Are you sure you want to delete this trip? This action cannot be undone.")
         }
         .onAppear {
+            rebuildDisplayTrail()
             if trip.pathPoints.count > 1 {
                 let coords = trip.pathPoints.map { $0.coordinate }
                 let lats = coords.map { $0.latitude }
@@ -216,6 +220,26 @@ struct TripDetailView: View {
                 }
             }
         }
+        .onChange(of: trip.pathPoints.count) { _, _ in
+            rebuildDisplayTrail()
+        }
+    }
+
+    /// Build the bucketed display trail once for this historical trip. Mirrors
+    /// the live `ActiveTripView` renderer but without the 1s timer — pathPoints
+    /// are static here, so we recompute only on appear or if the array changes.
+    private func rebuildDisplayTrail() {
+        let segments = TrailDisplayProcessor.makeDisplayTrailSegments(
+            points: trip.pathPoints,
+            maxDisplayPoints: Self.maxDisplayTrailPoints,
+            maxColourBuckets: Self.maxTrailBuckets
+        )
+        displayTrailSegments = segments
+        #if DEBUG
+        let displayCount = segments.reduce(0) { $0 + $1.coordinates.count }
+        print("[Trail/Detail] full=\(trip.pathPoints.count) display=\(displayCount) " +
+              "polylines=\(segments.count) mode=bucketed-static")
+        #endif
     }
 
     private var coverageSourcePaddock: Paddock? {
