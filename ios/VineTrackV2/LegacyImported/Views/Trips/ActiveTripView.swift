@@ -213,12 +213,14 @@ struct ActiveTripView: View {
             startTicker()
             startTrailUpdater()
             refreshDisplayTrail()
+            ScreenAwakeManager.shared.acquire("ActiveTripView")
         }
         .onDisappear {
             ticker?.invalidate()
             ticker = nil
             trailUpdateTimer?.invalidate()
             trailUpdateTimer = nil
+            ScreenAwakeManager.shared.release("ActiveTripView")
         }
         .onMapCameraChange { _ in
             isFollowingUser = false

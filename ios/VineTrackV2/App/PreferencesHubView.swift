@@ -11,6 +11,8 @@ struct PreferencesHubView: View {
     @State private var timezoneIdentifier: String = TimeZone.current.identifier
     @State private var aiSuggestionsEnabled: Bool = true
 
+    @AppStorage(ScreenAwakeManager.preferenceKey) private var keepScreenAwake: Bool = true
+
     @State private var showTimezonePicker: Bool = false
 
     var body: some View {
@@ -73,10 +75,15 @@ struct PreferencesHubView: View {
                     s.rowTrackingInterval = newValue
                     store.updateSettings(s)
                 }
+
+            Toggle("Keep screen awake during trips", isOn: $keepScreenAwake)
+                .onChange(of: keepScreenAwake) { _, _ in
+                    ScreenAwakeManager.shared.preferenceDidChange()
+                }
         } header: {
             Text("Trip & Row Tracking")
         } footer: {
-            Text("Controls how often GPS samples are recorded during an active trip and whether row guidance is shown in-field.")
+            Text("Controls how often GPS samples are recorded during an active trip, whether row guidance is shown in-field, and whether the device stays awake while a trip is running. Keeping the screen awake may use more battery.")
         }
     }
 
