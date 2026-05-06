@@ -47,9 +47,11 @@ final class VineyardWeatherIntegrationCache {
                 )
                 await MainActor.run {
                     self.cached[vineyardId] = integ
+                    print("[DavisConfig] cache load vineyardId=\(vineyardId) source=rpc configured=\(integ?.isFullyConfigured ?? false) hasKey=\(integ?.hasApiKey ?? false) hasSecret=\(integ?.hasApiSecret ?? false) stationId=\(integ?.stationId ?? "-")")
                     self.applyToConfig(integ, for: vineyardId)
                 }
             } catch {
+                print("[DavisConfig] local fallback used reason=\(error.localizedDescription) vineyardId=\(vineyardId)")
                 // Silent fallback: leave config untouched.
             }
             await MainActor.run {

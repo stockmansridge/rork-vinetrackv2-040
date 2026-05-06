@@ -187,6 +187,7 @@ nonisolated enum VineyardDavisProxyService {
         // we can't get a session token.
         let session = try? await provider.client.auth.session
         guard let token = session?.accessToken, !token.isEmpty else {
+            print("[DavisProxy] notAuthenticated action=\(payload["action"] as? String ?? "-") vineyardId=\(payload["vineyardId"] as? String ?? "-")")
             throw VineyardDavisProxyError.notAuthenticated
         }
 
@@ -217,18 +218,27 @@ nonisolated enum VineyardDavisProxyService {
         let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         let errorMessage = body["error"] as? String
 
+        let action = payload["action"] as? String ?? "-"
+        let vid = payload["vineyardId"] as? String ?? "-"
+        let stationId = payload["stationId"] as? String ?? "-"
         switch http.statusCode {
         case 200..<300:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) stationId=\(stationId) result=success status=\(http.statusCode)")
             return body
         case 401:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) result=fail status=401 reason=notAuthenticated")
             throw VineyardDavisProxyError.notAuthenticated
         case 403:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) result=fail status=403 reason=forbidden")
             throw VineyardDavisProxyError.forbidden(errorMessage ?? "")
         case 404:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) result=fail status=404 reason=notConfigured")
             throw VineyardDavisProxyError.notConfigured
         case 429:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) result=fail status=429 reason=rateLimited")
             throw VineyardDavisProxyError.rateLimited
         default:
+            print("[DavisProxy] vineyardId=\(vid) provider=davis action=\(action) result=fail status=\(http.statusCode)")
             throw VineyardDavisProxyError.http(http.statusCode, errorMessage)
         }
     }

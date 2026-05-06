@@ -116,6 +116,8 @@ struct WeatherDataSettingsView: View {
                 davisHelpSection
             }
 
+            davisDiagnosticsSection
+
             historicalFallbackSection
 
             usageSection
@@ -873,6 +875,62 @@ struct WeatherDataSettingsView: View {
         .padding(.vertical, 4)
     }
 
+    // Non-secret debug/status panel. Always visible so field testers can
+    // verify Davis configuration without Xcode logs. NEVER includes the
+    // api_key or api_secret values — only booleans and metadata.
+    private var davisDiagnosticsSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                diagRow("Vineyard ID", vineyardId?.uuidString ?? "—")
+                diagRow("Provider", "davis_weatherlink")
+                diagRow("Configured", (vineyardIntegration?.isFullyConfigured == true) ? "Yes" : "No")
+                diagRow("Has API key", vineyardIntegration?.hasApiKey == true ? "Yes" : "No")
+                diagRow("Has API secret", vineyardIntegration?.hasApiSecret == true ? "Yes" : "No")
+                diagRow("Station ID", vineyardIntegration?.stationId ?? "—")
+                diagRow("Station name", vineyardIntegration?.stationName ?? "—")
+                diagRow("Last tested", vineyardIntegration?.lastTestedAt.map {
+                    $0.formatted(date: .abbreviated, time: .shortened)
+                } ?? "—")
+                diagRow("Last test status", vineyardIntegration?.lastTestStatus ?? "—")
+                diagRow("Caller role", vineyardIntegration?.callerRole ?? "—")
+                diagRow("Source", isLoadingVineyardIntegration
+                        ? "Loading…"
+                        : (vineyardIntegrationError == nil
+                           ? "Supabase RPC"
+                           : "Local fallback (\(vineyardIntegrationError ?? "error"))"))
+                diagRow("Local provider", config.localObservationProvider.rawValue)
+                diagRow("Vineyard-shared flag", config.davisIsVineyardShared ? "Yes" : "No")
+                diagRow("Has server creds flag", config.davisVineyardHasServerCredentials ? "Yes" : "No")
+                diagRow("Has local Keychain", WeatherKeychain.hasCredentials ? "Yes" : "No")
+            }
+            .font(.caption.monospaced())
+            Button {
+                guard let vid = vineyardId else { return }
+                Task {
+                    await VineyardWeatherIntegrationCache.shared.refresh(for: vid)
+                    await loadVineyardIntegration(for: vid)
+                }
+            } label: {
+                Label("Reload from server", systemImage: "arrow.clockwise")
+            }
+        } header: {
+            Text("Davis diagnostics")
+        } footer: {
+            Text("Non-secret status only. Used to verify Davis WeatherLink persistence in the field. API key and secret values are never shown or logged.")
+        }
+    }
+
+    private func diagRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+    }
+
     private var davisHelpSection: some View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
@@ -995,11 +1053,13 @@ struct WeatherDataSettingsView: View {
         var c = WeatherProviderStore.shared.config(for: vid)
         // Reconcile local keychain state for owner/manager direct fetches.
         c.davisHasCredentials = WeatherKeychain.hasCredentials
-        if !c.davisHasCredentials {
-            c.davisConnectionTested = false
-        }
+        // Note: Do NOT clear davisConnectionTested when keychain is empty —
+        // a vineyard-shared Davis integration counts as tested for every
+        // member, even devices without local creds. The RPC reload below
+        // will set the right value.
         config = c
         davisStations = c.davisAvailableStations
+        print("[DavisConfig] loadConfig vineyardId=\(vid) localProvider=\(c.localObservationProvider.rawValue) hasKeychain=\(c.davisHasCredentials) cachedShared=\(c.davisIsVineyardShared) cachedHasServerSecret=\(c.davisVineyardHasServerCredentials) cachedStationId=\(c.davisStationId ?? "-")")
         Task { await loadVineyardIntegration(for: vid) }
     }
 
@@ -1013,6 +1073,7 @@ struct WeatherDataSettingsView: View {
             )
             vineyardIntegration = integ
             vineyardIntegrationError = nil
+            print("[DavisConfig] load vineyardId=\(vineyardId) provider=davis source=rpc configured=\(integ?.isFullyConfigured ?? false) hasKey=\(integ?.hasApiKey ?? false) hasSecret=\(integ?.hasApiSecret ?? false) stationId=\(integ?.stationId ?? "-") callerRole=\(integ?.callerRole ?? "-") lastTestStatus=\(integ?.lastTestStatus ?? "-")")
             applyIntegrationToConfig(integ)
             // If this device has Keychain credentials and the vineyard
             // doesn't yet have a server-side secret, automatically push
@@ -1027,6 +1088,7 @@ struct WeatherDataSettingsView: View {
         } catch {
             vineyardIntegration = nil
             vineyardIntegrationError = error.localizedDescription
+            print("[DavisConfig] load failed vineyardId=\(vineyardId) error=\(error.localizedDescription)")
         }
     }
 
@@ -1045,8 +1107,22 @@ struct WeatherDataSettingsView: View {
                 c.davisStationName = integ.stationName
                 c.davisHasLeafWetnessSensor = integ.hasLeafWetness
                 c.davisDetectedSensors = integ.detectedSensors
-                c.davisConnectionTested = integ.lastTestStatus == "ok"
-                    || integ.lastTestStatus == nil ? true : c.davisConnectionTested
+                // The vineyard-level integration counts as a tested
+                // connection for read paths — every member trusts the
+                // owner/manager's setup.
+                let status = integ.lastTestStatus
+                if status == "ok" || status == nil {
+                    c.davisConnectionTested = true
+                }
+                // CRITICAL: if the user hasn't explicitly chosen a local
+                // observation source, flip to Davis so the davisSection,
+                // resolver and weather services all see the configured
+                // station. Without this, a fully-configured vineyard
+                // appears "not configured" in the UI on devices that
+                // never opened the picker.
+                if c.localObservationProvider == .none && integ.hasApiSecret {
+                    c.localObservationProvider = .davis
+                }
             }
             // Operators have no local creds but should still see the source
             // as configured for read-only display.
@@ -1059,6 +1135,7 @@ struct WeatherDataSettingsView: View {
         }
         config = c
         WeatherProviderStore.shared.save(c, for: vid)
+        print("[DavisConfig] applyIntegration vineyardId=\(vid) localProvider=\(c.localObservationProvider.rawValue) shared=\(c.davisIsVineyardShared) hasServerSecret=\(c.davisVineyardHasServerCredentials) stationId=\(c.davisStationId ?? "-") tested=\(c.davisConnectionTested)")
     }
 
     /// Pushes the latest station + detected sensor state to the vineyard
@@ -1086,6 +1163,7 @@ struct WeatherDataSettingsView: View {
                 p_last_test_status: "ok",
                 p_is_active: true
             )
+            print("[DavisConfig] save vineyardId=\(vid) provider=davis upsert=true stationId=\(sid) hasKeyInput=false hasSecretInput=false reason=stationUpdate")
             try await integrationRepository.save(payload)
             VineyardWeatherIntegrationCache.shared.invalidate(vid)
             // Refresh the local snapshot.
@@ -1096,6 +1174,7 @@ struct WeatherDataSettingsView: View {
                 applyIntegrationToConfig(integ)
             }
         } catch {
+            print("[DavisConfig] save failed vineyardId=\(vid) error=\(error.localizedDescription)")
             // Don't surface a hard error — local fetch path still works.
         }
     }
@@ -1126,6 +1205,7 @@ struct WeatherDataSettingsView: View {
                 p_last_test_status: config.davisConnectionTested ? "ok" : nil,
                 p_is_active: true
             )
+            print("[DavisConfig] save vineyardId=\(vid) provider=davis upsert=true stationId=\(config.davisStationId ?? "-") hasKeyInput=true hasSecretInput=true reason=migration")
             try await integrationRepository.save(payload)
             VineyardWeatherIntegrationCache.shared.invalidate(vid)
             migrationMessage = silent

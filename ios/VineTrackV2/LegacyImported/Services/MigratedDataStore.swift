@@ -420,6 +420,11 @@ final class MigratedDataStore {
         selectedVineyardId = vineyard.id
         persistence.save(SelectedVineyardWrapper(id: vineyard.id), key: Keys.selectedVineyardId)
         reloadCurrentVineyardData()
+        // Pull the vineyard's shared Davis WeatherLink integration so all
+        // weather call sites (resolver, rainfall history, hourly service,
+        // alerts) see the configured station immediately on switch —
+        // operators included.
+        Task { await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: vineyard.id) }
     }
 
     /// Resolve which vineyard should be active using:
@@ -436,10 +441,12 @@ final class MigratedDataStore {
                 persistence.save(SelectedVineyardWrapper(id: defaultId), key: Keys.selectedVineyardId)
                 reloadCurrentVineyardData()
             }
+            Task { await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: defaultId) }
             return
         }
 
         if let id = selectedVineyardId, memberIds.contains(id) {
+            Task { await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: id) }
             return
         }
 
@@ -447,6 +454,7 @@ final class MigratedDataStore {
             selectedVineyardId = first.id
             persistence.save(SelectedVineyardWrapper(id: first.id), key: Keys.selectedVineyardId)
             reloadCurrentVineyardData()
+            Task { await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: first.id) }
         } else {
             selectedVineyardId = nil
             persistence.remove(key: Keys.selectedVineyardId)
