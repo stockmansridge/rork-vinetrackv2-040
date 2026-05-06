@@ -1,4 +1,12 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 
 struct WeatherDataSettingsView: View {
     @Environment(MigratedDataStore.self) private var store
@@ -24,6 +32,12 @@ struct WeatherDataSettingsView: View {
     @State private var showMigratePrompt: Bool = false
     @State private var isMigrating: Bool = false
     @State private var migrationMessage: String?
+    /// Last successfully parsed WeatherLink current-conditions response.
+    /// Used purely for the on-device parser-diagnostics panel; never
+    /// persisted because it can change on every fetch.
+    @State private var lastDavisCurrent: DavisCurrentConditions?
+    @State private var lastDavisSensorSummary: DavisSensorSummary?
+    @State private var diagCopiedMessage: String?
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -904,6 +918,41 @@ struct WeatherDataSettingsView: View {
                 diagRow("Has local Keychain", WeatherKeychain.hasCredentials ? "Yes" : "No")
             }
             .font(.caption.monospaced())
+
+            // Parser-level diagnostics: helps diagnose "no wind / no temp"
+            // cases where the station physically supports the sensor but
+            // data[] arrays are empty in the live response.
+            if let summary = lastDavisSensorSummary {
+                Divider().padding(.vertical, 2)
+                Text("Parser detection")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    diagRow("Sensor blocks", "\(summary.sensorBlockCount)")
+                    diagRow("Empty data blocks", "\(summary.emptyDataBlockCount)")
+                    diagRow("Sensor types", summary.detectedSensorTypes.map(String.init).joined(separator: ", ").nilIfEmpty ?? "—")
+                    diagRow("Data structure types", summary.detectedDataStructureTypes.map(String.init).joined(separator: ", ").nilIfEmpty ?? "—")
+                    diagRow("Block summaries", summary.blockSummaries.joined(separator: " | ").nilIfEmpty ?? "—")
+                    diagRow("Detected fields", "\(summary.detectedFields.count) field(s)")
+                    diagRow("Has T/H sensor", summary.hasTemperatureHumidity ? "Yes" : "No")
+                    diagRow("Has wind sensor", summary.hasWind ? "Yes" : "No")
+                    diagRow("Has rain sensor", summary.hasRain ? "Yes" : "No")
+                    diagRow("Has leaf wetness", summary.hasLeafWetness ? "Yes" : "No")
+                    diagRow("Has soil moisture", summary.hasSoilMoisture ? "Yes" : "No")
+                    if let cur = lastDavisCurrent {
+                        diagRow("Current temp value", cur.temperatureC != nil ? "Available" : "Unavailable")
+                        diagRow("Current humidity value", cur.humidityPercent != nil ? "Available" : "Unavailable")
+                        diagRow("Current wind value", cur.windKph != nil ? "Available" : "Unavailable")
+                        diagRow("Current rain value", cur.rainMmLastHour != nil ? "Available" : "Unavailable")
+                    }
+                }
+                .font(.caption.monospaced())
+            } else {
+                Text("Run Test Connection or refresh current conditions to populate parser diagnostics.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             Button {
                 guard let vid = vineyardId else { return }
                 Task {
@@ -913,10 +962,139 @@ struct WeatherDataSettingsView: View {
             } label: {
                 Label("Reload from server", systemImage: "arrow.clockwise")
             }
+            Button {
+                if config.davisHasCredentials {
+                    Task { await refreshDavisParserDiagnostics() }
+                }
+            } label: {
+                Label("Refresh parser detection", systemImage: "sensor.tag.radiowaves.forward")
+            }
+            .disabled(!config.davisHasCredentials
+                      || (config.davisStationId?.isEmpty ?? true)
+                      || isTestingDavis)
+            Button {
+                copyDavisDiagnostics()
+            } label: {
+                Label("Copy Davis diagnostics", systemImage: "doc.on.doc")
+            }
+            if let msg = diagCopiedMessage, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
         } header: {
             Text("Davis diagnostics")
         } footer: {
-            Text("Non-secret status only. Used to verify Davis WeatherLink persistence in the field. API key and secret values are never shown or logged.")
+            Text("Non-secret status only. Used to verify Davis WeatherLink persistence and parser detection in the field. API key, secret and credential-bearing URLs are never shown, copied or logged.")
+        }
+    }
+
+    // MARK: - Diagnostics helpers
+
+    /// Builds the multi-line plain-text diagnostics snapshot that the
+    /// Copy button writes to the pasteboard. Excludes any secrets.
+    private func buildDavisDiagnosticsText() -> String {
+        let df = ISO8601DateFormatter()
+        df.formatOptions = [.withInternetDateTime]
+        var lines: [String] = []
+        lines.append("Davis WeatherLink Diagnostics")
+        lines.append("Time: \(df.string(from: Date()))")
+        lines.append("Vineyard ID: \(vineyardId?.uuidString ?? "-")")
+        lines.append("Provider: davis_weatherlink")
+        if let integ = vineyardIntegration {
+            lines.append("Configured: \(integ.isFullyConfigured ? "Yes" : "No")")
+            lines.append("Has API key: \(integ.hasApiKey ? "Yes" : "No")")
+            lines.append("Has API secret: \(integ.hasApiSecret ? "Yes" : "No")")
+            lines.append("Station ID: \(integ.stationId ?? "-")")
+            lines.append("Station name: \(integ.stationName ?? "-")")
+            lines.append("Last tested: \(integ.lastTestedAt.map { df.string(from: $0) } ?? "-")")
+            lines.append("Last test status: \(integ.lastTestStatus ?? "-")")
+            lines.append("Caller role: \(integ.callerRole ?? "-")")
+        } else {
+            lines.append("Configured: No (no vineyard integration row)")
+        }
+        lines.append("Source: \(isLoadingVineyardIntegration ? "Loading" : (vineyardIntegrationError == nil ? "Supabase RPC" : "Local fallback (\(vineyardIntegrationError ?? "error"))"))")
+        lines.append("Local provider: \(config.localObservationProvider.rawValue)")
+        lines.append("Vineyard-shared: \(config.davisIsVineyardShared ? "Yes" : "No")")
+        lines.append("Has server creds: \(config.davisVineyardHasServerCredentials ? "Yes" : "No")")
+        lines.append("Has local Keychain: \(WeatherKeychain.hasCredentials ? "Yes" : "No")")
+
+        lines.append("")
+        lines.append("Parser detection:")
+        if let s = lastDavisSensorSummary {
+            lines.append("  Sensor blocks: \(s.sensorBlockCount)")
+            lines.append("  Empty data blocks: \(s.emptyDataBlockCount)")
+            lines.append("  detectedSensorTypes: \(s.detectedSensorTypes)")
+            lines.append("  detectedDataStructureTypes: \(s.detectedDataStructureTypes)")
+            lines.append("  blockSummaries: \(s.blockSummaries)")
+            lines.append("  detectedFields (\(s.detectedFields.count)): \(s.detectedFields.joined(separator: ","))")
+            lines.append("  hasTemperatureHumiditySensor: \(s.hasTemperatureHumidity)")
+            lines.append("  hasWindSensor: \(s.hasWind)")
+            lines.append("  hasRainSensor: \(s.hasRain)")
+            lines.append("  hasLeafWetnessSensor: \(s.hasLeafWetness)")
+            lines.append("  hasSoilMoistureSensor: \(s.hasSoilMoisture)")
+        } else {
+            lines.append("  (not yet run on this device)")
+        }
+        if let cur = lastDavisCurrent {
+            lines.append("")
+            lines.append("Current values:")
+            lines.append("  generatedAt: \(df.string(from: cur.generatedAt))")
+            lines.append("  currentTemperatureAvailable: \(cur.temperatureC != nil)")
+            lines.append("  currentHumidityAvailable: \(cur.humidityPercent != nil)")
+            lines.append("  currentWindAvailable: \(cur.windKph != nil)")
+            lines.append("  currentRainAvailable: \(cur.rainMmLastHour != nil)")
+        }
+        if let err = config.davisLastTestError, !err.isEmpty {
+            lines.append("")
+            lines.append("Last test error: \(err)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func copyDavisDiagnostics() {
+        let text = buildDavisDiagnosticsText()
+#if canImport(UIKit)
+        UIPasteboard.general.string = text
+#endif
+        diagCopiedMessage = "Diagnostics copied"
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            diagCopiedMessage = nil
+        }
+    }
+
+    /// Re-fetches current conditions for the selected Davis station so the
+    /// parser diagnostics panel reflects the latest WeatherLink response.
+    /// Uses the vineyard proxy when available so operators / non-credential
+    /// devices can also refresh.
+    private func refreshDavisParserDiagnostics() async {
+        guard let sid = config.davisStationId, !sid.isEmpty else { return }
+        // Prefer vineyard proxy when configured.
+        if let vid = vineyardId,
+           config.davisIsVineyardShared,
+           config.davisVineyardHasServerCredentials {
+            do {
+                let cur = try await VineyardDavisProxyService.fetchCurrentConditions(
+                    vineyardId: vid, stationId: sid
+                )
+                lastDavisCurrent = cur
+                lastDavisSensorSummary = cur.sensors
+                return
+            } catch {
+                // Fall through to local credential path.
+            }
+        }
+        guard let apiKey = WeatherKeychain.get(.apiKey),
+              let apiSecret = WeatherKeychain.get(.apiSecret) else { return }
+        do {
+            let cur = try await DavisWeatherLinkService.fetchCurrentConditions(
+                apiKey: apiKey, apiSecret: apiSecret, stationId: sid
+            )
+            lastDavisCurrent = cur
+            lastDavisSensorSummary = cur.sensors
+        } catch {
+            // Leave previous diagnostics in place.
         }
     }
 
@@ -1379,6 +1557,8 @@ struct WeatherDataSettingsView: View {
                     c.davisDetectedSensors = cur.sensors.displayList
                     c.davisHasLeafWetnessSensor = cur.sensors.hasLeafWetness
                     c.lastSuccessfulUpdate = cur.generatedAt
+                    lastDavisCurrent = cur
+                    lastDavisSensorSummary = cur.sensors
                 } catch {
                     // Station picked but current fetch failed — don't
                     // fail the whole test; just leave sensors unknown.
@@ -1439,6 +1619,8 @@ struct WeatherDataSettingsView: View {
             c2.davisDetectedSensors = cur.sensors.displayList
             c2.davisHasLeafWetnessSensor = cur.sensors.hasLeafWetness
             c2.lastSuccessfulUpdate = cur.generatedAt
+            lastDavisCurrent = cur
+            lastDavisSensorSummary = cur.sensors
             config = c2
             persist()
             await pushStationStateToVineyard()

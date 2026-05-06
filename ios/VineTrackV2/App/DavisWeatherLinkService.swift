@@ -23,6 +23,13 @@ nonisolated struct DavisSensorSummary: Sendable, Hashable, Codable {
     let detectedFields: [String]
     let detectedSensorTypes: [Int]
     let detectedDataStructureTypes: [Int]
+    /// Total number of sensor blocks parsed from the WeatherLink response.
+    var sensorBlockCount: Int = 0
+    /// Sensor blocks whose `data` array was missing or empty.
+    var emptyDataBlockCount: Int = 0
+    /// Sensor block sensor_type → data_structure_type pairs (sorted, unique),
+    /// useful for diagnosing parser issues without exposing raw data.
+    var blockSummaries: [String] = []
 
     /// Friendly list rendered in the settings UI.
     var displayList: [String] {
@@ -43,7 +50,10 @@ nonisolated struct DavisSensorSummary: Sendable, Hashable, Codable {
         hasSoilMoisture: false,
         detectedFields: [],
         detectedSensorTypes: [],
-        detectedDataStructureTypes: []
+        detectedDataStructureTypes: [],
+        sensorBlockCount: 0,
+        emptyDataBlockCount: 0,
+        blockSummaries: []
     )
 }
 
@@ -192,16 +202,21 @@ nonisolated enum DavisWeatherLinkService {
                 guard let v = parseAnyDouble(value) else { continue }
 
                 // Outdoor air temperature/humidity (skip indoor, soil, leaf-temp).
+                // Broadened aliases cover both DSt 10/17/23 current-condition
+                // shapes and historic-style avg fields.
                 if temperatureF == nil,
-                   (key == "temp" || key == "temp_out" || key == "temp_avg" || key == "temp_last") {
+                   (key == "temp" || key == "temp_out" || key == "temp_out_last"
+                    || key == "temp_avg" || key == "temp_avg_last" || key == "temp_last") {
                     temperatureF = v
                 }
                 if humidity == nil,
-                   (key == "hum" || key == "hum_out" || key == "hum_last") {
+                   (key == "hum" || key == "hum_out" || key == "hum_last"
+                    || key == "hum_avg" || key == "hum_avg_last") {
                     humidity = v
                 }
 
-                // Rainfall — prefer last 60 min metric/imperial fields if present.
+                // Rainfall — prefer last 60 min metric/imperial fields if present,
+                // then fall back through 15 min, daily, storm fields.
                 if rainMm == nil {
                     if key.contains("rainfall_last_60_min_mm") {
                         rainMm = v
@@ -211,15 +226,25 @@ nonisolated enum DavisWeatherLinkService {
                         rainMm = v
                     } else if key == "rain_rate_last_in" || key == "rainfall_last_15_min_in" {
                         rainMm = v * 25.4
+                    } else if key == "rain_rate_hi_mm" || key == "rainfall_daily_mm"
+                                || key == "rain_storm_mm" || key == "rain_day_mm" {
+                        rainMm = v
+                    } else if key == "rain_rate_hi_in" || key == "rainfall_daily_in"
+                                || key == "rain_storm_in" || key == "rain_day_in" {
+                        rainMm = v * 25.4
                     }
                 }
 
-                // Wind — average over recent window if available.
+                // Wind — average over recent window if available. Broadened
+                // to cover historic-style avg + 2-min variants. Davis reports mph.
                 if windKph == nil,
-                   (key.contains("wind_speed_avg_last_10_min")
-                    || key.contains("wind_speed_last")
-                    || key == "wind_speed") {
-                    // Davis reports mph.
+                   (key == "wind_speed"
+                    || key == "wind_speed_last"
+                    || key == "wind_speed_avg"
+                    || key.contains("wind_speed_avg_last_10_min")
+                    || key.contains("wind_speed_avg_last_2_min")
+                    || key.contains("wind_speed_hi_last_10_min")
+                    || key.contains("wind_speed_last")) {
                     windKph = v * 1.60934
                 }
 
@@ -252,8 +277,24 @@ nonisolated enum DavisWeatherLinkService {
 
     // MARK: - Sensor detection
 
+    /// Davis sensor_type codes that identify ISS / outdoor station variants.
+    /// These imply the station physically supports outdoor temperature,
+    /// humidity, wind and rain even when the current-conditions response
+    /// contains empty `data` arrays. Source: Davis WeatherLink v2 sensor
+    /// catalogue (field guides for ISS, Vantage Pro2, Vue, EnviroMonitor).
+    static let issSensorTypes: Set<Int> = [23, 37, 43, 45, 46, 48, 55]
+
+    /// Sensor types that should never count as outdoor T/H/wind/rain.
+    /// 27 = WeatherLink Live barometer / internal console block.
+    static let internalSensorTypes: Set<Int> = [27]
+
     /// Inspects WeatherLink current-conditions sensor blocks and reports which
-    /// sensor types are present based on field names + sensor metadata.
+    /// sensor types are present. Detection is two-layered:
+    /// 1. Field-based: when `data[]` contains the actual current-condition
+    ///    field names, mark the matching capability.
+    /// 2. Sensor-type fallback: when `data[]` is empty or missing fields,
+    ///    infer capability from known Davis sensor_type codes (ISS family
+    ///    implies T/H + wind + rain). Internal/console blocks are excluded.
     static func detectSensors(sensorsArr: [[String: Any]]) -> DavisSensorSummary {
         var hasTH = false
         var hasRain = false
@@ -263,18 +304,38 @@ nonisolated enum DavisWeatherLinkService {
         var fields: Set<String> = []
         var sensorTypes: Set<Int> = []
         var dataStructTypes: Set<Int> = []
+        var sensorBlockCount = 0
+        var emptyDataBlockCount = 0
+        var blockSummaries: Set<String> = []
 
         for sensor in sensorsArr {
-            if let st = sensor["sensor_type"] as? Int { sensorTypes.insert(st) }
-            if let ds = sensor["data_structure_type"] as? Int { dataStructTypes.insert(ds) }
+            sensorBlockCount += 1
+            let sensorType = sensor["sensor_type"] as? Int
+            let dataStruct = sensor["data_structure_type"] as? Int
+            if let st = sensorType { sensorTypes.insert(st) }
+            if let ds = dataStruct { dataStructTypes.insert(ds) }
+            blockSummaries.insert("st=\(sensorType.map(String.init) ?? "?") dst=\(dataStruct.map(String.init) ?? "?")")
 
+            // Sensor-type fallback: ISS-family stations imply outdoor T/H,
+            // wind, rain — even when data[] is empty for that snapshot.
+            if let st = sensorType, issSensorTypes.contains(st) {
+                hasTH = true
+                hasWind = true
+                hasRain = true
+            }
             // Davis sensor type 242 = Leaf & Soil Moisture/Temp ISS.
-            if let st = sensor["sensor_type"] as? Int, st == 242 {
+            if let st = sensorType, st == 242 {
                 hasLW = true
                 hasSoil = true
             }
 
-            guard let dataArr = sensor["data"] as? [[String: Any]] else { continue }
+            let dataArr = (sensor["data"] as? [[String: Any]]) ?? []
+            if dataArr.isEmpty { emptyDataBlockCount += 1 }
+
+            // Skip field scanning entirely for known internal/console blocks
+            // so indoor temp/hum cannot be mistaken for outdoor readings.
+            if let st = sensorType, internalSensorTypes.contains(st) { continue }
+
             for entry in dataArr {
                 for rawKey in entry.keys {
                     fields.insert(rawKey)
@@ -311,7 +372,10 @@ nonisolated enum DavisWeatherLinkService {
             hasSoilMoisture: hasSoil,
             detectedFields: Array(fields).sorted(),
             detectedSensorTypes: Array(sensorTypes).sorted(),
-            detectedDataStructureTypes: Array(dataStructTypes).sorted()
+            detectedDataStructureTypes: Array(dataStructTypes).sorted(),
+            sensorBlockCount: sensorBlockCount,
+            emptyDataBlockCount: emptyDataBlockCount,
+            blockSummaries: Array(blockSummaries).sorted()
         )
     }
 
