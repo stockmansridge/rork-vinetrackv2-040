@@ -1,6 +1,7 @@
 import SwiftUI
 import MapKit
 import CoreLocation
+import UIKit
 
 /// Restored original-style active trip screen. Backend-neutral: uses
 /// `MigratedDataStore` and `TripTrackingService` only.
@@ -56,6 +57,10 @@ struct ActiveTripView: View {
     @State private var lockedTravelBearing: Double?
     @State private var lastBearingLocation: CLLocation?
     @State private var bearingLockSamples: Int = 0
+
+    /// Toast shown after "Copy diagnostics" finishes writing to the
+    /// pasteboard. Auto-dismissed after a short delay.
+    @State private var showDiagnosticsToast: Bool = false
 
     /// Throttle interval for the live trail render. Location updates can keep
     /// flowing in faster than this — only the on-screen polylines are paced.
@@ -322,6 +327,18 @@ struct ActiveTripView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        copyDiagnosticsToClipboard()
+                    } label: {
+                        Label("Copy diagnostics", systemImage: "doc.on.clipboard")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.headline)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 8) {
                     HStack(spacing: 3) {
                         Image(systemName: "speedometer")
@@ -379,6 +396,149 @@ struct ActiveTripView: View {
         .onMapCameraChange { _ in
             isFollowingUser = false
         }
+        .overlay(alignment: .top) {
+            if showDiagnosticsToast {
+                Text("Diagnostics copied")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.8), in: Capsule())
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    /// Build a plain-text diagnostics snapshot from the live trip, tracking
+    /// service and location, copy it to the pasteboard, and show a toast.
+    /// Available in all build configurations so it works in TestFlight.
+    private func copyDiagnosticsToClipboard() {
+        let snapshot = buildDiagnosticsSnapshot()
+        UIPasteboard.general.string = snapshot
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        withAnimation(.snappy) { showDiagnosticsToast = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(.snappy) { showDiagnosticsToast = false }
+        }
+    }
+
+    private func buildDiagnosticsSnapshot() -> String {
+        let live = tracking.activeTrip ?? trip
+        let now = Date()
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        let plannedPath: Double? = live.rowSequence.indices.contains(live.sequenceIndex)
+            ? live.rowSequence[live.sequenceIndex]
+            : nil
+        let livePath = tracking.diagLiveDetectedPath
+        let distanceToPath = tracking.diagDistanceToPath
+        let corridor = tracking.diagCorridorTolerance
+        let inCorridor = tracking.diagInCorridor
+        let pathMatch = tracking.diagPathMatch
+        let pathLen = tracking.diagPlannedPathLengthMeters
+        let acc = tracking.diagAccumulatedMeters
+        let pct: Double = (pathLen ?? 0) > 0 ? (acc / (pathLen ?? 1) * 100) : 0
+
+        let paddockNames = paddocksOnMap.map { $0.name }.joined(separator: ", ")
+        let functionLabel = live.displayFunctionLabel.isEmpty ? "—" : live.displayFunctionLabel
+
+        let rawSpeedKmh = currentSpeedKmh
+        let smoothedKmh = (tracking.currentSpeed ?? 0) * 3.6
+        let avgKmh = averageValidSpeedKmh
+
+        let loc = locationService.location
+        let lat = loc?.coordinate.latitude
+        let lon = loc?.coordinate.longitude
+        let acc2D = loc?.horizontalAccuracy
+        let locTs = loc?.timestamp
+
+        let rowDir = currentPaddock?.rowDirection
+        let movement = lockedTravelBearing
+        let sameDir = isTravelingAlongRow
+
+        let path = pathForLabels
+        let lower = Int(floor(path))
+        let upper = lower + 1
+
+        let warning: String = {
+            if !live.rowSequence.isEmpty {
+                let remaining = live.rowSequence.dropFirst(live.sequenceIndex).filter {
+                    !live.completedPaths.contains($0)
+                }.count
+                if remaining == 0 { return "Complete" }
+            }
+            if averageValidSpeedKmh <= 0 { return "Calculating ETA" }
+            if let planned = plannedPath, let live = livePath, abs(planned - live) > 0.01 {
+                return "Off planned path"
+            }
+            if !inCorridor, livePath != nil { return "Approaching path" }
+            return "—"
+        }()
+
+        func fmt(_ d: Double?, _ digits: Int = 1, suffix: String = "") -> String {
+            guard let d else { return "nil" }
+            return String(format: "%.\(digits)f%@", d, suffix)
+        }
+
+        var lines: [String] = []
+        lines.append("Active Trip Diagnostics")
+        lines.append("Time: \(isoFormatter.string(from: now))")
+        lines.append("Trip ID: \(live.id.uuidString)")
+        lines.append("Trip: \(functionLabel)")
+        lines.append("Paddocks: \(paddockNames.isEmpty ? "—" : paddockNames)")
+        lines.append("")
+        lines.append("Planned path: \(plannedPath.map { String($0) } ?? "nil")")
+        lines.append("Live detected path: \(livePath.map { String($0) } ?? "nil")")
+        lines.append("Current row number: \(tracking.currentRowNumber.map { String($0) } ?? "nil")")
+        lines.append("Sequence index: \(live.sequenceIndex) / \(live.rowSequence.count)")
+        lines.append("Row sequence count: \(live.rowSequence.count)")
+        lines.append("Distance to path: \(fmt(distanceToPath, 2, suffix: " m"))")
+        lines.append("Corridor tolerance: \(fmt(corridor, 2, suffix: " m"))")
+        lines.append("In corridor: \(inCorridor)")
+        lines.append("Path match: \(pathMatch)")
+        lines.append("Path length: \(fmt(pathLen, 1, suffix: " m"))")
+        lines.append("Accumulated: \(fmt(acc, 1, suffix: " m"))")
+        lines.append("Progress: \(fmt(pct, 0, suffix: "%"))")
+        if let last = tracking.diagAutoCompleteLastFiredAt {
+            lines.append("Auto-complete last fired: path \(tracking.diagAutoCompleteLastPath.map { String($0) } ?? "?") at \(isoFormatter.string(from: last))")
+        } else {
+            lines.append("Auto-complete last fired: never")
+        }
+        lines.append("")
+        lines.append("Speed: raw \(fmt(rawSpeedKmh, 1)) km/h, smoothed \(fmt(smoothedKmh, 1)) km/h, avg \(fmt(avgKmh, 1)) km/h")
+        if let lat, let lon {
+            lines.append("GPS: \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon)), accuracy \(fmt(acc2D, 1, suffix: " m"))")
+        } else {
+            lines.append("GPS: unavailable")
+        }
+        if let locTs {
+            lines.append("GPS timestamp: \(isoFormatter.string(from: locTs))")
+        }
+        lines.append("")
+        lines.append("Orientation:")
+        lines.append("  movement heading: \(fmt(movement, 1, suffix: "°"))")
+        lines.append("  row heading: \(fmt(rowDir, 1, suffix: "°"))")
+        lines.append("  sameDirection: \(sameDir)")
+        lines.append("  path \(path) → lower row \(lower), upper row \(upper)")
+        lines.append("  left: \(leftRowLabel)")
+        lines.append("  right: \(rightRowLabel)")
+        lines.append("")
+        lines.append("Map / trail:")
+        lines.append("  full point count: \(live.pathPoints.count)")
+        lines.append("  display point count: \(trailDiagDisplayCount)")
+        lines.append("  display polyline count: \(displayTrailSegments.count)")
+        lines.append("")
+        lines.append("Duplicate pin:")
+        lines.append("  last check: \(tracking.diagDuplicateCheckResult ?? "—")")
+        lines.append("  radius: \(fmt(tracking.diagDuplicateRadiusMeters, 2, suffix: " m"))")
+        lines.append("")
+        lines.append("Warning: \(warning)")
+        return lines.joined(separator: "\n")
     }
 
     private var navTitle: String {

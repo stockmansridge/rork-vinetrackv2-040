@@ -25,6 +25,21 @@ final class TripTrackingService {
     var rowsCoveredCount: Int = 0
     var rowGuidanceAvailable: Bool = false
 
+    // Live diagnostics — exposed for in-app "Copy diagnostics" so we can
+    // capture field-test snapshots without Xcode logs. Updated each GPS
+    // tick by `updateRowGuidance` and `finalizeIfThresholdMet`.
+    var diagLiveDetectedPath: Double?
+    var diagDistanceToPath: Double?
+    var diagCorridorTolerance: Double?
+    var diagInCorridor: Bool = false
+    var diagPathMatch: Bool = false
+    var diagPlannedPathLengthMeters: Double?
+    var diagAccumulatedMeters: Double = 0
+    var diagAutoCompleteLastPath: Double?
+    var diagAutoCompleteLastFiredAt: Date?
+    var diagDuplicateCheckResult: String?
+    var diagDuplicateRadiusMeters: Double?
+
     /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
     /// and otherwise from the recent point window. Use this instead of
     /// `locationService.location?.speed` to avoid the half-speed dropout that
@@ -569,6 +584,13 @@ final class TripTrackingService {
         // live path (or fall back to the planned path).
         let corridorTolerance = max(1.0, paddock.rowWidth / 2.0)
         let inCorridor = match.distance <= corridorTolerance
+        diagLiveDetectedPath = livePath
+        diagDistanceToPath = match.distance
+        diagCorridorTolerance = corridorTolerance
+        diagInCorridor = inCorridor
+        diagPathMatch = pathMatch
+        diagPlannedPathLengthMeters = currentSequencePath.flatMap { rowLength(forPath: $0, paddock: paddock) }
+        diagAccumulatedMeters = currentSequencePath.map { pathDistanceMap[$0, default: 0] } ?? 0
         if inCorridor {
             lastLivePathInCorridor = livePath
             currentRowNumber = livePath
@@ -772,6 +794,8 @@ final class TripTrackingService {
         if didComplete {
             lastAutoCompletePath = path
             lastAutoCompleteAt = Date()
+            diagAutoCompleteLastPath = path
+            diagAutoCompleteLastFiredAt = lastAutoCompleteAt
             #if DEBUG
             diagAutoCompleteFiredCount += 1
             #endif
