@@ -8,6 +8,7 @@ struct RepairsGrowthView: View {
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(LocationService.self) private var locationService
     @Environment(BackendAccessControl.self) private var accessControl
+    @Environment(TripTrackingService.self) private var tracking
 
     @State private var selection: Tab
     @State private var showEditButtons: Bool = false
@@ -138,9 +139,17 @@ struct RepairsGrowthView: View {
                 existingPin: warning.existing,
                 distance: warning.distance,
                 radius: warning.radius,
-                onCreateAnyway: { warning.proceed() },
-                onViewExisting: { pinForDetailSheet = warning.existing },
-                onCancel: {}
+                onCreateAnyway: {
+                    tracking.diagDuplicateCheckResult = "duplicate_create_anyway"
+                    warning.proceed()
+                },
+                onViewExisting: {
+                    tracking.diagDuplicateCheckResult = "duplicate_view_existing"
+                    pinForDetailSheet = warning.existing
+                },
+                onCancel: {
+                    tracking.diagDuplicateCheckResult = "duplicate_cancelled"
+                }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -334,6 +343,7 @@ struct RepairsGrowthView: View {
         }
         let proceed = { createRepairPin(button: button, side: side, coord: coord) }
         if let dup = checkDuplicate(at: coord) {
+            recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
                 distance: dup.distance,
@@ -376,6 +386,7 @@ struct RepairsGrowthView: View {
         }
         let proceed = { createGrowthPin(stage: stage, coord: coord) }
         if let dup = checkDuplicate(at: coord) {
+            recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
                 distance: dup.distance,
@@ -418,14 +429,29 @@ struct RepairsGrowthView: View {
             paddockId: nil,
             paddocks: store.paddocks
         )
+        tracking.diagDuplicateRadiusMeters = radius
         guard let match = PinDuplicateChecker.nearbyPin(
             coordinate: coord,
             vineyardId: store.selectedVineyardId,
             paddockId: nil,
             radius: radius,
             in: store.pins
-        ) else { return nil }
+        ) else {
+            tracking.diagDuplicateCheckResult = "no_duplicate_found"
+            return nil
+        }
         return (match.pin, match.distance, radius)
+    }
+
+    private func recordDuplicateWarningShown(
+        _ dup: (pin: VinePin, distance: Double, radius: Double)
+    ) {
+        let title = dup.pin.buttonName.isEmpty ? "pin" : dup.pin.buttonName
+        let status = dup.pin.isCompleted ? "completed" : "active"
+        let dist = String(format: "%.2f", dup.distance)
+        tracking.diagDuplicateRadiusMeters = dup.radius
+        tracking.diagDuplicateCheckResult =
+            "duplicate_warning_shown: \(title), \(dist)m, status=\(status)"
     }
 
     private func showPinToast(title: String, subtitle: String) {
