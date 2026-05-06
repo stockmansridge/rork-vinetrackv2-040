@@ -81,6 +81,7 @@ struct AlertsCentreView: View {
             switch dest {
             case .irrigation, .weather:
                 IrrigationRecommendationView()
+            
             case .disease:
                 DiseaseRiskAdvisorView()
             }
@@ -127,10 +128,14 @@ struct AlertsCentreView: View {
             // Tab switches handled by NewMainTabView; pop back to home root.
             alertService.pendingNavigation = action
             dismiss()
-        case .openIrrigationAdvisor, .openWeather:
-            // Weather alerts route to Irrigation Advisor (where the
-            // data turns into an action) until a dedicated weather hub exists.
+        case .openIrrigationAdvisor:
             pushDestination = .irrigation
+        case .openWeather:
+            // Weather/rain alerts route to Irrigation Advisor (which
+            // shows current weather + rainfall) until a dedicated
+            // weather hub exists. Falls back gracefully without
+            // breaking navigation.
+            pushDestination = .weather
         case .openDiseaseRisk:
             pushDestination = .disease
         }
@@ -252,7 +257,8 @@ private struct AlertRow: View {
 
     private var actionLabel: String? {
         switch item.alert.typedAction {
-        case .openIrrigationAdvisor, .openWeather: return "Open Irrigation Advisor"
+        case .openIrrigationAdvisor: return "Open Irrigation Advisor"
+        case .openWeather: return "Open Weather"
         case .openPins: return "View Pins"
         case .openSprayProgram: return "Open Spray Program"
         case .openSprayRecord: return "Open Spray Record"
@@ -279,6 +285,8 @@ private struct AlertRow: View {
         case .diseaseDownyMildew: return "leaf.fill"
         case .diseasePowderyMildew: return "aqi.medium"
         case .diseaseBotrytis: return "allergens"
+        case .rainStarted: return "cloud.rain.fill"
+        case .rain24hSummary: return "cloud.heavyrain.fill"
         case .none: return "bell.fill"
         }
     }

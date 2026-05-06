@@ -100,7 +100,8 @@ struct HomeAlertsCard: View {
             counts[t, default: 0] += 1
         }
         let order: [AlertType] = [
-            .weatherRisk, .irrigationNeeded, .agedPins, .sprayJobDue,
+            .rainStarted, .rain24hSummary, .weatherRisk, .irrigationNeeded,
+            .agedPins, .sprayJobDue,
             .diseaseDownyMildew, .diseasePowderyMildew, .diseaseBotrytis, .syncIssue
         ]
         return order.compactMap { type in
@@ -114,6 +115,8 @@ struct HomeAlertsCard: View {
             case .diseaseDownyMildew: return "Downy mildew"
             case .diseasePowderyMildew: return "Powdery mildew"
             case .diseaseBotrytis: return "Botrytis"
+            case .rainStarted: return "Rain started"
+            case .rain24hSummary: return "24h rain"
             }
         }
     }

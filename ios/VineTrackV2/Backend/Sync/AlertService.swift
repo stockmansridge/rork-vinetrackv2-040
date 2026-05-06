@@ -149,6 +149,11 @@ final class AlertService {
                 prefs: prefs,
                 userId: userId
             ))
+            generated.append(contentsOf: await generateRainAlertsFromDavis(
+                store: store,
+                vineyardId: vineyardId,
+                userId: userId
+            ))
         }
 
         if prefs.diseaseAlertsEnabled {
@@ -366,6 +371,167 @@ final class AlertService {
                 createdBy: userId
             )
         ]
+    }
+
+    // MARK: - Rain alerts (Davis cached current)
+
+    /// Phase 1 (iOS-only) rain alerts driven by the Davis cached current
+    /// observation returned by `get_vineyard_current_weather`.
+    ///
+    /// Two alert types are generated, both deduplicated by `dedup_key`
+    /// so repeated refreshes do not create duplicates:
+    ///
+    /// 1. `rain_started` — fires when `rain_rate_mm_per_hr > 0` and the
+    ///    cache is fresh. Dedupe key uses a vineyard-local 3-hour bucket
+    ///    (`rain_started:{yyyy-MM-dd}:{0-7}`) so a new alert can only be
+    ///    created once every 3 hours per vineyard. Severity is
+    ///    `warning` when rate ≥ 5 mm/hr, otherwise `info`. Auto-expires
+    ///    after 6 hours.
+    ///
+    /// 2. `rain_24h_summary` — only created during the 09:00 hour in
+    ///    vineyard-local time and only if rainfall in the past 24h is
+    ///    > 0 mm. Past-24h rainfall is read via the davis-proxy historic
+    ///    endpoint. One alert per vineyard per local date.
+    ///
+    /// Stale / unavailable / not-configured cache responses skip the
+    /// `rain_started` branch quietly.
+    private func generateRainAlertsFromDavis(
+        store: MigratedDataStore,
+        vineyardId: UUID,
+        userId: UUID?
+    ) async -> [BackendAlertUpsert] {
+        let service = WeatherCurrentService()
+        let cached: WeatherCurrentService.CachedSnapshot?
+        do {
+            cached = try await service.fetchCachedCurrent(vineyardId: vineyardId)
+        } catch {
+            print("[AlertService] rain alerts: fetchCachedCurrent failed — \(error.localizedDescription)")
+            return []
+        }
+
+        let timezone = vineyardTimeZone(store: store, vineyardId: vineyardId)
+        var localCal = Calendar(identifier: .gregorian)
+        localCal.timeZone = timezone
+        let now = Date()
+        let localComps = localCal.dateComponents([.year, .month, .day, .hour], from: now)
+        let localDate = String(
+            format: "%04d-%02d-%02d",
+            localComps.year ?? 0,
+            localComps.month ?? 0,
+            localComps.day ?? 0
+        )
+        let stationLabel: String = {
+            if let name = cached?.stationName, !name.isEmpty { return name }
+            if let v = store.vineyards.first(where: { $0.id == vineyardId }), !v.name.isEmpty {
+                return v.name
+            }
+            return "the vineyard"
+        }()
+
+        var upserts: [BackendAlertUpsert] = []
+
+        // 1. Rain started — only when cache is ok + fresh.
+        if let snap = cached,
+           snap.status == "ok",
+           snap.isStale == false,
+           let rate = snap.rainRateMmPerHr,
+           rate > 0 {
+            let bucket = (localComps.hour ?? 0) / 3
+            let dedupKey = "rain_started:\(localDate):\(bucket)"
+            let severity: AlertSeverity = rate >= 5 ? .warning : .info
+            let title = "Rain has started"
+            let message = String(
+                format: "Rain detected at %@. Current rate %.1f mm/hr.",
+                stationLabel,
+                rate
+            )
+            let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+            let expires = localCal.date(byAdding: .hour, value: 6, to: now)
+            upserts.append(BackendAlertUpsert(
+                id: alertId,
+                vineyardId: vineyardId,
+                alertType: AlertType.rainStarted.rawValue,
+                severity: severity.rawValue,
+                title: title,
+                message: message,
+                relatedTable: nil,
+                relatedId: nil,
+                paddockId: nil,
+                action: AlertAction.openWeather.rawValue,
+                dedupKey: dedupKey,
+                generatedForDate: localCal.startOfDay(for: now),
+                expiresAt: expires,
+                createdBy: userId
+            ))
+        }
+
+        // 2. 9 AM rain summary — vineyard-local 09:00..09:59.
+        if (localComps.hour ?? -1) == 9 {
+            let stationId = cached?.stationId ?? ""
+            var rainfallMm: Double? = nil
+            if !stationId.isEmpty {
+                let from = now.addingTimeInterval(-24 * 60 * 60)
+                do {
+                    let result = try await VineyardDavisProxyService.fetchHistoricRainfall(
+                        vineyardId: vineyardId,
+                        stationId: stationId,
+                        from: from,
+                        to: now
+                    )
+                    rainfallMm = result.totalMm
+                } catch {
+                    print("[AlertService] rain 24h summary: historic fetch failed — \(error.localizedDescription)")
+                }
+            }
+            if let mm = rainfallMm, mm > 0 {
+                let dedupKey = "rain_24h_summary:\(localDate)"
+                let title = "Rainfall in past 24 hours"
+                let message = String(
+                    format: "%.1f mm of rain recorded at %@ in the past 24 hours.",
+                    mm,
+                    stationLabel
+                )
+                let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+                // Keep the daily summary visible until the end of the
+                // following local day so it doesn't disappear before
+                // managers see it.
+                let expires = localCal.date(
+                    byAdding: .day,
+                    value: 2,
+                    to: localCal.startOfDay(for: now)
+                )
+                upserts.append(BackendAlertUpsert(
+                    id: alertId,
+                    vineyardId: vineyardId,
+                    alertType: AlertType.rain24hSummary.rawValue,
+                    severity: AlertSeverity.info.rawValue,
+                    title: title,
+                    message: message,
+                    relatedTable: nil,
+                    relatedId: nil,
+                    paddockId: nil,
+                    action: AlertAction.openWeather.rawValue,
+                    dedupKey: dedupKey,
+                    generatedForDate: localCal.startOfDay(for: now),
+                    expiresAt: expires,
+                    createdBy: userId
+                ))
+            }
+        }
+
+        return upserts
+    }
+
+    /// Phase 1 timezone resolution. `vineyards.timezone` doesn't exist
+    /// in the backend yet, so we default Stockmans Ridge Wines to
+    /// Australia/Sydney and fall back to the device timezone for any
+    /// other vineyard. Phase 2 will add a server-side timezone column.
+    private func vineyardTimeZone(store: MigratedDataStore, vineyardId: UUID) -> TimeZone {
+        let name = store.vineyards.first(where: { $0.id == vineyardId })?.name ?? ""
+        if name.localizedCaseInsensitiveContains("Stockmans Ridge") {
+            return TimeZone(identifier: "Australia/Sydney") ?? .current
+        }
+        return .current
     }
 
     // MARK: - Disease risk

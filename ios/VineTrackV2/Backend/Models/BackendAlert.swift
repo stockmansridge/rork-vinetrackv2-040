@@ -35,6 +35,8 @@ nonisolated enum AlertType: String, Codable, Sendable {
     case diseaseDownyMildew = "disease_downy_mildew"
     case diseasePowderyMildew = "disease_powdery_mildew"
     case diseaseBotrytis = "disease_botrytis"
+    case rainStarted = "rain_started"
+    case rain24hSummary = "rain_24h_summary"
 }
 
 nonisolated enum AlertAction: String, Codable, Sendable {

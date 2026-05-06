@@ -1,5 +1,7 @@
 import Foundation
 import CoreLocation
+import Supabase
+import PostgREST
 
 /// Backend-safe current-weather fetcher.
 ///
@@ -12,6 +14,27 @@ import CoreLocation
 /// service will call Weather Underground directly. In production the
 /// Edge Function path is used.
 nonisolated struct WeatherCurrentService: Sendable {
+
+    /// Safe, member-readable snapshot returned by
+    /// `public.get_vineyard_current_weather` RPC. Never contains
+    /// Davis credentials or auth headers.
+    nonisolated struct CachedSnapshot: Sendable {
+        let source: String
+        let stationId: String?
+        let stationName: String?
+        let observedAt: Date?
+        let temperatureC: Double?
+        let humidityPct: Double?
+        let windSpeedKmh: Double?
+        let windDirectionDeg: Double?
+        let rainTodayMm: Double?
+        let rainRateMmPerHr: Double?
+        let leafWetness: Double?
+        let isStale: Bool
+        /// 'ok', 'no_data', 'not_configured'.
+        let status: String
+        let message: String
+    }
 
     nonisolated struct Snapshot: Sendable {
         let temperatureC: Double?
@@ -219,6 +242,76 @@ nonisolated struct WeatherCurrentService: Sendable {
         if let n = any as? NSNumber { return n.doubleValue }
         if let s = any as? String { return Double(s) }
         return nil
+    }
+
+    // MARK: - Cached current weather (RPC)
+
+    /// Calls `public.get_vineyard_current_weather(p_vineyard_id)` and
+    /// returns the latest cached observation for the vineyard. The RPC
+    /// is cache-only and never exposes Davis credentials. Returns nil
+    /// if Supabase is not configured or the RPC call fails.
+    func fetchCachedCurrent(vineyardId: UUID) async throws -> CachedSnapshot? {
+        let provider = SupabaseClientProvider.shared
+        guard provider.isConfigured else { return nil }
+        let rows: [CurrentWeatherRow] = try await provider.client
+            .rpc("get_vineyard_current_weather",
+                 params: GetCurrentWeatherParams(pVineyardId: vineyardId))
+            .execute()
+            .value
+        guard let row = rows.first else { return nil }
+        return CachedSnapshot(
+            source: row.source ?? "davis_weatherlink",
+            stationId: row.stationId,
+            stationName: row.stationName,
+            observedAt: row.observedAt,
+            temperatureC: row.temperatureC,
+            humidityPct: row.humidityPct,
+            windSpeedKmh: row.windSpeedKmh,
+            windDirectionDeg: row.windDirectionDeg,
+            rainTodayMm: row.rainTodayMm,
+            rainRateMmPerHr: row.rainRateMmPerHr,
+            leafWetness: row.leafWetness,
+            isStale: row.isStale ?? false,
+            status: row.status ?? "unavailable",
+            message: row.message ?? ""
+        )
+    }
+
+    nonisolated private struct GetCurrentWeatherParams: Encodable, Sendable {
+        let pVineyardId: UUID
+        enum CodingKeys: String, CodingKey { case pVineyardId = "p_vineyard_id" }
+    }
+
+    nonisolated private struct CurrentWeatherRow: Decodable, Sendable {
+        let source: String?
+        let stationId: String?
+        let stationName: String?
+        let observedAt: Date?
+        let temperatureC: Double?
+        let humidityPct: Double?
+        let windSpeedKmh: Double?
+        let windDirectionDeg: Double?
+        let rainTodayMm: Double?
+        let rainRateMmPerHr: Double?
+        let leafWetness: Double?
+        let isStale: Bool?
+        let status: String?
+        let message: String?
+        enum CodingKeys: String, CodingKey {
+            case source
+            case stationId = "station_id"
+            case stationName = "station_name"
+            case observedAt = "observed_at"
+            case temperatureC = "temperature_c"
+            case humidityPct = "humidity_pct"
+            case windSpeedKmh = "wind_speed_kmh"
+            case windDirectionDeg = "wind_direction_deg"
+            case rainTodayMm = "rain_today_mm"
+            case rainRateMmPerHr = "rain_rate_mm_per_hr"
+            case leafWetness = "leaf_wetness"
+            case isStale = "is_stale"
+            case status, message
+        }
     }
 
     static func compassDirection(degrees: Double) -> String {
