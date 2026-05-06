@@ -792,6 +792,13 @@ struct ActiveTripCard: View {
                             .font(.caption2)
                             .foregroundStyle(.orange)
                     }
+                    HStack(spacing: 2) {
+                        Text("Tap to resume")
+                            .font(.caption2.weight(.medium))
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(.secondary)
                 }
 
                 HStack(spacing: 16) {
