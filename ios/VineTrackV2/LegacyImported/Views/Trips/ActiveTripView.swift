@@ -32,6 +32,15 @@ struct ActiveTripView: View {
     @State private var trailDiagFullCount: Int = 0
     @State private var trailDiagDisplayCount: Int = 0
 
+    /// GPS-derived travel bearing (degrees, 0=N) latched once we've seen
+    /// stable movement along the row direction. Only flips when the new
+    /// bearing is opposite the locked one for ≥3 consecutive samples — this
+    /// stops the left/right labels from flickering when the tractor is
+    /// stationary, turning at row ends, or experiencing GPS jitter.
+    @State private var lockedTravelBearing: Double?
+    @State private var lastBearingLocation: CLLocation?
+    @State private var bearingLockSamples: Int = 0
+
     /// Throttle interval for the live trail render. Location updates can keep
     /// flowing in faster than this — only the on-screen polylines are paced.
     private static let trailUpdateInterval: TimeInterval = 1.0
@@ -89,23 +98,52 @@ struct ActiveTripView: View {
         displayPath ?? trip.currentRowNumber
     }
 
-    /// Lower row number adjacent to the current path. For path X.5 this is X.
-    /// Path 0.5 → “Before row 1”, path (max+0.5) → “After row max”.
+    /// Highest row number across the active sequence. Used to render the
+    /// “End” boundary label past the last row.
+    private var maxSequenceRow: Int {
+        guard !trip.rowSequence.isEmpty else { return Int.max }
+        return Int(trip.rowSequence.map { ceil($0) }.max() ?? 0)
+    }
+
+    /// True when the tractor's locked travel bearing matches the row
+    /// vector start→end direction. When false, left/right are swapped.
+    /// Falls back to `true` (no swap) when we don't yet have a stable
+    /// bearing — keeps labels readable while GPS settles.
+    private var isTravelingAlongRow: Bool {
+        guard let locked = lockedTravelBearing,
+              let rowDir = currentPaddock?.rowDirection else { return true }
+        var diff = locked - rowDir
+        while diff < 0 { diff += 360 }
+        while diff >= 360 { diff -= 360 }
+        return diff < 90 || diff > 270
+    }
+
+    /// Convert an adjacent row number to a display label, returning
+    /// “Start” / “End” at the sequence boundaries.
+    private func sideLabel(forRow number: Int) -> String {
+        if number < 1 { return "Start" }
+        if maxSequenceRow != Int.max, number > maxSequenceRow { return "End" }
+        return "Row \(number)"
+    }
+
+    /// Row number on the operator's left, accounting for travel direction.
+    /// For path X.5 the two adjacent rows are X (floor) and X+1 (ceil).
+    /// When travelling start→end of the row geometry, the higher-numbered
+    /// row sits on the left; reversed when travelling end→start.
     private var leftRowLabel: String {
         let path = pathForLabels
         let lower = Int(floor(path))
-        if lower < 1 { return "Start" }
-        return "Row \(lower)"
+        let upper = lower + 1
+        let row = isTravelingAlongRow ? upper : lower
+        return sideLabel(forRow: row)
     }
 
     private var rightRowLabel: String {
         let path = pathForLabels
-        let upper = Int(floor(path)) + 1
-        let maxRow = trip.rowSequence.isEmpty
-            ? Int.max
-            : Int(trip.rowSequence.map { floor($0) }.max() ?? 0) + 1
-        if upper > maxRow, maxRow != Int.max { return "End" }
-        return "Row \(upper)"
+        let lower = Int(floor(path))
+        let upper = lower + 1
+        let row = isTravelingAlongRow ? lower : upper
+        return sideLabel(forRow: row)
     }
 
     /// Show the side row indicator whenever row tracking is enabled and we
@@ -466,10 +504,73 @@ struct ActiveTripView: View {
         lastTrailUpdate = Date()
         trailDiagFullCount = points.count
         trailDiagDisplayCount = segments.reduce(0) { $0 + $1.coordinates.count }
+
+        // Update the locked travel bearing on the same throttle so the
+        // left/right row labels respond to direction without flicker.
+        updateTravelBearing(from: locationService.location)
+
         #if DEBUG
         print("[Trail] full=\(trailDiagFullCount) display=\(trailDiagDisplayCount) " +
               "polylines=\(segments.count) interval=\(Self.trailUpdateInterval)s mode=bucketed")
+        let path = pathForLabels
+        let lower = Int(floor(path))
+        let upper = lower + 1
+        print("[RowSides] path=\(path) lower=\(lower) upper=\(upper) " +
+              "rowDir=\(currentPaddock?.rowDirection ?? -1) " +
+              "travelBearing=\(lockedTravelBearing.map { String(format: "%.1f", $0) } ?? "nil") " +
+              "alongRow=\(isTravelingAlongRow) left=\(leftRowLabel) right=\(rightRowLabel)")
         #endif
+    }
+
+    /// Latch a stable travel bearing from recent GPS movement. Mirrors the
+    /// legacy V1 behaviour: requires ≥3m of movement, only updates when the
+    /// movement vector is close to (or opposite) the row direction, and
+    /// flips the locked bearing only after 3 consecutive opposite samples.
+    private func updateTravelBearing(from location: CLLocation?) {
+        guard let location else { return }
+        guard let last = lastBearingLocation else {
+            lastBearingLocation = location
+            return
+        }
+        let dist = location.distance(from: last)
+        guard dist > 3 else { return }
+
+        let dLat = location.coordinate.latitude - last.coordinate.latitude
+        let dLon = location.coordinate.longitude - last.coordinate.longitude
+        let lat1 = last.coordinate.latitude * .pi / 180
+        let adjustedDLon = dLon * cos(lat1)
+        var bearing = atan2(adjustedDLon, dLat) * 180 / .pi
+        if bearing < 0 { bearing += 360 }
+
+        lastBearingLocation = location
+
+        let rowDir = currentPaddock?.rowDirection ?? 0
+        var diffToRow = bearing - rowDir
+        while diffToRow < 0 { diffToRow += 360 }
+        while diffToRow >= 360 { diffToRow -= 360 }
+        // Only accept samples that are roughly along the row vector
+        // (within ±45°). Cross-row movement (turning at the headland)
+        // is ignored so it can't flip left/right.
+        let isAlongRow = diffToRow < 45 || diffToRow > 315
+            || (diffToRow > 135 && diffToRow < 225)
+        guard isAlongRow else { return }
+
+        if let locked = lockedTravelBearing {
+            var diffToLocked = bearing - locked
+            while diffToLocked < 0 { diffToLocked += 360 }
+            while diffToLocked >= 360 { diffToLocked -= 360 }
+            if diffToLocked > 135 && diffToLocked < 225 {
+                bearingLockSamples += 1
+                if bearingLockSamples >= 3 {
+                    lockedTravelBearing = bearing
+                    bearingLockSamples = 0
+                }
+            } else {
+                bearingLockSamples = 0
+            }
+        } else {
+            lockedTravelBearing = bearing
+        }
     }
 
     // MARK: - Banners
