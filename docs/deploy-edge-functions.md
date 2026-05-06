@@ -6,6 +6,23 @@ the function must be deployed there for "Test saved credentials" to work.
 
 You do **not** need a Mac. The PowerShell script below works on Windows.
 
+## Deployment policy
+
+Deployment is **manual via the PowerShell script** for now. We are intentionally
+**not** using a GitHub Actions workflow yet, because that would require storing
+Supabase deploy credentials in GitHub Secrets — an extra credential surface we
+want to avoid until the manual flow is proven stable.
+
+Preferred flow:
+
+```powershell
+npm install -g supabase
+supabase login
+.\scripts\deploy-edge-functions.ps1
+```
+
+A CI workflow can be added later once this is stable.
+
 ## 1. Install the Supabase CLI on Windows
 
 Pick one option.
@@ -86,10 +103,18 @@ Interpretation:
 
 | Response | Meaning |
 | --- | --- |
-| `401 Unauthorized` | Deployed (expected — request needs auth). |
-| `405 Method Not Allowed` | Deployed (wrong HTTP method on bare GET). |
-| Other auth/method error | Deployed. |
-| `404 NOT_FOUND` / `FUNCTION_NOT_FOUND` | **Not deployed.** Re-run the script. |
+| `401 Unauthorized` | **Deployed** (expected — request needs auth). |
+| `405 Method Not Allowed` | **Deployed** (wrong HTTP method on bare GET). |
+| Other auth/method error | **Deployed** — function exists. |
+| `404 NOT_FOUND` / `FUNCTION_NOT_FOUND` | **Not deployed.** `davis-proxy` is missing — re-run the script. |
+
+Rule of thumb:
+
+- **404 NOT_FOUND** → `davis-proxy` is **not** deployed.
+- **401 / 405 / any auth or method error** → the function **exists** and is deployed.
+
+After a successful deploy, test in the Lovable portal:
+**Setup → Weather → Test saved credentials**.
 
 ## 5. Test from the Lovable portal
 
