@@ -12,13 +12,20 @@
 // Request (POST JSON):
 //   {
 //     "vineyardId": "<uuid>",
-//     "action": "stations" | "current" | "historic" | "test" | "test_saved",
-//     "stationId"?: string,            // for current / historic
+//     "action": "stations" | "current" | "historic" | "test" | "test_saved" | "backfill_rainfall",
+//     "stationId"?: string,            // for current / historic / backfill
 //     "startEpoch"?: number,           // for historic, seconds
 //     "endEpoch"?: number,             // for historic, seconds
+//     "days"?: number,                 // for backfill_rainfall (default 14, max 60)
+//     "timezone"?: string,             // IANA tz, default 'Australia/Sydney'
 //     "apiKey"?: string,               // for "test" only (owner/manager)
 //     "apiSecret"?: string             // for "test" only (owner/manager)
 //   }
+//
+// "backfill_rainfall" — owner/manager only. Iterates the past N vineyard-
+//                  local days and upserts public.rainfall_daily rows for
+//                  source='davis_weatherlink'. Returns counts only; never
+//                  returns credentials or raw payloads.
 //
 // "test"        — owner/manager verifies an ad-hoc key/secret pair before
 //                  saving. Credentials come in the request body and are not
@@ -44,6 +51,43 @@ const CORS: Record<string, string> = {
 const DAVIS_BASE = "https://api.weatherlink.com/v2";
 
 // ---------------------------------------------------------------------------
+// Vineyard-local date helper.
+// Computes the YYYY-MM-DD date for an instant in a given IANA timezone.
+function localDateString(d: Date, timezone: string): string {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+    });
+    return fmt.format(d); // en-CA gives YYYY-MM-DD
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// Returns the UTC instant of midnight (start-of-day) in the given tz for
+// the given local YYYY-MM-DD date. Approximate but sufficient for daily
+// rainfall windows (off by at most an hour around DST transitions).
+function localMidnightUtc(localDate: string, timezone: string): Date {
+  // Start with the candidate at UTC midnight then correct for the offset.
+  const utcGuess = new Date(localDate + "T00:00:00Z");
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone, hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const parts = fmt.formatToParts(utcGuess).reduce<Record<string,string>>((acc, p) => {
+    if (p.type !== "literal") acc[p.type] = p.value;
+    return acc;
+  }, {});
+  const asUtc = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour), Number(parts.minute), Number(parts.second),
+  );
+  const offsetMs = asUtc - utcGuess.getTime();
+  return new Date(utcGuess.getTime() - offsetMs);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers: parse Davis /current payload into safe, metric, normalised fields
 // for the vineyard_weather_observations cache. We never persist credentials
 // or auth headers — only the parsed sensor values plus a scrubbed copy of
@@ -60,6 +104,11 @@ function mphToKmh(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
   if (!isFinite(n)) return null;
   return Math.round(n * 1.609344 * 10) / 10;
+}
+function inToMmRaw(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!isFinite(n)) return null;
+  return n * 25.4;
 }
 function inToMm(v: unknown): number | null {
   const n = typeof v === "number" ? v : Number(v);
@@ -369,11 +418,123 @@ Deno.serve(async (req: Request) => {
                 leaf_wetness: parsed.leaf_wetness,
                 raw_payload: safePayload,
               }, { onConflict: "vineyard_id,source" });
+
+            // Persist today's rainfall total for the Rain Calendar.
+            // Manual rows on the same day are a different source and are
+            // never overwritten by this call.
+            if (parsed.rain_today_mm != null && isFinite(parsed.rain_today_mm)) {
+              const tz = typeof body.timezone === "string" && body.timezone
+                ? body.timezone
+                : "Australia/Sydney";
+              const localDate = localDateString(new Date(parsed.observed_at), tz);
+              await admin.rpc("upsert_davis_rainfall_daily", {
+                p_vineyard_id: vineyardId,
+                p_date: localDate,
+                p_rainfall_mm: parsed.rain_today_mm,
+                p_station_id: String(parsed.station_id ?? stationId),
+                p_station_name: integ.station_name ?? null,
+              });
+            }
           }
         } catch (_e) { /* swallow cache errors */ }
         return json(r.body ?? {});
       }
       return json({ error: `WeatherLink HTTP ${r.status}` }, 502);
+    }
+
+    case "backfill_rainfall": {
+      if (role !== "owner" && role !== "manager") {
+        return json({ error: "Owner or manager role required" }, 403);
+      }
+      const stationId = String(body.stationId ?? integ.station_id ?? "");
+      if (!stationId) return json({ error: "stationId required" }, 400);
+      const requestedDays = Number(body.days);
+      const days = isFinite(requestedDays) && requestedDays > 0
+        ? Math.min(60, Math.floor(requestedDays))
+        : 14;
+      const timezone = typeof body.timezone === "string" && body.timezone
+        ? body.timezone
+        : "Australia/Sydney";
+      const stationName = integ.station_name ?? null;
+
+      // Iterate from yesterday backwards. Skip today: rain_today_mm is
+      // handled by the "current" action and not a closed day yet.
+      const todayLocal = localDateString(new Date(), timezone);
+      const todayMidnightUtc = localMidnightUtc(todayLocal, timezone);
+
+      let processed = 0;
+      let upserted = 0;
+      const errors: string[] = [];
+
+      for (let i = 1; i <= days; i++) {
+        const endUtc = new Date(todayMidnightUtc.getTime() - (i - 1) * 86400000);
+        const startUtc = new Date(endUtc.getTime() - 86400000);
+        const startEpoch = Math.floor(startUtc.getTime() / 1000);
+        const endEpoch = Math.floor(endUtc.getTime() / 1000);
+        const localDate = localDateString(startUtc, timezone);
+
+        const r = await davisGet(
+          `/historic/${stationId}`,
+          apiKey, apiSecret,
+          { "start-timestamp": String(startEpoch), "end-timestamp": String(endEpoch) },
+        );
+        if (r.status === 429) {
+          errors.push("rate_limited");
+          break;
+        }
+        if (r.status < 200 || r.status >= 300) {
+          errors.push(`http_${r.status}`);
+          continue;
+        }
+        processed++;
+
+        // Sum rainfall across all archive records for the day.
+        let mm = 0;
+        let sawAny = false;
+        const sensors: any[] = Array.isArray(r.body?.sensors) ? r.body.sensors : [];
+        for (const s of sensors) {
+          const records: any[] = Array.isArray(s?.data) ? s.data : [];
+          for (const rec of records) {
+            if (!rec || typeof rec !== "object") continue;
+            const mmVal = num(rec.rainfall_mm)
+              ?? num(rec.rainfall_last_15_min_mm)
+              ?? num(rec.rainfall_last_60_min_mm);
+            if (mmVal != null) { mm += mmVal; sawAny = true; continue; }
+            const inVal = num(rec.rainfall_in)
+              ?? num(rec.rainfall_last_15_min_in)
+              ?? num(rec.rainfall_last_60_min_in);
+            if (inVal != null) {
+              const conv = inToMmRaw(inVal);
+              if (conv != null) { mm += conv; sawAny = true; }
+            }
+          }
+        }
+
+        if (!sawAny) continue;
+        const rainfallMm = Math.round(mm * 100) / 100;
+
+        const { error: rpcErr } = await admin.rpc("upsert_davis_rainfall_daily", {
+          p_vineyard_id: vineyardId,
+          p_date: localDate,
+          p_rainfall_mm: rainfallMm,
+          p_station_id: stationId,
+          p_station_name: stationName,
+        });
+        if (rpcErr) {
+          errors.push(rpcErr.message);
+        } else {
+          upserted++;
+        }
+      }
+
+      return json({
+        success: errors.length === 0,
+        days_requested: days,
+        days_processed: processed,
+        rows_upserted: upserted,
+        timezone,
+        errors_count: errors.length,
+      });
     }
 
     case "historic": {
