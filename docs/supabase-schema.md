@@ -494,20 +494,37 @@ Unique `(vineyard_id, provider)`.
 > **RLS is locked. There are no policies on this table. All client SELECT/
 > INSERT/UPDATE/DELETE is revoked.** Access goes only through:
 >
-> - `get_vineyard_weather_integration(vineyard_id, provider)` — members
->   read non-secret fields only (returns `has_api_key` / `has_api_secret`
->   booleans, never the values).
-> - `save_vineyard_weather_integration(...)` — owner/manager.
-> - `delete_vineyard_weather_integration(...)` — owner/manager.
-> - `reveal_vineyard_weather_integration_credentials(...)` — owner/manager
->   for the management UI.
+> - `get_vineyard_weather_integration(vineyard_id, provider)` — any
+>   vineyard member. Returns non-secret fields only: `has_api_key` /
+>   `has_api_secret` booleans, station id/name, sensor flags,
+>   `last_tested_at`, `last_test_status`, `caller_role`. Never returns
+>   the key or secret values.
+> - `save_vineyard_weather_integration(...)` — **owner/manager only**.
+>   Upsert by `(vineyard_id, provider)`. Every parameter is nullable;
+>   each field uses `COALESCE(excluded.x, i.x)` so passing `NULL` for
+>   `p_api_key` / `p_api_secret` **preserves** the existing stored
+>   credential. The portal must therefore send `NULL` (not `""`) for
+>   secret fields the user left blank, otherwise it would clear them.
+> - `delete_vineyard_weather_integration(...)` — owner/manager only.
+>   Explicit destructive remove of the integration row.
+> - `reveal_vineyard_weather_integration_credentials(...)` —
+>   owner/manager only. Returns the raw `api_key` / `api_secret` for the
+>   management UI's masked-view / rotate flow. **Do not call from the
+>   Lovable portal.** The portal does not need to read secrets to manage
+>   them; testing happens server-side via `davis-proxy` `test_saved`.
 >
 > The edge function `davis-proxy` reads `api_secret` server-side using
-> the service role.
+> the service role and is the only caller in the system that ever needs
+> the cleartext secret.
 
-**Lovable / web portal must never SELECT this table directly** and must
-never call `reveal_vineyard_weather_integration_credentials`. Use
-`get_vineyard_weather_integration` only if a status display is needed.
+Unique `(vineyard_id, provider)` is enforced at the table level, so
+there is at most one row per provider per vineyard.
+
+**Vineyard-level, not per-device.** The iOS app and the Lovable portal
+must both treat these RPCs as the single source of truth. Local
+`UserDefaults` / Keychain copies on iOS are read-only fallbacks for
+offline use only — they must never overwrite the server values, and an
+empty local cache must never be interpreted as "not configured".
 
 ---
 
@@ -538,9 +555,9 @@ All buckets are private. Path layout convention: `{vineyard_id}/...` so
 | `submit_account_deletion_request(reason)` | authenticated | Queue manual deletion |
 | `mark_vineyard_alert_status(alert_id, read, dismissed)` | members | Per-user alert state |
 | `get_vineyard_weather_integration(vineyard_id, provider)` | members | Non-secret weather config |
-| `save_vineyard_weather_integration(...)` | owner/manager | Upsert weather config |
+| `save_vineyard_weather_integration(...)` | owner/manager | Upsert weather config (NULL preserves existing secret) |
 | `delete_vineyard_weather_integration(...)` | owner/manager | Remove weather config |
-| `reveal_vineyard_weather_integration_credentials(...)` | owner/manager | Show creds in management UI |
+| `reveal_vineyard_weather_integration_credentials(...)` | owner/manager | Show creds in iOS management UI — not from portal |
 | `soft_delete_<table>(id)` | role-gated | Soft delete each operational table |
 | `admin_*` (017) | admin allowlist | Platform-wide engagement views |
 
@@ -604,8 +621,13 @@ For the MVP read-only admin / partner portal:
    (`EXPO_PUBLIC_SUPABASE_URL`). Use the **anon key only**.
 2. **Use the existing tables and RPCs**. Do not propose migrations or
    schema changes from the portal.
-3. **No writes** in the MVP. All writes happen from the iOS app, which
-   already enforces the right ordering / soft-delete RPCs.
+3. **Reads only, with one exception.** All operational data writes
+   happen from the iOS app (which enforces the right ordering and
+   soft-delete RPCs). The single sanctioned write surface from the
+   portal is **vineyard weather integrations** (see point 7) —
+   centrally managed by Owners / Managers via the
+   `save_*` / `delete_*` RPCs and the `davis-proxy` `test_saved`
+   action. Everything else is read-only.
 4. **RLS is the source of truth**. The portal authenticates the user
    through Supabase Auth; what they can see is exactly what their
    `vineyard_members` row allows. Do not work around RLS.
@@ -615,11 +637,35 @@ For the MVP read-only admin / partner portal:
 6. **Paddock visualisation**: read `polygon_points`, `rows`,
    `variety_allocations` JSONB and render in the browser. Compute area /
    vine count / post count client-side; do not expect server columns.
-7. **Weather integrations**: never SELECT
-   `vineyard_weather_integrations` directly. If you need to show
-   integration status, call `get_vineyard_weather_integration`. Do not
-   call `reveal_vineyard_weather_integration_credentials` from the
-   portal.
+7. **Weather integrations**: weather provider settings (Davis
+   WeatherLink today, Wunderground later) are **vineyard-level and
+   managed centrally from the portal**, not per-device. Never `SELECT`
+   `vineyard_weather_integrations` directly — the table has RLS locked
+   and grants revoked. Use:
+   - `get_vineyard_weather_integration(vineyard_id, 'davis_weatherlink')`
+     to show status (configured y/n, station name, sensor flags,
+     `last_tested_at`, `last_test_status`).
+   - `save_vineyard_weather_integration(vineyard_id, 'davis_weatherlink',
+     p_api_key, p_api_secret, p_station_id, p_station_name, ...)` to
+     create/update. **Send `NULL` (not `""`) for secret fields the user
+     left blank** so existing credentials are preserved — the RPC uses
+     `COALESCE` and treats `NULL` as "keep existing". Only send a new
+     `p_api_key` / `p_api_secret` when the user explicitly enters one.
+   - `delete_vineyard_weather_integration(vineyard_id,
+     'davis_weatherlink')` is the only way to clear credentials.
+   - To verify connectivity, `POST` to the `davis-proxy` edge function
+     with `{ action: "test_saved", vineyardId }` (owner/manager). It
+     re-tests the stored credentials and updates `last_tested_at` /
+     `last_test_status` server-side. Use `{ action: "test", vineyardId,
+     apiKey, apiSecret }` to verify a key pair *before* saving — the
+     creds are not persisted by that call.
+   - **Never** call `reveal_vineyard_weather_integration_credentials`
+     from the portal. The portal does not need to read secrets to
+     manage them. Mask any secret fields in the UI; show "Configured"
+     / "Not configured" from `has_api_key` + `has_api_secret`.
+   - Operators (role `operator` / `supervisor`) must not see the edit
+     form. Gate the management screen on `caller_role in
+     ('owner','manager')` from the read RPC.
 8. **Storage**: render images via signed URLs from the four buckets
    listed above; the same RLS rules apply.
 9. **Admin-only data**: `admin_*` RPCs require the email allowlist in

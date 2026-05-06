@@ -12,13 +12,20 @@
 // Request (POST JSON):
 //   {
 //     "vineyardId": "<uuid>",
-//     "action": "stations" | "current" | "historic" | "test",
+//     "action": "stations" | "current" | "historic" | "test" | "test_saved",
 //     "stationId"?: string,            // for current / historic
 //     "startEpoch"?: number,           // for historic, seconds
 //     "endEpoch"?: number,             // for historic, seconds
 //     "apiKey"?: string,               // for "test" only (owner/manager)
 //     "apiSecret"?: string             // for "test" only (owner/manager)
 //   }
+//
+// "test"        — owner/manager verifies an ad-hoc key/secret pair before
+//                  saving. Credentials come in the request body and are not
+//                  persisted; nothing is written.
+// "test_saved"  — owner/manager re-tests the credentials already stored in
+//                  vineyard_weather_integrations for the vineyard. Updates
+//                  last_tested_at / last_test_status. Never returns secrets.
 //
 // 401 if not authenticated, 403 if not a vineyard member, 404 if no
 // integration / station configured, 502 on upstream errors.
@@ -133,6 +140,57 @@ Deno.serve(async (req: Request) => {
       return json({ error: `WeatherLink HTTP ${r.status}` }, 502);
     }
     return json({ stations: r.body?.stations ?? [] });
+  }
+
+  // "test_saved" re-validates the credentials currently stored for this
+  // vineyard and records the result. Credentials are never returned.
+  if (action === "test_saved") {
+    if (role !== "owner" && role !== "manager") {
+      return json({ error: "Owner or manager role required" }, 403);
+    }
+    const { data: integ, error: integErr } = await admin
+      .from("vineyard_weather_integrations")
+      .select("api_key, api_secret, station_id, station_name")
+      .eq("vineyard_id", vineyardId)
+      .eq("provider", "davis_weatherlink")
+      .maybeSingle();
+    if (integErr) return json({ error: integErr.message }, 500);
+    if (!integ?.api_key || !integ?.api_secret) {
+      return json(
+        { success: false, error: "Davis integration not configured for this vineyard" },
+        404,
+      );
+    }
+    const r = await davisGet("/stations", String(integ.api_key), String(integ.api_secret));
+    const testedAt = new Date().toISOString();
+    let success = false;
+    let status = "";
+    let message = "";
+    if (r.status === 401 || r.status === 403) {
+      status = "invalid_credentials";
+      message = "Invalid Davis credentials";
+    } else if (r.status < 200 || r.status >= 300) {
+      status = `http_${r.status}`;
+      message = `WeatherLink HTTP ${r.status}`;
+    } else {
+      success = true;
+      status = "ok";
+      message = "Connection successful";
+    }
+    await admin
+      .from("vineyard_weather_integrations")
+      .update({ last_tested_at: testedAt, last_test_status: status })
+      .eq("vineyard_id", vineyardId)
+      .eq("provider", "davis_weatherlink");
+    return json({
+      success,
+      tested_at: testedAt,
+      status,
+      message,
+      station_id: integ.station_id ?? null,
+      station_name: integ.station_name ?? null,
+      stations: success ? (r.body?.stations ?? []) : [],
+    }, success ? 200 : (r.status === 401 || r.status === 403 ? 401 : 502));
   }
 
   // For all other actions we read the stored vineyard credentials.
