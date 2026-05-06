@@ -32,6 +32,22 @@ struct ActiveTripView: View {
     @State private var trailDiagFullCount: Int = 0
     @State private var trailDiagDisplayCount: Int = 0
 
+    /// Last accepted (non-spike) speed in km/h. Held across GPS spikes so the
+    /// pill keeps showing a sensible value rather than flashing 95 km/h.
+    @State private var lastValidSpeedKmh: Double = 0
+    /// Rolling window of valid moving-speed samples (km/h) used for ETA.
+    /// Excludes stationary noise (<0.5 km/h) and impossible spikes (>40 km/h).
+    @State private var validSpeedSamples: [(date: Date, kmh: Double)] = []
+
+    /// Hard cap on tractor ground speed for vineyard work. Anything above is
+    /// treated as a GPS spike for both display and ETA.
+    private static let maxValidSpeedKmh: Double = 40.0
+    /// Below this, the tractor is considered stationary and the sample is
+    /// excluded from the ETA average.
+    private static let minMovingSpeedKmh: Double = 0.5
+    /// Retain ETA samples for ~2 minutes so the average reflects current pace.
+    private static let etaSampleWindow: TimeInterval = 120
+
     /// GPS-derived travel bearing (degrees, 0=N) latched once we've seen
     /// stable movement along the row direction. Only flips when the new
     /// bearing is opposite the locked one for ≥3 consecutive samples — this
@@ -165,6 +181,88 @@ struct ActiveTripView: View {
         return speed * 3.6
     }
 
+    /// Speed shown in the top-right pill. Spikes above `maxValidSpeedKmh` are
+    /// rejected and the previous valid reading is held instead.
+    private var displayedSpeedKmh: Double {
+        let raw = currentSpeedKmh
+        if raw > 0 && raw <= Self.maxValidSpeedKmh { return raw }
+        return lastValidSpeedKmh
+    }
+
+    /// Average of valid moving-speed samples (km/h). Used by the ETA only.
+    private var averageValidSpeedKmh: Double {
+        let moving = validSpeedSamples.filter { $0.kmh >= Self.minMovingSpeedKmh && $0.kmh <= Self.maxValidSpeedKmh }
+        guard moving.count >= 3 else { return 0 }
+        return moving.reduce(0) { $0 + $1.kmh } / Double(moving.count)
+    }
+
+    /// Remaining planned distance in metres, estimated from the row sequence
+    /// paths still to drive multiplied by the average row length across the
+    /// trip's selected paddocks.
+    private var remainingPlannedDistanceMeters: Double {
+        let live = tracking.activeTrip ?? trip
+        guard !live.rowSequence.isEmpty else { return 0 }
+        let remaining = live.rowSequence.dropFirst(live.sequenceIndex).filter {
+            !live.completedPaths.contains($0)
+        }.count
+        guard remaining > 0 else { return 0 }
+        let lens = paddocksOnMap.flatMap { paddock -> [Double] in
+            let mPerDegLat = 111_320.0
+            let lat = paddock.polygonPoints.first?.latitude ?? paddock.rows.first?.startPoint.latitude ?? 0
+            let mPerDegLon = 111_320.0 * cos(lat * .pi / 180)
+            return paddock.rows.map { row in
+                let dLat = (row.endPoint.latitude - row.startPoint.latitude) * mPerDegLat
+                let dLon = (row.endPoint.longitude - row.startPoint.longitude) * mPerDegLon
+                return sqrt(dLat * dLat + dLon * dLon)
+            }
+        }
+        guard !lens.isEmpty else { return 0 }
+        let avgRowLen = lens.reduce(0, +) / Double(lens.count)
+        return Double(remaining) * avgRowLen
+    }
+
+    private var timeLeftText: String {
+        let live = tracking.activeTrip ?? trip
+        if !live.rowSequence.isEmpty {
+            let remaining = live.rowSequence.dropFirst(live.sequenceIndex).filter {
+                !live.completedPaths.contains($0)
+            }.count
+            if remaining == 0 { return "Complete" }
+        }
+        let avgKmh = averageValidSpeedKmh
+        let distance = remainingPlannedDistanceMeters
+        guard avgKmh > 0, distance > 0 else { return "Calculating…" }
+        let speedMps = avgKmh / 3.6
+        let seconds = distance / speedMps
+        if seconds < 60 { return "<1m" }
+        let totalMinutes = Int((seconds / 60).rounded())
+        if totalMinutes < 60 { return "\(totalMinutes)m" }
+        let h = totalMinutes / 60
+        let m = totalMinutes % 60
+        return "\(h)h \(m)m"
+    }
+
+    private var speedDisplayText: String {
+        let v = displayedSpeedKmh
+        guard v > 0 else { return "— km/h" }
+        return String(format: "%.1f km/h", min(v, 99.9))
+    }
+
+    /// Capture a fresh speed reading from the live tracking service into the
+    /// ETA window, filtering out impossible spikes. Called from the 1Hz ticker
+    /// rather than every GPS update so the pill and ETA settle smoothly.
+    private func captureSpeedSample() {
+        let raw = currentSpeedKmh
+        if raw > 0 && raw <= Self.maxValidSpeedKmh {
+            lastValidSpeedKmh = raw
+            if raw >= Self.minMovingSpeedKmh {
+                validSpeedSamples.append((Date(), raw))
+            }
+        }
+        let cutoff = Date().addingTimeInterval(-Self.etaSampleWindow)
+        validSpeedSamples.removeAll { $0.date < cutoff }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             tripInfoBar
@@ -224,15 +322,33 @@ struct ActiveTripView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 4) {
-                    Image(systemName: "speedometer")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text(String(format: "%.1f km/h", currentSpeedKmh))
-                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: currentSpeedKmh)
+                HStack(spacing: 8) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "speedometer")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(speedDisplayText)
+                            .font(.system(.caption, design: .rounded, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: displayedSpeedKmh)
+                            .monospacedDigit()
+                    }
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        Text(timeLeftText)
+                            .font(.system(.caption, design: .rounded, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: timeLeftText)
+                            .monospacedDigit()
+                    }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: Capsule())
             }
         }
         .sheet(isPresented: $showSummary) {
@@ -800,6 +916,7 @@ struct ActiveTripView: View {
                         fillElapsed = 0
                     }
                 }
+                captureSpeedSample()
             }
         }
     }
