@@ -34,6 +34,8 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
     let fillingTankNumber: Int?
 
     let personName: String?
+    let tripFunction: String?
+    let tripTitle: String?
 
     let createdBy: UUID?
     let updatedBy: UUID?
@@ -72,6 +74,8 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
         case isFillingTank = "is_filling_tank"
         case fillingTankNumber = "filling_tank_number"
         case personName = "person_name"
+        case tripFunction = "trip_function"
+        case tripTitle = "trip_title"
         case createdBy = "created_by"
         case updatedBy = "updated_by"
         case createdAt = "created_at"
@@ -113,6 +117,8 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
     let isFillingTank: Bool
     let fillingTankNumber: Int?
     let personName: String
+    let tripFunction: String?
+    let tripTitle: String?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -145,6 +151,8 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
         case isFillingTank = "is_filling_tank"
         case fillingTankNumber = "filling_tank_number"
         case personName = "person_name"
+        case tripFunction = "trip_function"
+        case tripTitle = "trip_title"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
     }
@@ -182,6 +190,8 @@ extension BackendTrip {
             isFillingTank: trip.isFillingTank,
             fillingTankNumber: trip.fillingTankNumber,
             personName: trip.personName,
+            tripFunction: trip.tripFunction,
+            tripTitle: trip.tripTitle,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -217,7 +227,9 @@ extension BackendTrip {
             resumeTimestamps: resumeTimestamps ?? [],
             isPaused: isPaused ?? false,
             isFillingTank: isFillingTank ?? false,
-            fillingTankNumber: fillingTankNumber
+            fillingTankNumber: fillingTankNumber,
+            tripFunction: tripFunction,
+            tripTitle: tripTitle
         )
     }
 }

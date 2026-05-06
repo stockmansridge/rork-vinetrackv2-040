@@ -93,7 +93,9 @@ final class TripTrackingService {
         paddockId: UUID?,
         paddockName: String,
         trackingPattern: TrackingPattern = .sequential,
-        personName: String = ""
+        personName: String = "",
+        tripFunction: String? = nil,
+        tripTitle: String? = nil
     ) {
         guard let store else { return }
         guard store.selectedVineyardId != nil else {
@@ -112,7 +114,9 @@ final class TripTrackingService {
             startTime: Date(),
             isActive: true,
             trackingPattern: trackingPattern,
-            personName: personName
+            personName: personName,
+            tripFunction: tripFunction,
+            tripTitle: tripTitle
         )
         store.startTrip(trip)
         errorMessage = nil
@@ -522,6 +526,9 @@ final class TripTrackingService {
         let globalRow = index.globalRow(paddockId: paddock.id, localRow: localRow)
             ?? localRow
 
+        // Detected live path snapped to the X.5 grid that's closest to the
+        // current sequence path. May or may not equal the current sequence
+        // path — that's exactly what we use to gate auto-completion.
         let livePath = livePathForSequence(
             globalRow: globalRow,
             sequence: trip.rowSequence,
@@ -529,52 +536,74 @@ final class TripTrackingService {
         ) ?? (Double(globalRow) - 0.5)
 
         rowGuidanceAvailable = true
-        currentRowNumber = livePath
         currentRowDistance = match.distance
-        trip.currentRowNumber = livePath
 
-        // Sync sequenceIndex / nextRowNumber when the live path matches a
-        // sequence entry — this is what enables auto path advancement.
-        if !trip.rowSequence.isEmpty,
-           let liveIdx = trip.rowSequence.firstIndex(of: livePath),
-           liveIdx != trip.sequenceIndex {
-            #if DEBUG
-            diagSequenceIndexChanges += 1
-            breadcrumb("sequenceIndex \(trip.sequenceIndex) -> \(liveIdx) path=\(livePath)")
-            #endif
-            // Mark the path we are leaving as completed if we accumulated
-            // enough distance along it.
-            let leaving = trip.rowSequence[trip.sequenceIndex]
-            finalizeIfThresholdMet(
-                path: leaving,
-                trip: &trip,
-                paddock: paddock,
-                rowWidth: paddock.rowWidth,
-                location: locationService?.location
-            )
-            trip.sequenceIndex = liveIdx
-            if liveIdx + 1 < trip.rowSequence.count {
-                trip.nextRowNumber = trip.rowSequence[liveIdx + 1]
-            } else {
-                trip.nextRowNumber = livePath
+        // The current intended path is what the operator is meant to be
+        // driving — it is NOT changed just because the GPS happens to be
+        // near a different row. This is critical for maintenance trips
+        // where the operator may pass through off-cycle paths without
+        // intending to complete them.
+        let currentSequencePath: Double? = trip.rowSequence.indices.contains(trip.sequenceIndex)
+            ? trip.rowSequence[trip.sequenceIndex]
+            : nil
+
+        // Path-match tolerance: livePath is snapped to the .5 grid, so an
+        // exact equality is the right physical comparison. We still compare
+        // with a small epsilon for FP safety.
+        let pathMatch: Bool = {
+            guard let target = currentSequencePath else { return false }
+            return abs(livePath - target) < 0.01
+        }()
+
+        // Show the live GPS path on the row indicator regardless of match,
+        // but keep `trip.currentRowNumber` pinned to the planned path so
+        // the trip header / summary stays on the intended row.
+        currentRowNumber = livePath
+        if let target = currentSequencePath {
+            trip.currentRowNumber = target
+        } else {
+            trip.currentRowNumber = livePath
+        }
+
+        // Only accumulate distance along the *current planned* path, and
+        // only when the live GPS is actually on that path. Driving an
+        // off-cycle path contributes zero progress to the planned path.
+        if pathMatch, let target = currentSequencePath {
+            accumulateDistanceAlong(path: target, location: locationService?.location)
+
+            // Auto-complete only when we are physically near the planned
+            // row centreline and have covered enough of its length.
+            let proximity = max(0.5, paddock.rowWidth / 2.0)
+            if match.distance <= proximity {
+                let didComplete = finalizeIfThresholdMet(
+                    path: target,
+                    trip: &trip,
+                    paddock: paddock,
+                    rowWidth: paddock.rowWidth,
+                    location: locationService?.location
+                )
+                if didComplete {
+                    advanceSequenceAfterCompletion(trip: &trip)
+                }
             }
+        } else {
+            // Off-cycle: reset last tracking location so the next valid
+            // on-path tick doesn't accumulate the off-path distance.
+            lastTrackingLocation = locationService?.location
         }
 
-        // Accumulate distance along the current path for the >= 80 % rule.
-        accumulateDistanceAlong(path: livePath, location: locationService?.location)
+        #if DEBUG
+        let acc = currentSequencePath.map { pathDistanceMap[$0, default: 0] } ?? 0
+        let len = currentSequencePath.flatMap { rowLength(forPath: $0, paddock: paddock) } ?? 0
+        let pct = len > 0 ? (acc / len * 100) : 0
+        breadcrumb(
+            "row currentSeq=\(currentSequencePath.map { String($0) } ?? "nil") " +
+            "livePath=\(livePath) match=\(pathMatch) " +
+            "len=\(String(format: "%.1f", len))m acc=\(String(format: "%.1f", acc))m " +
+            "pct=\(String(format: "%.0f", pct))%"
+        )
+        #endif
 
-        // Auto-complete: row centre is within half a row width AND we have
-        // travelled most of its length.
-        let proximity = max(0.5, paddock.rowWidth / 2.0)
-        if match.distance <= proximity {
-            finalizeIfThresholdMet(
-                path: livePath,
-                trip: &trip,
-                paddock: paddock,
-                rowWidth: paddock.rowWidth,
-                location: locationService?.location
-            )
-        }
         rowsCoveredCount = trip.completedPaths.count
         #if DEBUG
         if Date().timeIntervalSince(lastDiagLogAt) > 10 {
@@ -633,22 +662,51 @@ final class TripTrackingService {
     /// radius and slow tractor speed at the row ends.
     private let shortRowThresholdMetres: Double = 25.0
 
+    /// Advance the planned sequence to the next pending path after the
+    /// current one auto-completes. Skips any entries that are already
+    /// marked completed/skipped so we never get stuck.
+    private func advanceSequenceAfterCompletion(trip: inout Trip) {
+        guard !trip.rowSequence.isEmpty else { return }
+        var next = trip.sequenceIndex + 1
+        while next < trip.rowSequence.count {
+            let candidate = trip.rowSequence[next]
+            if !trip.completedPaths.contains(candidate),
+               !trip.skippedPaths.contains(candidate) { break }
+            next += 1
+        }
+        let clamped = min(next, trip.rowSequence.count - 1)
+        if clamped != trip.sequenceIndex {
+            #if DEBUG
+            diagSequenceIndexChanges += 1
+            breadcrumb("sequenceIndex \(trip.sequenceIndex) -> \(clamped) (auto-complete advance)")
+            #endif
+            trip.sequenceIndex = clamped
+            trip.currentRowNumber = trip.rowSequence[clamped]
+            if clamped + 1 < trip.rowSequence.count {
+                trip.nextRowNumber = trip.rowSequence[clamped + 1]
+            } else {
+                trip.nextRowNumber = trip.rowSequence[clamped]
+            }
+        }
+    }
+
+    @discardableResult
     private func finalizeIfThresholdMet(
         path: Double,
         trip: inout Trip,
         paddock: Paddock,
         rowWidth: Double,
         location: CLLocation?
-    ) {
+    ) -> Bool {
         guard !trip.completedPaths.contains(path),
-              !trip.skippedPaths.contains(path) else { return }
+              !trip.skippedPaths.contains(path) else { return false }
 
         // Cooldown: never auto-complete the same path twice within a few
         // seconds, even if upstream calls us repeatedly.
         if let last = lastAutoCompletePath, last == path,
            let lastAt = lastAutoCompleteAt,
            Date().timeIntervalSince(lastAt) < autoCompleteCooldown {
-            return
+            return false
         }
 
         let accumulated = pathDistanceMap[path, default: 0]
@@ -706,6 +764,7 @@ final class TripTrackingService {
             "autoComplete=\(didComplete)"
         )
         #endif
+        return didComplete
     }
 
     private func isNearPathEnd(

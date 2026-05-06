@@ -57,6 +57,12 @@ struct TripDetailView: View {
             }
 
             Section("Stats") {
+                if let raw = trip.tripFunction, let function = TripFunction(rawValue: raw) {
+                    statRow("Function", value: function.displayName, icon: function.icon)
+                }
+                if let title = trip.tripTitle, !title.isEmpty {
+                    statRow("Title", value: title, icon: "text.cursor")
+                }
                 statRow("Duration", value: formatDuration(trip.activeDuration), icon: "clock")
                 statRow("Distance", value: formatDistance(trip.totalDistance), icon: "point.topleft.down.to.point.bottomright.curvepath")
                 if !trip.paddockName.isEmpty {

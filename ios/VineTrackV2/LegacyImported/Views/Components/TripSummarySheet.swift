@@ -57,6 +57,7 @@ struct TripSummarySheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    functionHeader
                     patternHeader
                     summaryStats
                     if !trip.tankSessions.isEmpty {
@@ -71,6 +72,28 @@ struct TripSummarySheet: View {
             .navigationTitle("Trip Summary")
             .navigationBarTitleDisplayMode(.inline)
             .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    @ViewBuilder
+    private var functionHeader: some View {
+        let label = trip.displayFunctionLabel
+        if !label.isEmpty {
+            HStack(spacing: 10) {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .foregroundStyle(VineyardTheme.earthBrown)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Function")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                    Text(label)
+                        .font(.subheadline.weight(.semibold))
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
         }
     }
 

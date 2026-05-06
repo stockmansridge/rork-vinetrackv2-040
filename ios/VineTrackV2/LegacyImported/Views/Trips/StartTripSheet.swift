@@ -21,6 +21,8 @@ struct StartTripSheet: View {
     @State private var directionHigherFirst: Bool = true
     @State private var personName: String = ""
     @State private var showPaddockPicker: Bool = false
+    @State private var selectedFunction: TripFunction = .slashing
+    @State private var customTitle: String = ""
 
     private var selectedPaddocks: [Paddock] {
         store.paddocks
@@ -149,6 +151,7 @@ struct StartTripSheet: View {
                     if trackingPattern == .everySecondRow, hasAnyRowGeometry {
                         midrowSection
                     }
+                    functionSection
                     operatorSection
                     if let error = tracking.errorMessage {
                         Text(error)
@@ -644,6 +647,68 @@ struct StartTripSheet: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: Trip function
+
+    private var functionSection: some View {
+        sectionContainer(title: "Trip Function", icon: "wrench.and.screwdriver", tint: VineyardTheme.earthBrown) {
+            VStack(spacing: 10) {
+                Menu {
+                    ForEach(TripFunction.allCases) { function in
+                        Button {
+                            selectedFunction = function
+                        } label: {
+                            HStack {
+                                Image(systemName: function.icon)
+                                Text(function.displayName)
+                                if function == selectedFunction {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: selectedFunction.icon)
+                            .foregroundStyle(VineyardTheme.earthBrown)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Function")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text(selectedFunction.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(.rect(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+
+                HStack(spacing: 12) {
+                    Image(systemName: "text.cursor")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24)
+                    TextField(
+                        selectedFunction == .other ? "Trip title (required)" : "Trip title (optional)",
+                        text: $customTitle
+                    )
+                    .textInputAutocapitalization(.sentences)
+                    .submitLabel(.done)
+                }
+                .padding(14)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(.rect(cornerRadius: 12))
+            }
+        }
+    }
+
     // MARK: Operator
 
     private var operatorSection: some View {
@@ -719,12 +784,17 @@ struct StartTripSheet: View {
             paddockName = primary?.name ?? ""
         }
 
+        let trimmedTitle = customTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let titleToStore: String? = trimmedTitle.isEmpty ? nil : trimmedTitle
+
         tracking.startTrip(
             type: .maintenance,
             paddockId: primary?.id,
             paddockName: paddockName,
             trackingPattern: trackingPattern,
-            personName: personName
+            personName: personName,
+            tripFunction: selectedFunction.rawValue,
+            tripTitle: titleToStore
         )
 
         // Persist the full multi-block selection on the active trip and apply

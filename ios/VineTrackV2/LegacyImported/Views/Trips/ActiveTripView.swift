@@ -182,7 +182,7 @@ struct ActiveTripView: View {
             tripControls
         }
         .background(Color(.systemGroupedBackground))
-        .navigationTitle(currentPaddock?.name ?? (trip.paddockName.isEmpty ? "Active Trip" : trip.paddockName))
+        .navigationTitle(navTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -223,6 +223,12 @@ struct ActiveTripView: View {
         .onMapCameraChange { _ in
             isFollowingUser = false
         }
+    }
+
+    private var navTitle: String {
+        let label = trip.displayFunctionLabel
+        if !label.isEmpty { return label }
+        return currentPaddock?.name ?? (trip.paddockName.isEmpty ? "Active Trip" : trip.paddockName)
     }
 
     // MARK: - Top info bar

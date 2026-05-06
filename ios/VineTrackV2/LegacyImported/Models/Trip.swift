@@ -83,6 +83,25 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
     var isFillingTank: Bool
     var fillingTankNumber: Int?
 
+    /// Operator-selected operation type (e.g. "slashing", "mowing"). Stored
+    /// as the raw value of `TripFunction` so the column stays stable.
+    var tripFunction: String?
+    /// Optional free-text title / notes (used when `tripFunction == .other`
+    /// or when the operator wants to add a custom label).
+    var tripTitle: String?
+
+    /// Convenience: returns a short label suitable for the active trip header.
+    /// Prefers an explicit title, then the picked function, then "Trip".
+    var displayFunctionLabel: String {
+        if let title = tripTitle, !title.trimmingCharacters(in: .whitespaces).isEmpty {
+            return title
+        }
+        if let raw = tripFunction, let function = TripFunction(rawValue: raw) {
+            return function.displayName
+        }
+        return ""
+    }
+
     var activeDuration: TimeInterval {
         let end = endTime ?? Date()
         var total: TimeInterval = 0
@@ -127,7 +146,9 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         resumeTimestamps: [Date] = [],
         isPaused: Bool = false,
         isFillingTank: Bool = false,
-        fillingTankNumber: Int? = nil
+        fillingTankNumber: Int? = nil,
+        tripFunction: String? = nil,
+        tripTitle: String? = nil
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -157,6 +178,8 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         self.isPaused = isPaused
         self.isFillingTank = isFillingTank
         self.fillingTankNumber = fillingTankNumber
+        self.tripFunction = tripFunction
+        self.tripTitle = tripTitle
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -168,6 +191,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         case tankSessions, activeTankNumber, totalTanks
         case pauseTimestamps, resumeTimestamps, isPaused
         case isFillingTank, fillingTankNumber
+        case tripFunction, tripTitle
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +221,8 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         isPaused = try container.decodeIfPresent(Bool.self, forKey: .isPaused) ?? false
         isFillingTank = try container.decodeIfPresent(Bool.self, forKey: .isFillingTank) ?? false
         fillingTankNumber = try container.decodeIfPresent(Int.self, forKey: .fillingTankNumber)
+        tripFunction = try container.decodeIfPresent(String.self, forKey: .tripFunction)
+        tripTitle = try container.decodeIfPresent(String.self, forKey: .tripTitle)
 
         if let doubleRow = try? container.decode(Double.self, forKey: .currentRowNumber) {
             currentRowNumber = doubleRow
