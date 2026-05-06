@@ -58,6 +58,12 @@ final class TripTrackingService {
     private var lastAutoCompleteAt: Date?
     private let autoCompleteCooldown: TimeInterval = 2.5
 
+    // Last live-detected path that the GPS was confirmed to be inside the
+    // physical corridor of. Held while the tractor is between rows or has
+    // briefly drifted outside corridor tolerance, so the live indicator
+    // doesn't flicker back to nil.
+    private var lastLivePathInCorridor: Double?
+
     // MARK: - Diagnostics (DEBUG only)
     #if DEBUG
     private(set) var diagLocationUpdateCount: Int = 0
@@ -170,6 +176,7 @@ final class TripTrackingService {
         cachedRowIndexKey = []
         lastAutoCompletePath = nil
         lastAutoCompleteAt = nil
+        lastLivePathInCorridor = nil
         breadcrumb("endTrip")
     }
 
@@ -555,20 +562,34 @@ final class TripTrackingService {
             return abs(livePath - target) < 0.01
         }()
 
-        // Show the live GPS path on the row indicator regardless of match,
-        // but keep `trip.currentRowNumber` pinned to the planned path so
-        // the trip header / summary stays on the intended row.
-        currentRowNumber = livePath
+        // Live path is only shown once the tractor is physically inside the
+        // row corridor (within ~half row spacing of the row centreline).
+        // This stops the indicator jumping to a path before we've actually
+        // entered it. While outside the corridor we hold the last confirmed
+        // live path (or fall back to the planned path).
+        let corridorTolerance = max(1.0, paddock.rowWidth / 2.0)
+        let inCorridor = match.distance <= corridorTolerance
+        if inCorridor {
+            lastLivePathInCorridor = livePath
+            currentRowNumber = livePath
+        } else if let held = lastLivePathInCorridor {
+            currentRowNumber = held
+        } else if let target = currentSequencePath {
+            currentRowNumber = target
+        } else {
+            currentRowNumber = livePath
+        }
         if let target = currentSequencePath {
             trip.currentRowNumber = target
         } else {
-            trip.currentRowNumber = livePath
+            trip.currentRowNumber = currentRowNumber ?? livePath
         }
 
         // Only accumulate distance along the *current planned* path, and
-        // only when the live GPS is actually on that path. Driving an
-        // off-cycle path contributes zero progress to the planned path.
-        if pathMatch, let target = currentSequencePath {
+        // only when the live GPS is actually on that path AND inside the
+        // corridor. Driving an off-cycle path or skirting the corridor edge
+        // contributes zero progress to the planned path.
+        if pathMatch, inCorridor, let target = currentSequencePath {
             accumulateDistanceAlong(path: target, location: locationService?.location)
 
             // Auto-complete only when we are physically near the planned
@@ -597,10 +618,11 @@ final class TripTrackingService {
         let len = currentSequencePath.flatMap { rowLength(forPath: $0, paddock: paddock) } ?? 0
         let pct = len > 0 ? (acc / len * 100) : 0
         breadcrumb(
-            "row currentSeq=\(currentSequencePath.map { String($0) } ?? "nil") " +
-            "livePath=\(livePath) match=\(pathMatch) " +
-            "len=\(String(format: "%.1f", len))m acc=\(String(format: "%.1f", acc))m " +
-            "pct=\(String(format: "%.0f", pct))%"
+            "row plannedPath=\(currentSequencePath.map { String($0) } ?? "nil") " +
+            "livePath=\(livePath) distance=\(String(format: "%.2f", match.distance))m " +
+            "corridor=\(String(format: "%.2f", corridorTolerance))m inCorridor=\(inCorridor) " +
+            "pathMatch=\(pathMatch) len=\(String(format: "%.1f", len))m " +
+            "acc=\(String(format: "%.1f", acc))m pct=\(String(format: "%.0f", pct))%"
         )
         #endif
 

@@ -77,6 +77,8 @@ struct PinsView: View {
                     PinsMapView(pins: filteredPins)
                 case .list:
                     PinsListView(pins: filteredPins)
+                case .summary:
+                    PinsSummaryView(pins: filteredPins)
                 }
             }
             .navigationTitle("Pins")
@@ -105,11 +107,12 @@ struct PinsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Picker("View", selection: $viewMode) {
-                        Label("Map", systemImage: "map").tag(PinsViewMode.map)
-                        Label("List", systemImage: "list.bullet").tag(PinsViewMode.list)
+                        Image(systemName: "map").tag(PinsViewMode.map)
+                        Image(systemName: "list.bullet").tag(PinsViewMode.list)
+                        Image(systemName: "chart.bar.fill").tag(PinsViewMode.summary)
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 120)
+                    .frame(width: 150)
                 }
             }
             .background(Color(.systemGroupedBackground))
@@ -251,6 +254,120 @@ nonisolated enum ExportFormat {
 nonisolated enum PinsViewMode: String, Hashable {
     case map
     case list
+    case summary
+}
+
+// MARK: - Summary / Repair Report
+
+struct PinsSummaryView: View {
+    let pins: [VinePin]
+    @Environment(MigratedDataStore.self) private var store
+
+    private struct CategoryStat: Identifiable {
+        let id: String
+        let name: String
+        let color: String
+        let total: Int
+        let active: Int
+        let completed: Int
+    }
+
+    private var stats: [CategoryStat] {
+        var buckets: [String: (name: String, color: String, total: Int, active: Int, completed: Int)] = [:]
+        for pin in pins {
+            let key = pin.buttonName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            var entry = buckets[key] ?? (name: pin.buttonName, color: pin.buttonColor, total: 0, active: 0, completed: 0)
+            entry.total += 1
+            if pin.isCompleted { entry.completed += 1 } else { entry.active += 1 }
+            buckets[key] = entry
+        }
+        return buckets
+            .map { CategoryStat(id: $0.key, name: $0.value.name, color: $0.value.color, total: $0.value.total, active: $0.value.active, completed: $0.value.completed) }
+            .sorted { $0.total > $1.total }
+    }
+
+    private var modeBreakdown: (repairs: Int, growth: Int) {
+        let repairs = pins.filter { $0.mode == .repairs }.count
+        let growth = pins.filter { $0.mode == .growth }.count
+        return (repairs, growth)
+    }
+
+    var body: some View {
+        List {
+            Section("Overview") {
+                LabeledContent("Total pins") {
+                    Text("\(pins.count)")
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                }
+                LabeledContent("Active") {
+                    Text("\(pins.filter { !$0.isCompleted }.count)")
+                        .foregroundStyle(.orange)
+                        .monospacedDigit()
+                }
+                LabeledContent("Completed") {
+                    Text("\(pins.filter { $0.isCompleted }.count)")
+                        .foregroundStyle(VineyardTheme.leafGreen)
+                        .monospacedDigit()
+                }
+                LabeledContent("Repairs") {
+                    Text("\(modeBreakdown.repairs)")
+                        .monospacedDigit()
+                }
+                LabeledContent("Growth") {
+                    Text("\(modeBreakdown.growth)")
+                        .monospacedDigit()
+                }
+            }
+
+            Section("By Category") {
+                if stats.isEmpty {
+                    Text("No pins to summarise.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(stats) { stat in
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(Color.fromString(stat.color).gradient)
+                                .frame(width: 14, height: 14)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(stat.name)
+                                    .font(.subheadline.weight(.semibold))
+                                HStack(spacing: 8) {
+                                    if stat.active > 0 {
+                                        Label("\(stat.active)", systemImage: "circle")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    }
+                                    if stat.completed > 0 {
+                                        Label("\(stat.completed)", systemImage: "checkmark.circle.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(VineyardTheme.leafGreen)
+                                    }
+                                }
+                            }
+                            Spacer()
+                            Text("\(stat.total)")
+                                .font(.system(.title3, design: .rounded, weight: .bold))
+                                .monospacedDigit()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if pins.isEmpty {
+                ContentUnavailableView(
+                    "No Pins",
+                    systemImage: "chart.bar",
+                    description: Text("Drop pins to see a repair-job summary here.")
+                )
+            }
+        }
+    }
 }
 
 nonisolated enum PinCompletionFilter: String, CaseIterable, Hashable {

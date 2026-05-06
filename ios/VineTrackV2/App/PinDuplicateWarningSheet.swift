@@ -1,0 +1,107 @@
+import SwiftUI
+import CoreLocation
+
+/// Warning sheet shown when a user is about to drop a pin near an existing
+/// one. Allows viewing the existing pin, creating anyway, or cancelling.
+struct PinDuplicateWarningSheet: View {
+    let existingPin: VinePin
+    let distance: Double
+    let radius: Double
+    let onCreateAnyway: () -> Void
+    let onViewExisting: () -> Void
+    let onCancel: () -> Void
+
+    @Environment(MigratedDataStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    private var paddockName: String {
+        guard let id = existingPin.paddockId else { return "—" }
+        return store.paddocks.first { $0.id == id }?.name ?? "—"
+    }
+
+    private var distanceText: String {
+        if distance < 1 { return String(format: "%.0f cm away", distance * 100) }
+        return String(format: "%.1f m away", distance)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 38))
+                        .foregroundStyle(.orange)
+                        .padding(.top, 8)
+
+                    Text("Possible duplicate pin nearby")
+                        .font(.title3.weight(.bold))
+                        .multilineTextAlignment(.center)
+
+                    Text("There's already a pin within \(String(format: "%.1f m", radius)) of this location. You can view it, create another anyway, or cancel.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+                .padding(.vertical, 16)
+
+                Form {
+                    Section("Existing Pin") {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(Color.fromString(existingPin.buttonColor).gradient)
+                                .frame(width: 32, height: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(existingPin.buttonName)
+                                    .font(.headline)
+                                Text(existingPin.mode.rawValue)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(distanceText)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .monospacedDigit()
+                        }
+                        LabeledContent("Status", value: existingPin.isCompleted ? "Completed" : "Active")
+                        LabeledContent("Block", value: paddockName)
+                        if let row = existingPin.rowNumber {
+                            LabeledContent("Row", value: "\(row)")
+                        }
+                        LabeledContent(
+                            "Created",
+                            value: existingPin.timestamp.formatted(date: .abbreviated, time: .shortened)
+                        )
+                    }
+
+                    Section {
+                        Button {
+                            onViewExisting()
+                            dismiss()
+                        } label: {
+                            Label("View existing pin", systemImage: "mappin.circle.fill")
+                        }
+                        Button {
+                            onCreateAnyway()
+                            dismiss()
+                        } label: {
+                            Label("Create new pin anyway", systemImage: "plus.circle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Duplicate?")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") {
+                        onCancel()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}

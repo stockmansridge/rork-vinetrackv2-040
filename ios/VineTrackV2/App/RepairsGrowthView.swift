@@ -20,6 +20,18 @@ struct RepairsGrowthView: View {
     @State private var showAutoPhotoConfirm: Bool = false
     @State private var pendingShowPicker: Bool = false
 
+    // Pin-duplicate warning state
+    @State private var duplicateWarning: DuplicateWarning?
+    @State private var pinForDetailSheet: VinePin?
+
+    private struct DuplicateWarning: Identifiable {
+        let id = UUID()
+        let existing: VinePin
+        let distance: Double
+        let radius: Double
+        let proceed: () -> Void
+    }
+
     init(initial: Tab = .repairs) {
         _selection = State(initialValue: initial)
     }
@@ -120,6 +132,23 @@ struct RepairsGrowthView: View {
                     showAutoPhotoConfirm = false
                 }
             )
+        }
+        .sheet(item: $duplicateWarning) { warning in
+            PinDuplicateWarningSheet(
+                existingPin: warning.existing,
+                distance: warning.distance,
+                radius: warning.radius,
+                onCreateAnyway: { warning.proceed() },
+                onViewExisting: { pinForDetailSheet = warning.existing },
+                onCancel: {}
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $pinForDetailSheet) { pin in
+            PinDetailSheet(pin: pin)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
     }
 
@@ -303,6 +332,20 @@ struct RepairsGrowthView: View {
             showError("Location unavailable \u{2014} enable location services to drop a pin.")
             return
         }
+        let proceed = { createRepairPin(button: button, side: side, coord: coord) }
+        if let dup = checkDuplicate(at: coord) {
+            duplicateWarning = DuplicateWarning(
+                existing: dup.pin,
+                distance: dup.distance,
+                radius: dup.radius,
+                proceed: proceed
+            )
+            return
+        }
+        proceed()
+    }
+
+    private func createRepairPin(button: ButtonConfig, side: PinSide, coord: CLLocationCoordinate2D) {
         let heading = locationService.heading?.trueHeading ?? 0
         let pin = store.createPinFromButton(
             button: button,
@@ -331,6 +374,20 @@ struct RepairsGrowthView: View {
             showError("Location unavailable \u{2014} enable location services to drop a pin.")
             return
         }
+        let proceed = { createGrowthPin(stage: stage, coord: coord) }
+        if let dup = checkDuplicate(at: coord) {
+            duplicateWarning = DuplicateWarning(
+                existing: dup.pin,
+                distance: dup.distance,
+                radius: dup.radius,
+                proceed: proceed
+            )
+            return
+        }
+        proceed()
+    }
+
+    private func createGrowthPin(stage: GrowthStage, coord: CLLocationCoordinate2D) {
         let heading = locationService.heading?.trueHeading ?? 0
         let pin = store.createGrowthStagePin(
             stageCode: stage.code,
@@ -351,6 +408,24 @@ struct RepairsGrowthView: View {
             pendingPhotoPinId = createdPin.id
             showAutoPhotoConfirm = true
         }
+    }
+
+    private func checkDuplicate(
+        at coord: CLLocationCoordinate2D
+    ) -> (pin: VinePin, distance: Double, radius: Double)? {
+        let radius = PinDuplicateChecker.duplicateRadius(
+            coordinate: coord,
+            paddockId: nil,
+            paddocks: store.paddocks
+        )
+        guard let match = PinDuplicateChecker.nearbyPin(
+            coordinate: coord,
+            vineyardId: store.selectedVineyardId,
+            paddockId: nil,
+            radius: radius,
+            in: store.pins
+        ) else { return nil }
+        return (match.pin, match.distance, radius)
     }
 
     private func showPinToast(title: String, subtitle: String) {
