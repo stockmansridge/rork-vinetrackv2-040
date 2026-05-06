@@ -19,6 +19,7 @@ struct TripView: View {
     @Environment(LocationService.self) private var locationService
     @State private var tripSortOption: TripSortOption = .date
     @State private var tripTypeFilter: TripTypeFilter = .all
+    @State private var tripFunctionFilter: TripFunction? = nil
     @State private var tripSearchText: String = ""
     @State private var tripToDelete: Trip?
     @State private var showDeleteConfirmation: Bool = false
@@ -48,6 +49,13 @@ struct TripView: View {
                                 ForEach(TripSortOption.allCases, id: \.self) { option in
                                     Label(option.rawValue, systemImage: tripSortIconName(for: option))
                                         .tag(option)
+                                }
+                            }
+                            Picker("Function", selection: $tripFunctionFilter) {
+                                Label("All functions", systemImage: "square.grid.2x2").tag(TripFunction?.none)
+                                ForEach(TripFunction.allCases) { function in
+                                    Label(function.displayName, systemImage: function.icon)
+                                        .tag(TripFunction?.some(function))
                                 }
                             }
                         } label: {
@@ -111,6 +119,12 @@ struct TripView: View {
     // MARK: - Filtering
 
     private func tripDisplayName(_ trip: Trip) -> String {
+        if let title = trip.tripTitle, !title.trimmingCharacters(in: .whitespaces).isEmpty {
+            return title
+        }
+        if let raw = trip.tripFunction, let function = TripFunction(rawValue: raw) {
+            return function.displayName
+        }
         if let record = store.sprayRecords.first(where: { $0.tripId == trip.id }),
            !record.sprayReference.isEmpty {
             return record.sprayReference
@@ -137,6 +151,10 @@ struct TripView: View {
             trips = trips.filter { hasSprayRecord($0) }
         case .maintenance:
             trips = trips.filter { !hasSprayRecord($0) }
+        }
+
+        if let function = tripFunctionFilter {
+            trips = trips.filter { $0.tripFunction == function.rawValue }
         }
 
         if !tripSearchText.isEmpty {
@@ -212,7 +230,8 @@ struct TripView: View {
                                 trip: trip,
                                 pinCount: store.pins.filter { $0.tripId == trip.id }.count,
                                 hasSprayRecord: hasSprayRecord(trip),
-                                sprayReferenceName: store.sprayRecords.first(where: { $0.tripId == trip.id })?.sprayReference
+                                sprayReferenceName: store.sprayRecords.first(where: { $0.tripId == trip.id })?.sprayReference,
+                                displayTitle: tripDisplayName(trip)
                             )
                         }
                     }
@@ -253,8 +272,19 @@ struct TripHistoryRow: View {
     let pinCount: Int
     var hasSprayRecord: Bool = false
     var sprayReferenceName: String? = nil
+    var displayTitle: String? = nil
+
+    private var resolvedFunction: TripFunction? {
+        guard let raw = trip.tripFunction else { return nil }
+        return TripFunction(rawValue: raw)
+    }
 
     private var displayName: String {
+        if let displayTitle, !displayTitle.isEmpty { return displayTitle }
+        if let title = trip.tripTitle, !title.trimmingCharacters(in: .whitespaces).isEmpty {
+            return title
+        }
+        if let function = resolvedFunction { return function.displayName }
         if let name = sprayReferenceName, !name.isEmpty {
             return name
         }
@@ -268,6 +298,13 @@ struct TripHistoryRow: View {
                 Text(displayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
+
+                if let function = resolvedFunction,
+                   trip.tripTitle?.trimmingCharacters(in: .whitespaces).isEmpty == false {
+                    Label(function.displayName, systemImage: function.icon)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
 
                 Label(trip.startTime.formatted(date: .abbreviated, time: .shortened), systemImage: "calendar")
                     .font(.caption)
