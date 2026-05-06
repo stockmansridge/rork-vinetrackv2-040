@@ -203,6 +203,155 @@ Updates `last_tested_at` + `last_test_status` server-side and returns:
 Refresh the status panel by calling `get_vineyard_weather_integration` after
 the test.
 
+### 4.3 Payload shape — strict
+
+The edge function reads **only** these fields from the request body:
+
+| Field | Type | Required | Notes |
+| --- | --- | :-: | --- |
+| `vineyardId` | string (uuid) | ✅ | **camelCase**. Sending `vineyard_id` (snake_case) will fail with `400 "vineyardId and action are required"`. |
+| `action` | string | ✅ | One of `"test"`, `"test_saved"`, `"stations"`, `"current"`, `"historic"`. |
+| `apiKey` | string | for `"test"` | camelCase. |
+| `apiSecret` | string | for `"test"` | camelCase. |
+| `stationId` | string | for `"current"` / `"historic"` | camelCase. |
+| `startEpoch` / `endEpoch` | number | for `"historic"` | seconds. |
+
+The edge function does **not** read a `provider` field — Davis WeatherLink is
+the only supported provider today and is hardcoded server-side. Sending
+`provider: "davis_weatherlink"` is harmless but unnecessary; **do not send
+`p_vineyard_id` / `vineyard_id`** — those are SQL-RPC argument names, not
+edge-function field names.
+
+Correct supabase-js call for re-testing stored credentials:
+
+```ts
+const { data, error } = await supabase.functions.invoke("davis-proxy", {
+  body: {
+    vineyardId: selectedVineyardId, //  camelCase
+    action: "test_saved",
+  },
+});
+```
+
+### 4.4 Troubleshooting `"Failed to send a request to the Edge Function"`
+
+This is the generic `supabase-js` error when the request never gets a 2xx/4xx
+JSON body back. It is **not** a Davis error — Davis was never reached. Walk
+the checks below in order.
+
+1. **Function deployed on the right project**
+   - Production Supabase project URL: `https://tbafuqwruefgkbyxrxyb.supabase.co`
+   - Lovable's Supabase client must use the same `EXPO_PUBLIC_SUPABASE_URL`
+     (and matching anon key). If Lovable is pointed at a different Supabase
+     project, `davis-proxy` will not exist there and you'll get this error.
+   - Verify with: `supabase functions list --project-ref tbafuqwruefgkbyxrxyb`
+     — `davis-proxy` should appear with status `ACTIVE`. If not, deploy it
+     from this repo: `supabase functions deploy davis-proxy --project-ref tbafuqwruefgkbyxrxyb`.
+   - Quick HTTP probe (should return JSON, not a network failure):
+     ```bash
+     curl -i -X OPTIONS "https://tbafuqwruefgkbyxrxyb.supabase.co/functions/v1/davis-proxy"
+     ```
+     A `200 ok` confirms the function is deployed and CORS is wired.
+
+2. **Function name spelled exactly**
+   - `supabase.functions.invoke("davis-proxy", ...)` — hyphen, lowercase.
+   - Not `davisProxy`, `davis_proxy`, or `vineyard-davis-proxy`.
+
+3. **Authenticated client**
+   - `functions.invoke` must be called on the same `supabase` client that has
+     an active session. If the user just logged in, await
+     `supabase.auth.getSession()` before invoking.
+   - Without a session the function returns `401 "Authentication required"`,
+     which surfaces as `FunctionsHttpError`, not `"Failed to send a request"`
+     — but a stale/expired session can produce the network-shaped error.
+
+4. **Payload field names (most common Lovable cause)**
+   - Use `vineyardId`, not `vineyard_id`. See §4.3.
+   - Sending the wrong shape returns `400 "vineyardId and action are required"`,
+     which `supabase-js` does surface as `FunctionsHttpError` — but if the
+     `body` is not valid JSON (e.g. `body: undefined`) the SDK fails to send
+     and you'll see the generic message.
+
+5. **CORS / preflight**
+   - The function already returns `Access-Control-Allow-Origin: *` and
+     handles `OPTIONS`. CORS is not the issue unless a corporate proxy is
+     stripping headers. Inspect the browser **Network** tab — if the
+     `OPTIONS` request is missing or shows status 0, treat it as a network /
+     deployment problem (return to step 1).
+
+6. **Browser network panel**
+   - Reproduce the click with DevTools → Network filtered to `davis-proxy`.
+   - Status 0 / `(failed) net::ERR_*` → not deployed or wrong URL.
+   - 401 → auth. 403 → caller is not owner/manager. 404 → no integration row
+     for this vineyard. 502 → upstream Davis error (credentials reached the
+     server). 400 → payload shape (see §4.3).
+
+### 4.5 Mapping HTTP responses to portal messages
+
+Distinguish transport failures from Davis failures. Suggested mapping:
+
+| Outcome | Portal message |
+| --- | --- |
+| `error.name === "FunctionsFetchError"` (no response) | `"Could not reach the weather service. Check your connection and try again."` (network/deploy issue) |
+| `404` body `"...not configured..."` | `"No saved Davis credentials for this vineyard. Save credentials first, then test."` |
+| `401` body `"Authentication required"` | `"Please sign in again."` |
+| `403` body `"Owner or manager role required"` | `"Only Owners and Managers can test the connection."` |
+| `401` body `"Invalid Davis credentials"` | `"Davis rejected the saved credentials. Re-enter the API key and secret."` |
+| `502` body `"WeatherLink HTTP <n>"` | `"Davis WeatherLink is unavailable (HTTP <n>). Try again shortly."` |
+| `400` body `"vineyardId and action are required"` | (Developer error — fix payload shape; should never reach end users.) |
+
+Do **not** display or log `api_key` / `api_secret` in any of these branches.
+
+### 4.6 Save → reload status (UX requirement)
+
+After a successful `save_vineyard_weather_integration`:
+
+1. Clear the API key / API secret input fields.
+2. **Immediately** call `get_vineyard_weather_integration(vineyardId, 'davis_weatherlink')`
+   and re-render the status panel.
+3. The panel must show:
+   - **Configured: Yes** (when `has_api_key && has_api_secret && is_active`)
+   - **Has API key: Yes**
+   - **Has API secret: Yes**
+   - API key field placeholder: `Stored — leave blank to keep existing`
+   - API secret field placeholder: `Stored — leave blank to keep existing`
+4. Only after this status flips to `Has API key: Yes` / `Has API secret: Yes`
+   should the **Test connection** button be enabled. Calling `test_saved`
+   before the reload will hit `404 Davis integration not configured`.
+
+### 4.7 Dev-only diagnostics
+
+Gate on `import.meta.env.DEV`. Never log credentials.
+
+```ts
+if (import.meta.env.DEV) {
+  console.log(
+    "[WeatherTest] invoking davis-proxy",
+    { action: "test_saved", vineyardId, provider: "davis_weatherlink" },
+  );
+}
+const { data, error } = await supabase.functions.invoke("davis-proxy", {
+  body: { vineyardId, action: "test_saved" },
+});
+if (import.meta.env.DEV) {
+  if (error) {
+    console.warn("[WeatherTest] invoke error", {
+      name: (error as any).name,
+      message: error.message,
+      status: (error as any).status,
+      // context may include the raw Response for FunctionsHttpError
+      context: (error as any).context,
+    });
+  } else {
+    console.log("[WeatherTest] result", {
+      success: data?.success,
+      status: data?.status,
+      message: data?.message,
+    });
+  }
+}
+```
+
 ## 5. Recommended portal flow
 
 1. **Load** — call `get_vineyard_weather_integration(vineyardId, 'davis_weatherlink')`.
