@@ -43,6 +43,126 @@ const CORS: Record<string, string> = {
 
 const DAVIS_BASE = "https://api.weatherlink.com/v2";
 
+// ---------------------------------------------------------------------------
+// Helpers: parse Davis /current payload into safe, metric, normalised fields
+// for the vineyard_weather_observations cache. We never persist credentials
+// or auth headers — only the parsed sensor values plus a scrubbed copy of
+// the upstream JSON sensors array (no auth fields are present in that
+// payload anyway, but we extract just the data records to be safe).
+// ---------------------------------------------------------------------------
+
+function fToC(f: unknown): number | null {
+  const n = typeof f === "number" ? f : Number(f);
+  if (!isFinite(n)) return null;
+  return Math.round(((n - 32) * 5 / 9) * 10) / 10;
+}
+function mphToKmh(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!isFinite(n)) return null;
+  return Math.round(n * 1.609344 * 10) / 10;
+}
+function inToMm(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!isFinite(n)) return null;
+  return Math.round(n * 25.4 * 100) / 100;
+}
+function num(v: unknown): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function parseDavisCurrent(body: any): {
+  observed_at: string | null;
+  temperature_c: number | null;
+  humidity_pct: number | null;
+  wind_speed_kmh: number | null;
+  wind_direction_deg: number | null;
+  rain_today_mm: number | null;
+  rain_rate_mm_per_hr: number | null;
+  leaf_wetness: number | null;
+  station_id: string | null;
+  safe_sensors: unknown;
+} {
+  const out = {
+    observed_at: null as string | null,
+    temperature_c: null as number | null,
+    humidity_pct: null as number | null,
+    wind_speed_kmh: null as number | null,
+    wind_direction_deg: null as number | null,
+    rain_today_mm: null as number | null,
+    rain_rate_mm_per_hr: null as number | null,
+    leaf_wetness: null as number | null,
+    station_id: null as string | null,
+    safe_sensors: null as unknown,
+  };
+  if (!body || typeof body !== "object") return out;
+
+  if (body.station_id != null) out.station_id = String(body.station_id);
+
+  const sensors: any[] = Array.isArray(body.sensors) ? body.sensors : [];
+  let latestTs = 0;
+  const safeSensors: any[] = [];
+  for (const s of sensors) {
+    const records: any[] = Array.isArray(s?.data) ? s.data : [];
+    safeSensors.push({
+      lsid: s?.lsid ?? null,
+      sensor_type: s?.sensor_type ?? null,
+      data_structure_type: s?.data_structure_type ?? null,
+      data: records,
+    });
+    for (const r of records) {
+      if (!r || typeof r !== "object") continue;
+      const ts = num(r.ts);
+      if (ts != null && ts > latestTs) latestTs = ts;
+
+      // Temperature: prefer Celsius if provided, else convert from F.
+      const tC = num(r.temp_c);
+      if (tC != null) out.temperature_c = tC;
+      else if (out.temperature_c == null && r.temp != null) out.temperature_c = fToC(r.temp);
+
+      // Humidity
+      const h = num(r.hum) ?? num(r.hum_last) ?? num(r.hum_out);
+      if (h != null) out.humidity_pct = Math.round(h * 10) / 10;
+
+      // Wind
+      const wsKmh = num(r.wind_speed_last_kmh) ?? num(r.wind_speed_kmh);
+      if (wsKmh != null) out.wind_speed_kmh = Math.round(wsKmh * 10) / 10;
+      else if (out.wind_speed_kmh == null) {
+        const wsMph = num(r.wind_speed_last) ?? num(r.wind_speed);
+        if (wsMph != null) out.wind_speed_kmh = mphToKmh(wsMph);
+      }
+      const wd = num(r.wind_dir_last) ?? num(r.wind_dir) ?? num(r.wind_dir_scalar_avg_last_2_min);
+      if (wd != null) out.wind_direction_deg = wd;
+
+      // Rain today
+      const rTodayMm = num(r.rainfall_daily_mm) ?? num(r.rain_daily_mm);
+      if (rTodayMm != null) out.rain_today_mm = Math.round(rTodayMm * 100) / 100;
+      else if (out.rain_today_mm == null) {
+        const rTodayIn = num(r.rainfall_daily_in) ?? num(r.rain_daily_in);
+        if (rTodayIn != null) out.rain_today_mm = inToMm(rTodayIn);
+      }
+
+      // Rain rate
+      const rRateMm = num(r.rain_rate_last_mm) ?? num(r.rain_rate_mm);
+      if (rRateMm != null) out.rain_rate_mm_per_hr = Math.round(rRateMm * 100) / 100;
+      else if (out.rain_rate_mm_per_hr == null) {
+        const rRateIn = num(r.rain_rate_last_in) ?? num(r.rain_rate_in);
+        if (rRateIn != null) out.rain_rate_mm_per_hr = inToMm(rRateIn);
+      }
+
+      // Leaf wetness (Davis 0..15 scale)
+      const lw = num(r.wet_leaf_last_1) ?? num(r.wet_leaf_last) ?? num(r.wet_leaf);
+      if (lw != null) out.leaf_wetness = lw;
+    }
+  }
+  if (latestTs > 0) {
+    out.observed_at = new Date(latestTs * 1000).toISOString();
+  }
+  out.safe_sensors = safeSensors;
+  return out;
+}
+
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -221,7 +341,38 @@ Deno.serve(async (req: Request) => {
       const stationId = String(body.stationId ?? integ.station_id ?? "");
       if (!stationId) return json({ error: "stationId required" }, 400);
       const r = await davisGet(`/current/${stationId}`, apiKey, apiSecret);
-      if (r.status >= 200 && r.status < 300) return json(r.body ?? {});
+      if (r.status >= 200 && r.status < 300) {
+        // Best-effort cache write. Failures must not break the response.
+        try {
+          const parsed = parseDavisCurrent(r.body);
+          if (parsed.observed_at) {
+            const safePayload = {
+              station_id: parsed.station_id ?? stationId,
+              generated_at: r.body?.generated_at ?? null,
+              sensors: parsed.safe_sensors,
+            };
+            await admin
+              .from("vineyard_weather_observations")
+              .upsert({
+                vineyard_id: vineyardId,
+                source: "davis_weatherlink",
+                station_id: String(parsed.station_id ?? stationId),
+                station_name: integ.station_name ?? null,
+                observed_at: parsed.observed_at,
+                fetched_at: new Date().toISOString(),
+                temperature_c: parsed.temperature_c,
+                humidity_pct: parsed.humidity_pct,
+                wind_speed_kmh: parsed.wind_speed_kmh,
+                wind_direction_deg: parsed.wind_direction_deg,
+                rain_today_mm: parsed.rain_today_mm,
+                rain_rate_mm_per_hr: parsed.rain_rate_mm_per_hr,
+                leaf_wetness: parsed.leaf_wetness,
+                raw_payload: safePayload,
+              }, { onConflict: "vineyard_id,source" });
+          }
+        } catch (_e) { /* swallow cache errors */ }
+        return json(r.body ?? {});
+      }
       return json({ error: `WeatherLink HTTP ${r.status}` }, 502);
     }
 
