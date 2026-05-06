@@ -282,13 +282,49 @@ struct StartTripSheet: View {
             Divider().frame(height: 32)
             statCell(value: String(format: "%.2f", totalAreaHectares), label: "Hectares")
             Divider().frame(height: 32)
-            statCell(value: "\(totalRowsAcrossSelection)", label: "Rows")
+            statCell(value: "\(totalRowsAcrossSelection)", label: rowsStatLabel)
             Divider().frame(height: 32)
             statCell(value: "\(totalVinesAcrossSelection)", label: "Vines")
         }
         .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(.rect(cornerRadius: 12))
+    }
+
+    /// Stat-cell label for the combined Rows column. Falls back to "Rows" when
+    /// no row geometry is available across the selection.
+    private var rowsStatLabel: String {
+        guard !selectedRowNumbers.isEmpty else { return "Rows" }
+        return Self.compactRowRangeLabel(selectedRowNumbers)
+    }
+
+    /// Build a compact row-range label from a sorted list of actual row numbers.
+    /// Contiguous: "Rows 69\u{2013}108". Non-contiguous (small): "Rows 1\u{2013}14, 69\u{2013}108".
+    /// Non-contiguous (many segments): collapse to overall span "Rows lo\u{2013}hi".
+    static func compactRowRangeLabel(_ numbers: [Int]) -> String {
+        guard let lo = numbers.first, let hi = numbers.last else { return "Rows" }
+        // Build contiguous segments.
+        var segments: [(Int, Int)] = []
+        var segStart = lo
+        var prev = lo
+        for n in numbers.dropFirst() {
+            if n == prev + 1 {
+                prev = n
+            } else {
+                segments.append((segStart, prev))
+                segStart = n
+                prev = n
+            }
+        }
+        segments.append((segStart, prev))
+        if segments.count == 1 {
+            return lo == hi ? "Row \(lo)" : "Rows \(lo)\u{2013}\(hi)"
+        }
+        if segments.count <= 2 {
+            let parts = segments.map { $0.0 == $0.1 ? "\($0.0)" : "\($0.0)\u{2013}\($0.1)" }
+            return "Rows " + parts.joined(separator: ", ")
+        }
+        return "Rows \(lo)\u{2013}\(hi)"
     }
 
     private func blockMetaLine(for paddock: Paddock) -> some View {
@@ -319,8 +355,10 @@ struct StartTripSheet: View {
     }
 
     private func blockStatsRow(for paddock: Paddock) -> some View {
-        HStack(spacing: 0) {
-            statCell(value: "\(paddock.rows.count)", label: "Rows")
+        let nums = paddock.rows.map(\.number).sorted()
+        let rowsLabel = nums.isEmpty ? "Rows" : Self.compactRowRangeLabel(nums)
+        return HStack(spacing: 0) {
+            statCell(value: "\(paddock.rows.count)", label: rowsLabel)
             Divider().frame(height: 32)
             statCell(value: String(format: "%.2f", paddock.areaHectares), label: "Hectares")
             Divider().frame(height: 32)
@@ -339,8 +377,12 @@ struct StartTripSheet: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, 4)
     }
 
     // MARK: Start path & direction
