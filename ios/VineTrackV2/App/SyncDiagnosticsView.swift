@@ -22,6 +22,9 @@ struct SyncDiagnosticsView: View {
     @State private var auditService = TripAuditService()
     @State private var isAuditingTripSync: Bool = false
     @State private var lastTripSyncAudit: TripSyncService.AuditResult?
+    @State private var isRepushingNames: Bool = false
+    @State private var lastRepushNamesResult: TripSyncService.RepushNamesResult?
+    @State private var lastRepushNamesAt: Date?
 
     var body: some View {
         Form {
@@ -117,6 +120,21 @@ struct SyncDiagnosticsView: View {
                     AdminTripAuditView(service: auditService)
                 } label: {
                     Label("Admin trip vineyard audit", systemImage: "binoculars")
+                }
+
+                Button {
+                    Task { await repushTripNames() }
+                } label: {
+                    HStack {
+                        Label(isRepushingNames ? "Re-pushing…" : "Re-push trip names", systemImage: "text.badge.plus")
+                        Spacer()
+                        if isRepushingNames { ProgressView() }
+                    }
+                }
+                .disabled(isRepushingNames || !auth.isSignedIn || store.selectedVineyardId == nil)
+
+                if let result = lastRepushNamesResult {
+                    repushNamesSummaryView(result)
                 }
             } header: {
                 Text("Trip Repair")
@@ -227,6 +245,36 @@ struct SyncDiagnosticsView: View {
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(highlight ? Color.orange : .primary)
         }
+    }
+
+    @ViewBuilder
+    private func repushNamesSummaryView(_ result: TripSyncService.RepushNamesResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Last re-push trip names")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                metric("Scanned", value: "\(result.scanned)")
+                metric("With name", value: "\(result.withFunctionOrTitle)")
+                metric("Marked", value: "\(result.markedForUpload)", highlight: result.markedForUpload > 0)
+                metric("Pushed", value: "\(result.pushed)", highlight: result.pushed > 0)
+            }
+            if let err = result.error, !err.isEmpty {
+                Text("Error: \(err)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func repushTripNames() async {
+        guard !isRepushingNames, let vineyardId = store.selectedVineyardId else { return }
+        isRepushingNames = true
+        defer { isRepushingNames = false }
+        let result = await tripSync.repushTripNames(vineyardId: vineyardId)
+        lastRepushNamesResult = result
+        lastRepushNamesAt = Date()
     }
 
     private func repairTripVineyardIds() async {
@@ -426,6 +474,20 @@ struct SyncDiagnosticsView: View {
             }
             if let err = result.syncError, !err.isEmpty {
                 lines.append("  sync_error: \(err)")
+            }
+        }
+        if let result = lastRepushNamesResult {
+            lines.append("")
+            lines.append("Re-push Trip Names")
+            if let at = lastRepushNamesAt {
+                lines.append("  ran_at: \(df.string(from: at))")
+            }
+            lines.append("  scanned: \(result.scanned)")
+            lines.append("  with_function_or_title: \(result.withFunctionOrTitle)")
+            lines.append("  marked_for_upload: \(result.markedForUpload)")
+            lines.append("  pushed: \(result.pushed)")
+            if let err = result.error, !err.isEmpty {
+                lines.append("  error: \(err)")
             }
         }
         if auditService.lastResult.scanned > 0 || auditService.lastResult.ranAt != nil {

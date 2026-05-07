@@ -116,6 +116,61 @@ final class TripSyncService {
 
     var lastAuditResult: AuditResult = AuditResult()
 
+    nonisolated struct RepushNamesResult: Sendable {
+        var ranAt: Date?
+        var scanned: Int = 0
+        var withFunctionOrTitle: Int = 0
+        var markedForUpload: Int = 0
+        var pushed: Int = 0
+        var error: String?
+    }
+
+    var lastRepushNamesResult: RepushNamesResult = RepushNamesResult()
+
+    /// Mark every local trip for the selected vineyard that has a
+    /// `tripFunction` or `tripTitle` as dirty, then push to Supabase.
+    /// Used after running `sql/023_trips_function_title.sql` so existing
+    /// rows can have their trip name backfilled. Does not alter
+    /// `vineyardId`, `paddockId`, `paddockIds`, path data or status.
+    func repushTripNames(vineyardId: UUID) async -> RepushNamesResult {
+        var result = RepushNamesResult()
+        result.ranAt = Date()
+        guard let store else { return result }
+        guard SupabaseClientProvider.shared.isConfigured else {
+            result.error = "Supabase not configured"
+            lastRepushNamesResult = result
+            return result
+        }
+
+        let snapshot = store.trips.filter { $0.vineyardId == vineyardId }
+        result.scanned = snapshot.count
+
+        var idsToPush: [UUID] = []
+        let now = Date()
+        for trip in snapshot {
+            let hasFn = !(trip.tripFunction?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            let hasTitle = !(trip.tripTitle?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            guard hasFn || hasTitle else { continue }
+            result.withFunctionOrTitle += 1
+            metadata.markDirty(trip.id, at: now)
+            idsToPush.append(trip.id)
+        }
+        result.markedForUpload = idsToPush.count
+
+        if !idsToPush.isEmpty {
+            let pendingBefore = metadata.pendingUpserts.keys.filter { idsToPush.contains($0) }.count
+            await sync(vineyardId: vineyardId)
+            let pendingAfter = metadata.pendingUpserts.keys.filter { idsToPush.contains($0) }.count
+            result.pushed = max(0, pendingBefore - pendingAfter)
+            if case let .failure(message) = syncStatus {
+                result.error = message
+            }
+        }
+
+        lastRepushNamesResult = result
+        return result
+    }
+
     /// Compare local trips against Supabase for the selected vineyard so the
     /// user can see whether locally-visible trips (e.g. "Harrowing") have
     /// reached the backend. Read-only — does not push or repair.
