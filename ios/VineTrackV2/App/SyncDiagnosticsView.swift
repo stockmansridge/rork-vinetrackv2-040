@@ -246,8 +246,87 @@ struct SyncDiagnosticsView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
+            tripFunctionDistributionView(audit)
         }
         .padding(.vertical, 4)
+    }
+
+    /// Ordered list of canonical TripFunction raw values. Anything outside this
+    /// list (including `(none)` and `(unknown:*)`) is appended after.
+    private static let canonicalFunctionOrder: [String] = TripFunction.allCases.map { $0.rawValue }
+
+    private func orderedFunctionKeys(local: [String: Int], remote: [String: Int]) -> [String] {
+        let union = Set(local.keys).union(remote.keys)
+        var ordered: [String] = []
+        for key in Self.canonicalFunctionOrder where union.contains(key) {
+            ordered.append(key)
+        }
+        let extras = union.subtracting(ordered).sorted()
+        ordered.append(contentsOf: extras)
+        return ordered
+    }
+
+    private func functionDisplayName(_ key: String) -> String {
+        if key == "(none)" { return "(no function)" }
+        if key.hasPrefix("(unknown:") { return key }
+        return TripFunction(rawValue: key)?.displayName ?? key
+    }
+
+    private struct FunctionDistributionRow: Identifiable {
+        let id: String
+        let display: String
+        let local: Int
+        let remote: Int
+        var diff: Int { local - remote }
+    }
+
+    private func functionDistributionRows(_ audit: TripSyncService.AuditResult) -> [FunctionDistributionRow] {
+        let keys = orderedFunctionKeys(
+            local: audit.localFunctionCounts,
+            remote: audit.remoteFunctionCounts
+        )
+        return keys.map { key in
+            FunctionDistributionRow(
+                id: key,
+                display: functionDisplayName(key),
+                local: audit.localFunctionCounts[key] ?? 0,
+                remote: audit.remoteFunctionCounts[key] ?? 0
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func tripFunctionDistributionView(_ audit: TripSyncService.AuditResult) -> some View {
+        if !audit.localFunctionCounts.isEmpty || !audit.remoteFunctionCounts.isEmpty {
+            DisclosureGroup("Trip function distribution") {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Function").font(.caption2.weight(.semibold))
+                        Spacer()
+                        Text("Local").font(.caption2.weight(.semibold)).frame(width: 50, alignment: .trailing)
+                        Text("Remote").font(.caption2.weight(.semibold)).frame(width: 60, alignment: .trailing)
+                        Text("Diff").font(.caption2.weight(.semibold)).frame(width: 50, alignment: .trailing)
+                    }
+                    .foregroundStyle(.secondary)
+                    ForEach(functionDistributionRows(audit)) { row in
+                        HStack {
+                            Text(row.display)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text("\(row.local)").font(.caption.monospacedDigit()).frame(width: 50, alignment: .trailing)
+                            Text("\(row.remote)").font(.caption.monospacedDigit()).frame(width: 60, alignment: .trailing)
+                            Text(row.diff == 0 ? "0" : (row.diff > 0 ? "+\(row.diff)" : "\(row.diff)"))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(row.diff == 0 ? Color.secondary : Color.orange)
+                                .frame(width: 50, alignment: .trailing)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .font(.footnote)
+        }
     }
 
     @ViewBuilder
@@ -609,6 +688,37 @@ struct SyncDiagnosticsView: View {
             }
             if let err = audit.error, !err.isEmpty {
                 lines.append("  error: \(err)")
+            }
+            if !audit.localFunctionCounts.isEmpty || !audit.remoteFunctionCounts.isEmpty {
+                lines.append("  trip_function_distribution:")
+                let keys = orderedFunctionKeys(
+                    local: audit.localFunctionCounts,
+                    remote: audit.remoteFunctionCounts
+                )
+                lines.append("    local:")
+                for key in keys {
+                    let count = audit.localFunctionCounts[key] ?? 0
+                    if count > 0 {
+                        lines.append("      - \(functionDisplayName(key)): \(count)")
+                    }
+                }
+                lines.append("    remote:")
+                for key in keys {
+                    let count = audit.remoteFunctionCounts[key] ?? 0
+                    if count > 0 {
+                        lines.append("      - \(functionDisplayName(key)): \(count)")
+                    }
+                }
+                lines.append("    diff (local - remote):")
+                for key in keys {
+                    let l = audit.localFunctionCounts[key] ?? 0
+                    let r = audit.remoteFunctionCounts[key] ?? 0
+                    let diff = l - r
+                    if diff != 0 {
+                        let sign = diff > 0 ? "+" : ""
+                        lines.append("      - \(functionDisplayName(key)): \(sign)\(diff)")
+                    }
+                }
             }
         }
         if auditService.lastResult.scanned > 0 || auditService.lastResult.ranAt != nil {

@@ -129,10 +129,39 @@ final class TripSyncService {
         var pendingUpsertIds: [UUID] = []
         var pendingDeleteIds: [UUID] = []
         var remoteMissingFunction: Int = 0
+        /// Counts of `tripFunction` raw values across all locally persisted trips.
+        /// Includes a `(none)` bucket for trips with no function set, and an
+        /// `(unknown:<raw>)` bucket for raw values not in the canonical list.
+        var localFunctionCounts: [String: Int] = [:]
+        /// Counts of `trip_function` values across non-deleted remote trips for
+        /// the selected vineyard. Same bucket conventions as `localFunctionCounts`.
+        var remoteFunctionCounts: [String: Int] = [:]
         var error: String?
     }
 
     var lastAuditResult: AuditResult = AuditResult()
+
+    /// Build a function-distribution dictionary from a sequence of optional raw
+    /// `tripFunction` strings. Canonical `TripFunction` raw values are used as
+    /// keys; missing/empty values bucket under `(none)` and unrecognised raw
+    /// values bucket under `(unknown:<raw>)`.
+    nonisolated static func functionDistribution(rawValues: [String?]) -> [String: Int] {
+        let canonical = Set(TripFunction.allCases.map { $0.rawValue })
+        var counts: [String: Int] = [:]
+        for raw in rawValues {
+            let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let key: String
+            if trimmed.isEmpty {
+                key = "(none)"
+            } else if canonical.contains(trimmed) {
+                key = trimmed
+            } else {
+                key = "(unknown:\(trimmed))"
+            }
+            counts[key, default: 0] += 1
+        }
+        return counts
+    }
 
     nonisolated struct RepushNamesResult: Sendable {
         var ranAt: Date?
@@ -280,6 +309,9 @@ final class TripSyncService {
         result.localOnlyMissingFunction = localForVineyard
             .filter { ($0.tripFunction?.isEmpty ?? true) && ($0.tripTitle?.isEmpty ?? true) }
             .map { $0.id }
+        result.localFunctionCounts = Self.functionDistribution(
+            rawValues: localForVineyard.map { $0.tripFunction }
+        )
         result.pendingUpsertIds = Array(metadata.pendingUpserts.keys)
         result.pendingDeleteIds = Array(metadata.pendingDeletes.keys)
 
@@ -329,6 +361,9 @@ final class TripSyncService {
                 let hasFn = !(t.tripFunction?.isEmpty ?? true) || !(t.tripTitle?.isEmpty ?? true)
                 return acc + (hasFn ? 0 : 1)
             }
+            result.remoteFunctionCounts = Self.functionDistribution(
+                rawValues: active.map { $0.tripFunction }
+            )
         } catch {
             result.error = error.localizedDescription
         }
