@@ -38,6 +38,13 @@ struct WeatherDataSettingsView: View {
     @State private var lastDavisCurrent: DavisCurrentConditions?
     @State private var lastDavisSensorSummary: DavisSensorSummary?
     @State private var diagCopiedMessage: String?
+    /// Status text for the user-triggered "Refresh Davis now" action which
+    /// posts `action: current` to the davis-proxy edge function. The proxy
+    /// writes `vineyard_weather_observations` and (when rain_today_mm is
+    /// present) `rainfall_daily` server-side under the service-role key.
+    @State private var davisForceRefreshStatus: String?
+    @State private var davisForceRefreshOk: Bool = false
+    @State private var isForceRefreshingDavis: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -962,16 +969,47 @@ struct WeatherDataSettingsView: View {
             } label: {
                 Label("Reload from server", systemImage: "arrow.clockwise")
             }
+            // User-facing way to force a real davis-proxy `action: current`
+            // fetch from the field. Works for any vineyard member as long
+            // as the vineyard has a configured Davis station (the edge
+            // function enforces membership and uses the service-role key
+            // server-side to update vineyard_weather_observations and
+            // rainfall_daily). Owners/managers without a vineyard-shared
+            // integration can still use their local Keychain path via
+            // `refreshDavisParserDiagnostics()`.
             Button {
-                if config.davisHasCredentials {
-                    Task { await refreshDavisParserDiagnostics() }
+                Task { await forceRefreshDavisCurrent() }
+            } label: {
+                if isForceRefreshingDavis {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Refreshing Davis…")
+                    }
+                } else {
+                    Label("Refresh Davis now", systemImage: "arrow.triangle.2.circlepath.cloud")
                 }
+            }
+            .disabled(isForceRefreshingDavis
+                      || (config.davisStationId?.isEmpty ?? true)
+                      || (vineyardId == nil)
+                      || (!config.davisVineyardHasServerCredentials && !config.davisHasCredentials))
+            if let msg = davisForceRefreshStatus, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption2)
+                    .foregroundStyle(davisForceRefreshOk ? .green : .red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                Task { await refreshDavisParserDiagnostics() }
             } label: {
                 Label("Refresh parser detection", systemImage: "sensor.tag.radiowaves.forward")
             }
-            .disabled(!config.davisHasCredentials
-                      || (config.davisStationId?.isEmpty ?? true)
-                      || isTestingDavis)
+            .disabled((config.davisStationId?.isEmpty ?? true)
+                      || isTestingDavis
+                      || (!config.davisHasCredentials
+                          && !(config.davisIsVineyardShared
+                               && config.davisVineyardHasServerCredentials)))
             Button {
                 copyDavisDiagnostics()
             } label: {
@@ -1064,16 +1102,71 @@ struct WeatherDataSettingsView: View {
         }
     }
 
+    /// User-triggered "Refresh Davis now". Posts to the `davis-proxy`
+    /// edge function with `{ vineyardId, action: "current", stationId }`
+    /// using the caller's member JWT. The edge function writes the
+    /// resulting observation into `vineyard_weather_observations` and,
+    /// when rain_today_mm is present, calls `upsert_davis_rainfall_daily`
+    /// with the service-role key. After the round-trip we invalidate the
+    /// integration cache so the next read sees the freshly-written row.
+    private func forceRefreshDavisCurrent() async {
+        guard let vid = vineyardId else {
+            davisForceRefreshStatus = "No vineyard selected."
+            davisForceRefreshOk = false
+            return
+        }
+        guard let sid = config.davisStationId, !sid.isEmpty else {
+            davisForceRefreshStatus = "No Davis station selected for this vineyard."
+            davisForceRefreshOk = false
+            return
+        }
+        isForceRefreshingDavis = true
+        davisForceRefreshStatus = nil
+        defer { isForceRefreshingDavis = false }
+        print("[DavisProxy] forceRefresh requested vineyardId=\(vid) stationId=\(sid)")
+        do {
+            let cur = try await VineyardDavisProxyService.fetchCurrentConditions(
+                vineyardId: vid, stationId: sid
+            )
+            lastDavisCurrent = cur
+            lastDavisSensorSummary = cur.sensors
+            // Surface freshly-written values so users can verify
+            // server-side persistence without leaving the screen.
+            let df = DateFormatter()
+            df.dateStyle = .none
+            df.timeStyle = .medium
+            let parts: [String] = [
+                cur.temperatureC.map { String(format: "%.1f°C", $0) },
+                cur.humidityPercent.map { String(format: "%.0f%% RH", $0) },
+                cur.rainMmLastHour.map { String(format: "rain %.1f mm", $0) },
+            ].compactMap { $0 }
+            let summary = parts.isEmpty ? "OK" : parts.joined(separator: " · ")
+            davisForceRefreshStatus = "Davis updated at \(df.string(from: Date())) — \(summary). Server has refreshed vineyard_weather_observations and rainfall_daily."
+            davisForceRefreshOk = true
+            // Refresh integration metadata so the cached RPC display is
+            // re-pulled on next read.
+            await VineyardWeatherIntegrationCache.shared.refresh(for: vid)
+        } catch let error as VineyardDavisProxyError {
+            davisForceRefreshOk = false
+            davisForceRefreshStatus = "Davis refresh failed — \(error.errorDescription ?? "unknown error")"
+            print("[DavisProxy] forceRefresh failed vineyardId=\(vid) reason=\(error.errorDescription ?? "-")")
+        } catch {
+            davisForceRefreshOk = false
+            davisForceRefreshStatus = "Davis refresh failed — \(error.localizedDescription)"
+            print("[DavisProxy] forceRefresh failed vineyardId=\(vid) reason=\(error.localizedDescription)")
+        }
+    }
+
     /// Re-fetches current conditions for the selected Davis station so the
     /// parser diagnostics panel reflects the latest WeatherLink response.
     /// Uses the vineyard proxy when available so operators / non-credential
     /// devices can also refresh.
     private func refreshDavisParserDiagnostics() async {
         guard let sid = config.davisStationId, !sid.isEmpty else { return }
-        // Prefer vineyard proxy when configured.
+        // Prefer vineyard proxy when configured (works for every member,
+        // not just devices that hold local Keychain credentials).
         if let vid = vineyardId,
-           config.davisIsVineyardShared,
-           config.davisVineyardHasServerCredentials {
+           config.davisVineyardHasServerCredentials || config.davisIsVineyardShared {
             do {
                 let cur = try await VineyardDavisProxyService.fetchCurrentConditions(
                     vineyardId: vid, stationId: sid
