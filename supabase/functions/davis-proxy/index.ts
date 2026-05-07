@@ -391,22 +391,40 @@ Deno.serve(async (req: Request) => {
       if (!stationId) return json({ error: "stationId required" }, 400);
       const r = await davisGet(`/current/${stationId}`, apiKey, apiSecret);
       if (r.status >= 200 && r.status < 300) {
-        // Best-effort cache write. Failures must not break the response.
+        // Best-effort cache writes. Failures must not break the response,
+        // but we log structured diagnostics (no secrets) so we can tell
+        // from the function logs whether each write succeeded.
+        const stationName = integ.station_name ?? null;
+        const tz = typeof body.timezone === "string" && body.timezone
+          ? body.timezone
+          : "Australia/Sydney";
+
+        let parsed: ReturnType<typeof parseDavisCurrent> | null = null;
         try {
-          const parsed = parseDavisCurrent(r.body);
-          if (parsed.observed_at) {
+          parsed = parseDavisCurrent(r.body);
+        } catch (e) {
+          console.log(JSON.stringify({
+            tag: "davis-proxy.current.parse_failed",
+            vineyardId, stationId,
+            error: e instanceof Error ? e.message : String(e),
+          }));
+        }
+
+        if (parsed && parsed.observed_at) {
+          // 1) Observations cache.
+          try {
             const safePayload = {
               station_id: parsed.station_id ?? stationId,
               generated_at: r.body?.generated_at ?? null,
               sensors: parsed.safe_sensors,
             };
-            await admin
+            const { error: obsErr } = await admin
               .from("vineyard_weather_observations")
               .upsert({
                 vineyard_id: vineyardId,
                 source: "davis_weatherlink",
                 station_id: String(parsed.station_id ?? stationId),
-                station_name: integ.station_name ?? null,
+                station_name: stationName,
                 observed_at: parsed.observed_at,
                 fetched_at: new Date().toISOString(),
                 temperature_c: parsed.temperature_c,
@@ -418,25 +436,75 @@ Deno.serve(async (req: Request) => {
                 leaf_wetness: parsed.leaf_wetness,
                 raw_payload: safePayload,
               }, { onConflict: "vineyard_id,source" });
+            if (obsErr) {
+              console.log(JSON.stringify({
+                tag: "davis-proxy.current.observations_failed",
+                vineyardId, stationId,
+                code: (obsErr as any).code ?? null,
+                message: obsErr.message,
+              }));
+            }
+          } catch (e) {
+            console.log(JSON.stringify({
+              tag: "davis-proxy.current.observations_threw",
+              vineyardId, stationId,
+              error: e instanceof Error ? e.message : String(e),
+            }));
+          }
 
-            // Persist today's rainfall total for the Rain Calendar.
-            // Manual rows on the same day are a different source and are
-            // never overwritten by this call.
-            if (parsed.rain_today_mm != null && isFinite(parsed.rain_today_mm)) {
-              const tz = typeof body.timezone === "string" && body.timezone
-                ? body.timezone
-                : "Australia/Sydney";
-              const localDate = localDateString(new Date(parsed.observed_at), tz);
-              await admin.rpc("upsert_davis_rainfall_daily", {
-                p_vineyard_id: vineyardId,
-                p_date: localDate,
-                p_rainfall_mm: parsed.rain_today_mm,
-                p_station_id: String(parsed.station_id ?? stationId),
-                p_station_name: integ.station_name ?? null,
-              });
+          // 2) Rain calendar daily row. Independent try so a failure here
+          //    is logged separately from the observations write. We write
+          //    even when rain_today_mm is 0 so the calendar reflects "no
+          //    rain yet today" and the row exists once a station reports.
+          const rainMm = parsed.rain_today_mm;
+          const localDate = localDateString(new Date(parsed.observed_at), tz);
+          let rainfallAttempted = false;
+          let rainfallOk = false;
+          let rainfallCode: string | null = null;
+          let rainfallMessage: string | null = null;
+          if (rainMm != null && isFinite(rainMm) && rainMm >= 0) {
+            rainfallAttempted = true;
+            try {
+              const { error: rpcErr } = await admin.rpc(
+                "upsert_davis_rainfall_daily",
+                {
+                  p_vineyard_id: vineyardId,
+                  p_date: localDate,
+                  p_rainfall_mm: rainMm,
+                  p_station_id: String(parsed.station_id ?? stationId),
+                  p_station_name: stationName,
+                },
+              );
+              if (rpcErr) {
+                rainfallCode = (rpcErr as any).code ?? null;
+                rainfallMessage = rpcErr.message ?? null;
+              } else {
+                rainfallOk = true;
+              }
+            } catch (e) {
+              rainfallMessage = e instanceof Error ? e.message : String(e);
             }
           }
-        } catch (_e) { /* swallow cache errors */ }
+
+          console.log(JSON.stringify({
+            tag: "davis-proxy.current.rainfall_daily",
+            vineyardId,
+            stationId: String(parsed.station_id ?? stationId),
+            stationName,
+            localDate,
+            rainTodayMm: rainMm,
+            attempted: rainfallAttempted,
+            success: rainfallOk,
+            code: rainfallCode,
+            message: rainfallMessage,
+          }));
+        } else {
+          console.log(JSON.stringify({
+            tag: "davis-proxy.current.no_observed_at",
+            vineyardId, stationId,
+            hasParsed: parsed != null,
+          }));
+        }
         return json(r.body ?? {});
       }
       return json({ error: `WeatherLink HTTP ${r.status}` }, 502);
