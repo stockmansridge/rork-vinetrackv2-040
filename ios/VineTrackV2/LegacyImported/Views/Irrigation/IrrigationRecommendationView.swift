@@ -36,9 +36,23 @@ struct IrrigationRecommendationView: View {
     @State private var wuStationConfigured: Bool = false
 
     // Missing rain data helper sheet — surfaced when the selected
-    // actual-rain window contains no-data days.
+    // actual-rain window contains no-data days OR when persisted
+    // rainfall history coverage in the last 365 days is shallow.
     @State private var showMissingRainHelper: Bool = false
     @State private var didLoadWeatherWizardStatus: Bool = false
+
+    // Persisted rainfall history coverage (number of days in the last
+    // 365 days that have a recorded rainfall row in any source). Used
+    // to surface the "Build rainfall history" prompt even when the
+    // currently selected actual-rain window happens to be complete.
+    @State private var persistedHistoryCoverageDays: Int?
+    @State private var isCheckingHistoryCoverage: Bool = false
+    @State private var didLoadHistoryCoverage: Bool = false
+    /// Threshold below which we consider persisted rainfall history
+    /// "shallow" and prompt the user to build it out. 60 days gives
+    /// enough context for seasonal trends without being noisy.
+    private let shallowHistoryThresholdDays: Int = 60
+    private let historyCoverageWindowDays: Int = 365
     private let wizardIntegrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
 
@@ -129,6 +143,9 @@ struct IrrigationRecommendationView: View {
             }
             recommendationSection
             recentRainSection
+            if shouldShowRainfallHistorySection {
+                rainfallHistorySection
+            }
             rainfallCalendarSection
             blockSection
             forecastControlSection
@@ -163,11 +180,15 @@ struct IrrigationRecommendationView: View {
                 }
             }
             Task { await refreshWeatherWizardStatus() }
+            Task { await loadPersistedHistoryCoverage() }
         }
         .onChange(of: store.selectedVineyardId) { _, _ in
             didLoadWeatherWizardStatus = false
             wuStationConfigured = false
+            didLoadHistoryCoverage = false
+            persistedHistoryCoverageDays = nil
             Task { await refreshWeatherWizardStatus() }
+            Task { await loadPersistedHistoryCoverage(force: true) }
         }
         .onChange(of: kcText) { _, _ in persistParameters() }
         .onChange(of: efficiencyText) { _, _ in persistParameters() }
@@ -344,12 +365,14 @@ struct IrrigationRecommendationView: View {
             // Refresh persisted rainfall after the helper closes so the
             // recommendation card and source labels reflect any new rows.
             Task { await loadRecentRainfall() }
+            Task { await loadPersistedHistoryCoverage(force: true) }
         }) {
             IrrigationMissingRainHelperSheet(
                 vineyardId: store.selectedVineyardId,
                 rainfallWindowDays: recentRainDays,
                 onCompleted: {
                     Task { await loadRecentRainfall() }
+                    Task { await loadPersistedHistoryCoverage(force: true) }
                 }
             )
         }
@@ -562,6 +585,108 @@ struct IrrigationRecommendationView: View {
             Text("Ask an Owner or Manager to fill missing rainfall data.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Rainfall history (persisted coverage)
+
+    /// True when we have a coverage figure and it falls below the
+    /// shallow-history threshold. While the check is loading we do
+    /// NOT show the prompt to avoid a flash for vineyards with deep
+    /// history.
+    private var hasShallowPersistedHistory: Bool {
+        guard let coverage = persistedHistoryCoverageDays else { return false }
+        return coverage < shallowHistoryThresholdDays
+    }
+
+    private var shouldShowRainfallHistorySection: Bool {
+        guard store.selectedVineyardId != nil else { return false }
+        guard latitude != nil, longitude != nil else { return false }
+        return hasShallowPersistedHistory
+    }
+
+    @ViewBuilder
+    private var rainfallHistorySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "calendar.badge.clock")
+                        .foregroundStyle(.orange)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Rainfall history")
+                            .font(.subheadline.weight(.semibold))
+                        Text(persistedHistorySubtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if isCheckingHistoryCoverage {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                Text("VineTrack can build out older rainfall history using your configured weather sources, then fall back to Open-Meteo for any remaining gaps.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if accessControl.canChangeSettings {
+                    Button {
+                        showMissingRainHelper = true
+                    } label: {
+                        Label("Build rainfall history", systemImage: "cloud.rain.fill")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.orange)
+                } else {
+                    Text("Ask an Owner or Manager to build rainfall history.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Rainfall history")
+        }
+    }
+
+    private var persistedHistorySubtitle: String {
+        if let coverage = persistedHistoryCoverageDays {
+            return "Only \(coverage) day\(coverage == 1 ? "" : "s") of persisted rainfall history found in the last \(historyCoverageWindowDays) days."
+        }
+        if isCheckingHistoryCoverage {
+            return "Checking persisted rainfall history\u{2026}"
+        }
+        return "Persisted rainfall history not yet checked."
+    }
+
+    private func loadPersistedHistoryCoverage(force: Bool = false) async {
+        guard let vid = store.selectedVineyardId else {
+            persistedHistoryCoverageDays = nil
+            return
+        }
+        if didLoadHistoryCoverage && !force { return }
+        isCheckingHistoryCoverage = true
+        defer { isCheckingHistoryCoverage = false }
+        let to = Date()
+        let from = Calendar.current.date(byAdding: .day, value: -(historyCoverageWindowDays - 1), to: to) ?? to
+        do {
+            let rows = try await PersistedRainfallService.fetchDailyRainfall(
+                vineyardId: vid, from: from, to: to
+            )
+            // Count days with any recorded rainfall row (any source).
+            let coverage = rows.reduce(into: 0) { acc, row in
+                if row.rainfallMm != nil || (row.source?.isEmpty == false) {
+                    acc += 1
+                }
+            }
+            persistedHistoryCoverageDays = coverage
+            didLoadHistoryCoverage = true
+        } catch {
+            // Leave coverage as nil so we don't claim shallow history
+            // on a transient RPC error.
+            persistedHistoryCoverageDays = nil
         }
     }
 
