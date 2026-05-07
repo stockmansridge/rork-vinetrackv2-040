@@ -357,15 +357,17 @@ struct RepairsGrowthView: View {
 
     private func createRepairPin(button: ButtonConfig, side: PinSide, coord: CLLocationCoordinate2D) {
         let heading = locationService.heading?.trueHeading ?? 0
+        let resolved = PinContextResolver.resolve(coordinate: coord, store: store, tracking: tracking)
         let pin = store.createPinFromButton(
             button: button,
             coordinate: coord,
             heading: heading,
             side: side,
-            paddockId: nil,
-            rowNumber: nil,
+            paddockId: resolved.paddockId,
+            rowNumber: resolved.rowNumber,
             createdBy: auth.userName
         )
+        print(PinContextResolver.diagnostic(coordinate: coord, side: side, mode: .repairs, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return
@@ -400,16 +402,18 @@ struct RepairsGrowthView: View {
 
     private func createGrowthPin(stage: GrowthStage, coord: CLLocationCoordinate2D) {
         let heading = locationService.heading?.trueHeading ?? 0
+        let resolved = PinContextResolver.resolve(coordinate: coord, store: store, tracking: tracking)
         let pin = store.createGrowthStagePin(
             stageCode: stage.code,
             stageDescription: stage.description,
             coordinate: coord,
             heading: heading,
             side: .right,
-            paddockId: nil,
-            rowNumber: nil,
+            paddockId: resolved.paddockId,
+            rowNumber: resolved.rowNumber,
             createdBy: auth.userName
         )
+        print(PinContextResolver.diagnostic(coordinate: coord, side: .right, mode: .growth, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return

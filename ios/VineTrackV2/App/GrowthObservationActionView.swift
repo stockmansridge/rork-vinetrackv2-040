@@ -6,6 +6,7 @@ struct GrowthObservationActionView: View {
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(LocationService.self) private var locationService
     @Environment(BackendAccessControl.self) private var accessControl
+    @Environment(TripTrackingService.self) private var tracking
 
     @State private var showEditButtons: Bool = false
     @State private var showGrowthPicker: Bool = false
@@ -207,16 +208,18 @@ struct GrowthObservationActionView: View {
             showFeedback("Waiting for GPS location.", kind: .warning)
             return
         }
+        let resolved = PinContextResolver.resolve(coordinate: location.coordinate, store: store, tracking: tracking)
         let createdPin = store.createPinFromButton(
             button: button,
             coordinate: location.coordinate,
             heading: locationService.heading?.trueHeading ?? 0,
             side: side,
-            paddockId: nil,
-            rowNumber: nil,
+            paddockId: resolved.paddockId,
+            rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
             notes: nil
         )
+        print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: .growth, resolved: resolved, store: store, tracking: tracking))
         showFeedback("Pin: \(button.name) (\(side == .left ? "L" : "R"))", kind: .success)
         if store.settings.autoPhotoPrompt, let pin = createdPin {
             pendingPhotoPinId = pin.id
@@ -230,17 +233,19 @@ struct GrowthObservationActionView: View {
             return
         }
         lastGrowthStage = stage
+        let resolved = PinContextResolver.resolve(coordinate: location.coordinate, store: store, tracking: tracking)
         let createdPin = store.createGrowthStagePin(
             stageCode: stage.code,
             stageDescription: stage.description,
             coordinate: location.coordinate,
             heading: locationService.heading?.trueHeading ?? 0,
             side: pendingSide,
-            paddockId: nil,
-            rowNumber: nil,
+            paddockId: resolved.paddockId,
+            rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
             notes: nil
         )
+        print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: pendingSide, mode: .growth, resolved: resolved, store: store, tracking: tracking))
         showFeedback("Growth pin: EL \(stage.code)", kind: .success)
         if store.settings.autoPhotoPrompt, let pin = createdPin {
             pendingPhotoPinId = pin.id

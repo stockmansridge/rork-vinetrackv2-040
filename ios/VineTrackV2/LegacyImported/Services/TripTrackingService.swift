@@ -217,15 +217,19 @@ final class TripTrackingService {
             errorMessage = "Waiting for GPS location."
             return nil
         }
+        let resolved = PinContextResolver.resolve(coordinate: location.coordinate, store: store, tracking: self)
+        let resolvedPaddock = paddockId ?? resolved.paddockId ?? trip.paddockId
+        let resolvedRow = rowNumber ?? resolved.rowNumber
         guard var pin = store.createPinFromButton(
             button: button,
             coordinate: location.coordinate,
             heading: locationService?.heading?.trueHeading ?? 0,
             side: side,
-            paddockId: paddockId ?? trip.paddockId,
-            rowNumber: rowNumber,
+            paddockId: resolvedPaddock,
+            rowNumber: resolvedRow,
             notes: notes
         ) else { return nil }
+        print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: button.mode, resolved: resolved, store: store, tracking: self))
 
         pin.tripId = trip.id
         store.updatePin(pin)
