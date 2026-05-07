@@ -113,6 +113,22 @@ struct RainfallCalendarView: View {
 
     private var sourceCard: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if service.usedPersistedHistory {
+                calendarSourceRow(
+                    label: "History",
+                    value: "Persisted vineyard rainfall",
+                    icon: "externaldrive.fill.badge.icloud",
+                    tint: VineyardTheme.leafGreen
+                )
+            }
+            if service.manualDaysCovered > 0 {
+                calendarSourceRow(
+                    label: "Manual entries",
+                    value: "\(service.manualDaysCovered) day\(service.manualDaysCovered == 1 ? "" : "s")",
+                    icon: "hand.raised.fill",
+                    tint: .indigo
+                )
+            }
             if service.davisDaysCovered > 0 {
                 calendarSourceRow(
                     label: "Recent actual",
@@ -141,6 +157,14 @@ struct RainfallCalendarView: View {
                     value: "Open-Meteo Archive",
                     icon: "tray.full.fill",
                     tint: .secondary
+                )
+            }
+            if service.todayFromLiveDavis {
+                calendarSourceRow(
+                    label: "Today",
+                    value: "Live Davis cache (no persisted row yet)",
+                    icon: "clock.arrow.circlepath",
+                    tint: .orange
                 )
             }
             if let coverage = service.coverageSummary {

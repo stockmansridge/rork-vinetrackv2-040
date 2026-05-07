@@ -12,6 +12,7 @@ nonisolated enum RainfallSource: String, Sendable, Hashable, Codable {
     case davis
     case wunderground
     case archive
+    case manual
     case missing
 }
 
