@@ -65,6 +65,7 @@ struct WeatherDataSettingsView: View {
     @State private var wuBackfillOk: Bool = false
     @State private var isBackfillingWu: Bool = false
     @State private var isClearingWu: Bool = false
+    @State private var showWuStationPicker: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -183,6 +184,17 @@ struct WeatherDataSettingsView: View {
         }
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
+        }
+        .sheet(isPresented: $showWuStationPicker) {
+            if let vid = vineyardId {
+                WundergroundStationPickerSheet(vineyardId: vid) { stationId, stationName in
+                    wuStationIdInput = stationId
+                    wuStationNameInput = stationName ?? ""
+                    wuSaveOk = true
+                    wuSaveStatus = "Weather Underground station saved."
+                    Task { await loadWuIntegration(for: vid) }
+                }
+            }
         }
         .sheet(isPresented: $showDavisStationPicker) {
             DavisStationPickerSheet(
@@ -1146,6 +1158,54 @@ struct WeatherDataSettingsView: View {
     private var wuOwnerEditableControls: some View {
         let savedStationId = wuIntegration?.stationId ?? ""
         let hasSaved = !savedStationId.isEmpty
+        let savedName = wuIntegration?.stationName?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasCoordinates: Bool = {
+            let s = store.settings
+            if let lat = s.vineyardLatitude, let lon = s.vineyardLongitude,
+               lat != 0 || lon != 0 { return true }
+            if let lat = store.paddockCentroidLatitude,
+               let lon = store.paddockCentroidLongitude,
+               lat != 0 || lon != 0 { return true }
+            return false
+        }()
+
+        if hasSaved {
+            VStack(alignment: .leading, spacing: 2) {
+                Label {
+                    Text("Selected: ")
+                        .foregroundStyle(.secondary)
+                    + Text(savedName.isEmpty ? savedStationId : savedName)
+                        .foregroundStyle(.primary)
+                        .fontWeight(.semibold)
+                } icon: {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                }
+                .font(.caption)
+                if !savedName.isEmpty {
+                    Text(savedStationId)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospaced()
+                }
+            }
+            .padding(.vertical, 2)
+        }
+
+        Button {
+            showWuStationPicker = true
+        } label: {
+            Label("Find nearby WU stations", systemImage: "location.magnifyingglass")
+        }
+        .disabled(vineyardId == nil || !hasCoordinates)
+
+        if !hasCoordinates {
+            Text("Vineyard coordinates are required to find nearby Weather Underground stations.")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
 
         HStack {
             Text("Station ID")
