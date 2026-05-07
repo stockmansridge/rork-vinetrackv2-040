@@ -2,6 +2,7 @@ import SwiftUI
 
 struct IrrigationRecommendationView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(BackendAccessControl.self) private var accessControl
 
     @State private var selectedPaddockId: UUID?
     @State private var forecastService = IrrigationForecastService()
@@ -27,6 +28,15 @@ struct IrrigationRecommendationView: View {
     @State private var includeRecentActualRain: Bool = true
     @State private var isLoadingRecentRain: Bool = false
     @State private var showWeatherSettings: Bool = false
+
+    // Weather Setup Wizard banner — shown when neither Davis nor WU is
+    // configured for the selected vineyard so new managers/owners get a
+    // one-tap path to set up rainfall sources.
+    @State private var showWeatherWizard: Bool = false
+    @State private var wuStationConfigured: Bool = false
+    @State private var didLoadWeatherWizardStatus: Bool = false
+    private let wizardIntegrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
+        = SupabaseVineyardWeatherIntegrationRepository()
 
     private let durationOptions: [Int] = [3, 5, 7, 14]
 
@@ -106,6 +116,9 @@ struct IrrigationRecommendationView: View {
 
     var body: some View {
         Form {
+            if shouldShowWeatherWizardBanner {
+                weatherWizardBannerSection
+            }
             statusSection
             if !missingItems.isEmpty {
                 missingSetupSection
@@ -145,6 +158,12 @@ struct IrrigationRecommendationView: View {
                     Task { await loadRecentRainfall() }
                 }
             }
+            Task { await refreshWeatherWizardStatus() }
+        }
+        .onChange(of: store.selectedVineyardId) { _, _ in
+            didLoadWeatherWizardStatus = false
+            wuStationConfigured = false
+            Task { await refreshWeatherWizardStatus() }
         }
         .onChange(of: kcText) { _, _ in persistParameters() }
         .onChange(of: efficiencyText) { _, _ in persistParameters() }
@@ -164,6 +183,94 @@ struct IrrigationRecommendationView: View {
             if latitude != nil, longitude != nil {
                 Task { await loadRecentRainfall() }
             }
+        }
+    }
+
+    // MARK: - Weather Setup Wizard banner
+
+    private var davisConfiguredForBanner: Bool {
+        guard let vid = store.selectedVineyardId else { return false }
+        let cfg = WeatherProviderStore.shared.config(for: vid)
+        let hasShared = cfg.davisIsVineyardShared && cfg.davisVineyardHasServerCredentials
+        let hasStation = (cfg.davisStationId?.isEmpty == false)
+        return hasShared && hasStation
+    }
+
+    private var shouldShowWeatherWizardBanner: Bool {
+        guard accessControl.canChangeSettings else { return false }
+        guard store.selectedVineyardId != nil else { return false }
+        if davisConfiguredForBanner { return false }
+        if wuStationConfigured { return false }
+        return true
+    }
+
+    private var weatherWizardBannerSection: some View {
+        Section {
+            Button {
+                showWeatherWizard = true
+            } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "cloud.sun.rain.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.accentColor, VineyardTheme.leafGreen],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            in: .rect(cornerRadius: 10)
+                        )
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Set up vineyard weather")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Connect a Davis station (optional) or pick a Weather Underground station to power rainfall, irrigation and alerts.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 6) {
+                            Text("Open Weather Setup Wizard")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tint)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.tint)
+                        }
+                        .padding(.top, 2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showWeatherWizard, onDismiss: {
+            Task { await refreshWeatherWizardStatus(force: true) }
+        }) {
+            WeatherSetupWizardView()
+        }
+    }
+
+    private func refreshWeatherWizardStatus(force: Bool = false) async {
+        guard let vid = store.selectedVineyardId else {
+            wuStationConfigured = false
+            return
+        }
+        if didLoadWeatherWizardStatus && !force { return }
+        didLoadWeatherWizardStatus = true
+        // Make sure Davis cache is hot so davisConfiguredForBanner reflects
+        // the server-side integration even for fresh installs.
+        await VineyardWeatherIntegrationCache.shared.ensureLoaded(for: vid)
+        do {
+            let integ = try await wizardIntegrationRepository.fetch(
+                vineyardId: vid, provider: "wunderground"
+            )
+            wuStationConfigured = !((integ?.stationId ?? "").isEmpty)
+        } catch {
+            wuStationConfigured = false
         }
     }
 

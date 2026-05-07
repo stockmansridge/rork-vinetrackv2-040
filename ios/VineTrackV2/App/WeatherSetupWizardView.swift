@@ -190,7 +190,7 @@ struct WeatherSetupWizardView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 10) {
-                bullet(symbol: "antenna.radiowaves.left.and.right", color: .blue, title: "Davis WeatherLink", detail: "Connect a WeatherLink-enabled station for accurate vineyard rainfall and leaf wetness.")
+                bullet(symbol: "antenna.radiowaves.left.and.right", color: .blue, title: "Davis WeatherLink (optional)", detail: "If you own a WeatherLink-enabled station, connect it for the most accurate vineyard rainfall and leaf wetness. Skip this step if you don't have one.")
                 bullet(symbol: "wifi.router", color: .orange, title: "Weather Underground", detail: "Pick a nearby Personal Weather Station as a backup rainfall source.")
                 bullet(symbol: "calendar.badge.clock", color: .green, title: "Rainfall history", detail: "Backfill recent rainfall after setup so the Rain Calendar has useful history.")
             }
@@ -274,22 +274,28 @@ struct WeatherSetupWizardView: View {
                          title: "Davis is not connected yet",
                          body: "Davis credentials live in the Davis section of Weather Data & Forecasting. Close the wizard to enter your WeatherLink API key, secret and pick a station, then run the wizard again to backfill rainfall.")
 
+                Text("Davis is optional. If you don't own a Davis WeatherLink station, skip this step and use Weather Underground instead.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Button {
                     davisSkipped = true
                     advance()
                 } label: {
-                    Label("Skip Davis for now", systemImage: "arrow.right")
+                    Label("I don't have a Davis — skip", systemImage: "arrow.right")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
+                .tint(.gray)
 
                 Button {
                     dismiss()
                 } label: {
-                    Label("Open Davis settings", systemImage: "gearshape.fill")
+                    Label("I have a Davis — open settings", systemImage: "gearshape.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .tint(.blue)
             }
         }
