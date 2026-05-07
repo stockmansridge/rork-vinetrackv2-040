@@ -1,5 +1,46 @@
 import Foundation
 
+/// Canonical UTC-anchored calendar-date key helpers used by the Rain Calendar.
+///
+/// Postgres `date` columns are timezone-free calendar dates (e.g. "2026-05-07").
+/// Mapping them onto a `Date` using the device's local timezone caused
+/// alignment bugs when the device tz differed from the vineyard tz: a row
+/// for May 7 could resolve to a different absolute instant than the cell
+/// the UI computed for May 7. Using UTC midnight as the canonical key for
+/// every (year, month, day) makes the mapping deterministic and bug-free.
+nonisolated enum RainfallDateKey {
+    static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(secondsFromGMT: 0) ?? TimeZone(identifier: "UTC")!
+        return c
+    }()
+
+    /// UTC-midnight `Date` for the given calendar (year, month, day) triple.
+    static func key(year: Int, month: Int, day: Int) -> Date? {
+        var comps = DateComponents()
+        comps.year = year; comps.month = month; comps.day = day
+        return utcCalendar.date(from: comps)
+    }
+
+    /// Today's UTC-midnight key, derived from the device's *local* calendar
+    /// (year, month, day). This keeps "today" stable relative to what the
+    /// user sees on the device clock, even when the device tz differs from
+    /// the vineyard tz.
+    static func todayKey() -> Date {
+        let local = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+        return key(
+            year: local.year ?? 1970,
+            month: local.month ?? 1,
+            day: local.day ?? 1
+        ) ?? Date()
+    }
+
+    /// UTC-midnight start-of-day for an arbitrary `Date`.
+    static func startOfDay(_ date: Date) -> Date {
+        utcCalendar.startOfDay(for: date)
+    }
+}
+
 /// Fetches a year's worth of daily rainfall (mm) for the vineyard location,
 /// preferring the configured local weather station (Davis WeatherLink) and
 /// falling back gracefully to Open-Meteo Archive.
@@ -217,10 +258,19 @@ final class RainfallCalendarService {
         var openMeteoCount = 0
         var resolvedStationName: String?
         var todayHadValue = false
+        var hasFreshPersisted = false
 
-        let cal = Calendar.current
+        let todayKey = RainfallDateKey.todayKey()
+        // Persisted rows are considered "fresh enough to be today" if they
+        // are within ±1 day of the device's local today. This handles the
+        // case where the device tz and vineyard tz disagree about which
+        // calendar date "now" falls on (e.g. device UTC = May 6, vineyard
+        // AEST = May 7). Without this, the live-Davis fallback would fire
+        // and write today's rainfall to the wrong calendar day.
+        let oneDay: TimeInterval = 86_400
+
         for row in rows {
-            let key = cal.startOfDay(for: row.date)
+            let key = RainfallDateKey.startOfDay(row.date)
             guard let mm = row.rainfallMm else { continue }
             daily[key] = mm
             switch row.source {
@@ -240,19 +290,21 @@ final class RainfallCalendarService {
             default:
                 sources[key] = .archive
             }
-            if cal.isDate(key, inSameDayAs: today) { todayHadValue = true }
+            if key == todayKey { todayHadValue = true }
+            if abs(key.timeIntervalSince(todayKey)) <= oneDay {
+                hasFreshPersisted = true
+            }
         }
 
-        // Today fallback: if the persisted RPC has no row for today (or
-        // a null value), use the cached Davis current weather so users
-        // see today's accumulated rainfall before the next proxy push.
+        // Today fallback: only fire when persisted history has no row
+        // anywhere within ±1 day of "today". This avoids double-writing
+        // when the device tz and vineyard tz disagree about today's date.
         var todayFromLive = false
-        if !todayHadValue {
+        if !todayHadValue && !hasFreshPersisted {
             if let snap = try? await WeatherCurrentService().fetchCachedCurrent(vineyardId: vineyardId),
                let mm = snap.rainTodayMm {
-                let key = cal.startOfDay(for: today)
-                daily[key] = mm
-                sources[key] = .davis
+                daily[todayKey] = mm
+                sources[todayKey] = .davis
                 davisCount += 1
                 todayFromLive = true
                 if resolvedStationName == nil,
@@ -261,6 +313,7 @@ final class RainfallCalendarService {
                 }
             }
         }
+        _ = today
 
         let totalCovered = manualCount + davisCount + openMeteoCount
         let dominantLabel: String
@@ -307,12 +360,15 @@ final class RainfallCalendarService {
     ) async {
         var merged = dailyRainMm
         var mergedSources = sources
-        let cal = Calendar.current
         var resolvedStationName = stationName
         var todayHadValue = false
+        var hasFreshPersisted = false
+
+        let todayKey = RainfallDateKey.todayKey()
+        let oneDay: TimeInterval = 86_400
 
         for row in rows {
-            let key = cal.startOfDay(for: row.date)
+            let key = RainfallDateKey.startOfDay(row.date)
             guard let mm = row.rainfallMm else {
                 // Persisted RPC explicitly says no data for this day.
                 merged.removeValue(forKey: key)
@@ -334,16 +390,18 @@ final class RainfallCalendarService {
             default:
                 mergedSources[key] = .archive
             }
-            if cal.isDate(key, inSameDayAs: today) { todayHadValue = true }
+            if key == todayKey { todayHadValue = true }
+            if abs(key.timeIntervalSince(todayKey)) <= oneDay {
+                hasFreshPersisted = true
+            }
         }
 
         var todayFromLive = false
-        if !todayHadValue {
+        if !todayHadValue && !hasFreshPersisted {
             if let snap = try? await WeatherCurrentService().fetchCachedCurrent(vineyardId: vineyardId),
                let mm = snap.rainTodayMm {
-                let key = cal.startOfDay(for: today)
-                merged[key] = mm
-                mergedSources[key] = .davis
+                merged[todayKey] = mm
+                mergedSources[todayKey] = .davis
                 todayFromLive = true
                 if resolvedStationName == nil,
                    let name = snap.stationName, !name.isEmpty {
@@ -351,6 +409,7 @@ final class RainfallCalendarService {
                 }
             }
         }
+        _ = today
 
         self.dailyRainMm = merged
         self.sources = mergedSources
@@ -416,7 +475,10 @@ enum RainfallCalendarMath {
     static let rainDayThresholdMm: Double = 0.2
 
     static func monthSummaries(year: Int, daily: [Date: Double]) -> [RainfallMonthSummary] {
-        let cal = Calendar.current
+        // Keys are UTC-anchored calendar dates (see RainfallDateKey), so we
+        // must read components in UTC too — using device tz here would
+        // shift days back/forward depending on the local offset.
+        let cal = RainfallDateKey.utcCalendar
         var byMonth: [Int: [(day: Int, mm: Double)]] = [:]
         for (date, mm) in daily {
             let comps = cal.dateComponents([.year, .month, .day], from: date)
@@ -442,7 +504,7 @@ enum RainfallCalendarMath {
     }
 
     static func annual(year: Int, daily: [Date: Double], months: [RainfallMonthSummary]) -> RainfallAnnualSummary {
-        let cal = Calendar.current
+        let cal = RainfallDateKey.utcCalendar
         let total = months.reduce(0) { $0 + $1.totalMm }
         let rainDays = months.reduce(0) { $0 + $1.rainDays }
         let daysWithData = months.reduce(0) { $0 + $1.daysWithData }

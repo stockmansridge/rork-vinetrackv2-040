@@ -34,15 +34,30 @@ enum PersistedRainfallService {
         let provider = SupabaseClientProvider.shared
         guard provider.isConfigured else { return [] }
 
-        let cal = Calendar.current
-        let fmt = DateFormatter()
-        fmt.calendar = Calendar(identifier: .gregorian)
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = cal.timeZone
-        fmt.dateFormat = "yyyy-MM-dd"
+        // Outgoing date strings: format using the device's local timezone so
+        // the SQL date matches what the user sees on screen (e.g. "today"
+        // in the local calendar).
+        let outFmt = DateFormatter()
+        outFmt.calendar = Calendar.current
+        outFmt.locale = Locale(identifier: "en_US_POSIX")
+        outFmt.timeZone = Calendar.current.timeZone
+        outFmt.dateFormat = "yyyy-MM-dd"
 
-        let fromStr = fmt.string(from: from)
-        let toStr = fmt.string(from: to)
+        // Incoming date strings ("YYYY-MM-DD" from PostgREST): parse as UTC
+        // midnight so the resulting `Date` is a deterministic, timezone-free
+        // calendar-day key. The Rain Calendar UI uses the same UTC-anchored
+        // keys so May 7 always renders on May 7 regardless of device tz.
+        let utc = TimeZone(secondsFromGMT: 0) ?? TimeZone(identifier: "UTC")!
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = utc
+        let inFmt = DateFormatter()
+        inFmt.calendar = utcCal
+        inFmt.locale = Locale(identifier: "en_US_POSIX")
+        inFmt.timeZone = utc
+        inFmt.dateFormat = "yyyy-MM-dd"
+
+        let fromStr = outFmt.string(from: from)
+        let toStr = outFmt.string(from: to)
 
         let params = Params(
             pVineyardId: vineyardId,
@@ -56,9 +71,9 @@ enum PersistedRainfallService {
             .value
 
         return rows.compactMap { row in
-            guard let parsed = fmt.date(from: row.date) else { return nil }
+            guard let parsed = inFmt.date(from: row.date) else { return nil }
             return PersistedRainfallDay(
-                date: cal.startOfDay(for: parsed),
+                date: utcCal.startOfDay(for: parsed),
                 rainfallMm: row.rainfallMm,
                 source: row.source,
                 stationId: row.stationId,

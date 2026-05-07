@@ -360,19 +360,33 @@ struct RainfallCalendarView: View {
     }
 
     private func cellInfo(month: Int, day: Int) -> (valid: Bool, mm: Double?, source: RainfallSource?) {
+        // Validate the (y, m, d) triple using the device calendar (catches
+        // Feb 30 etc.). Day validity does not depend on timezone.
         let cal = Calendar.current
         var comps = DateComponents()
         comps.year = year; comps.month = month; comps.day = day
-        guard let date = cal.date(from: comps) else { return (false, nil, nil) }
-        // Check the constructed day actually matches (catches Feb 30 etc.)
-        let real = cal.dateComponents([.year, .month, .day], from: date)
+        guard let probe = cal.date(from: comps) else { return (false, nil, nil) }
+        let real = cal.dateComponents([.year, .month, .day], from: probe)
         if real.year != year || real.month != month || real.day != day {
             return (false, nil, nil)
         }
-        let today = cal.startOfDay(for: Date())
-        if date > today { return (true, nil, nil) }
-        let key = cal.startOfDay(for: date)
-        return (true, service.dailyRainMm[key], service.sources[key])
+
+        // Look up rainfall using the canonical UTC-anchored key so persisted
+        // rows align with the cell regardless of device tz.
+        guard let key = RainfallDateKey.key(year: year, month: month, day: day) else {
+            return (false, nil, nil)
+        }
+        let mm = service.dailyRainMm[key]
+        let src = service.sources[key]
+
+        // Hide future *empty* cells, but never hide a cell that has data —
+        // a vineyard-tz "today" can look like the future to a device tz that
+        // is one day behind, and we still want to show that data.
+        if mm == nil {
+            let todayKey = RainfallDateKey.todayKey()
+            if key > todayKey { return (true, nil, nil) }
+        }
+        return (true, mm, src)
     }
 
     private func formatMm(_ mm: Double) -> String {
