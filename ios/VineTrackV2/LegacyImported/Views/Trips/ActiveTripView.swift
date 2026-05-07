@@ -115,8 +115,47 @@ struct ActiveTripView: View {
         return nil
     }
 
+    /// The path the operator is meant to be driving (sequence target).
+    private var plannedPath: Double? {
+        let live = tracking.activeTrip ?? trip
+        if live.rowSequence.indices.contains(live.sequenceIndex) {
+            return live.rowSequence[live.sequenceIndex]
+        }
+        return nil
+    }
+
+    /// The path GPS says the tractor is physically on right now (when the
+    /// fix is inside the row corridor). Held as the most recently reported
+    /// live detected path so transient nil ticks don't reset the labels.
+    private var liveDetectedPath: Double? {
+        guard tracking.diagInCorridor else { return nil }
+        return tracking.diagLiveDetectedPath
+    }
+
+    /// True when the GPS-detected live path differs from the planned path
+    /// while the tractor is in corridor — the operator is driving the
+    /// wrong row and labels/warning should reflect the live path.
+    private var isOffPlannedPath: Bool {
+        guard let planned = plannedPath, let live = liveDetectedPath else { return false }
+        return abs(planned - live) > 0.01
+    }
+
+    /// Path used to render the left/right side row labels. Live detected
+    /// path wins when GPS is in corridor so the operator sees the correct
+    /// adjacent row numbers; otherwise falls back to whatever the tracking
+    /// service reported, then the planned target. This is the fix for the
+    /// “wrong row labels while off planned path” issue.
     private var pathForLabels: Double {
-        displayPath ?? trip.currentRowNumber
+        if let live = liveDetectedPath { return live }
+        return displayPath ?? trip.currentRowNumber
+    }
+
+    /// Identifier used in diagnostics to make it obvious which path drove
+    /// the displayed labels.
+    private var labelPathSource: String {
+        if liveDetectedPath != nil { return "live" }
+        if tracking.currentRowNumber != nil { return "tracker" }
+        return "planned"
     }
 
     /// Highest row number across the active sequence. Used to render the
@@ -307,6 +346,10 @@ struct ActiveTripView: View {
                 if showRowIndicator, canShowRowSides {
                     rowIndicatorOverlay
                 }
+
+                if isOffPlannedPath {
+                    wrongPathBanner
+                }
             }
 
             if store.settings.rowTrackingEnabled {
@@ -344,12 +387,28 @@ struct ActiveTripView: View {
                         Image(systemName: "speedometer")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        Text(speedDisplayText)
-                            .font(.system(.caption, design: .rounded, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .contentTransition(.numericText())
-                            .animation(.snappy, value: displayedSpeedKmh)
-                            .monospacedDigit()
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("NOW")
+                                .font(.system(size: 7, weight: .heavy))
+                                .foregroundStyle(.secondary)
+                            Text(speedDisplayText)
+                                .font(.system(.caption, design: .rounded, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .contentTransition(.numericText())
+                                .animation(.snappy, value: displayedSpeedKmh)
+                                .monospacedDigit()
+                        }
+                        if averageValidSpeedKmh > 0 {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("AVG")
+                                    .font(.system(size: 7, weight: .heavy))
+                                    .foregroundStyle(.secondary)
+                                Text(String(format: "%.1f", averageValidSpeedKmh))
+                                    .font(.system(.caption, design: .rounded, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
+                        }
                     }
                     HStack(spacing: 3) {
                         Image(systemName: "clock.fill")
@@ -472,6 +531,9 @@ struct ActiveTripView: View {
                 }.count
                 if remaining == 0 { return "Complete" }
             }
+            if isOffPlannedPath, let p = plannedPath, let l = liveDetectedPath {
+                return "Wrong row — on path \(l), planned \(p)"
+            }
             if averageValidSpeedKmh <= 0 { return "Calculating ETA" }
             if let planned = plannedPath, let live = livePath, abs(planned - live) > 0.01 {
                 return "Off planned path"
@@ -527,6 +589,16 @@ struct ActiveTripView: View {
         lines.append("  path \(path) → lower row \(lower), upper row \(upper)")
         lines.append("  left: \(leftRowLabel)")
         lines.append("  right: \(rightRowLabel)")
+        lines.append("")
+        lines.append("Labels:")
+        lines.append("  plannedPath: \(plannedPath.map { String($0) } ?? "nil")")
+        lines.append("  livePath: \(liveDetectedPath.map { String($0) } ?? "nil")")
+        lines.append("  labelPathUsed: \(labelPathSource) (\(path))")
+        lines.append("  label lower row: \(lower)")
+        lines.append("  label upper row: \(upper)")
+        lines.append("  left label: \(leftRowLabel)")
+        lines.append("  right label: \(rightRowLabel)")
+        lines.append("  off-planned-path warning active: \(isOffPlannedPath)")
         lines.append("")
         lines.append("Map / trail:")
         lines.append("  full point count: \(live.pathPoints.count)")
@@ -717,6 +789,47 @@ struct ActiveTripView: View {
             UserAnnotation()
         }
         .mapStyle(.hybrid)
+    }
+
+    /// Prominent banner shown when the live detected path differs from the
+    /// planned path while the tractor is in corridor. Designed to be loud
+    /// enough to stop the operator before continuing down the wrong row.
+    private var wrongPathBanner: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3.weight(.bold))
+                Text("Wrong row / path")
+                    .font(.headline.weight(.heavy))
+            }
+            if let live = liveDetectedPath, let planned = plannedPath {
+                Text("You are on path \(formatPath(live)). Planned path is \(formatPath(planned)).")
+                    .font(.subheadline.weight(.semibold))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            LinearGradient(
+                colors: [Color.red, Color.red.opacity(0.85)],
+                startPoint: .top,
+                endPoint: .bottom
+            ),
+            in: .rect(cornerRadius: 14)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(.white.opacity(0.3), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, 64)
+        .allowsHitTesting(false)
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .sensoryFeedback(.warning, trigger: isOffPlannedPath)
     }
 
     private var rowIndicatorOverlay: some View {

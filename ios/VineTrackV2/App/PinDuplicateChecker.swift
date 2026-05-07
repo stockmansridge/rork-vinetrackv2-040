@@ -17,10 +17,12 @@ nonisolated enum PinDuplicateChecker {
     /// noise during active trips at slow speeds.
     static let maxRadiusMeters: Double = 6.0
 
-    /// Minimum radius even when row spacing is known. Prevents very narrow
-    /// row paddocks (~1 m spacing) from making duplicates effectively
-    /// impossible to detect.
-    static let minRadiusMeters: Double = 1.5
+    /// Minimum radius even when row spacing is known. Bumped from 1.5 m to
+    /// 2.5 m so vineyard GPS jitter (typically 2–3 m horizontal accuracy)
+    /// can't sneak a near-duplicate pin past the warning. Narrow-row
+    /// paddocks may now warn on adjacent rows, which is the correct
+    /// trade-off for repair/growth pin work.
+    static let minRadiusMeters: Double = 2.5
 
     /// Compute the duplicate-warning radius for a pin being dropped at
     /// `coordinate`. Uses half the row spacing of the most relevant paddock
