@@ -271,7 +271,7 @@ struct WeatherDataSettingsView: View {
                         .frame(width: 36, height: 36)
                         .background(LinearGradient(colors: [.blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing), in: .rect(cornerRadius: 8))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Weather Setup Wizard")
+                        Text("Run Weather Setup Wizard")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                         Text("Guided setup for Davis, Weather Underground and rainfall history")
