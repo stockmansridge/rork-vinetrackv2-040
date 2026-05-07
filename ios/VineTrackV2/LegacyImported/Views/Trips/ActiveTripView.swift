@@ -15,6 +15,10 @@ struct ActiveTripView: View {
 
     @State private var position: MapCameraPosition = .userLocation(fallback: .automatic)
     @State private var isFollowingUser: Bool = true
+    @State private var mapMode: MapFollowMode = .free
+    @State private var lastNavCameraUpdate: Date = .distantPast
+    @State private var smoothedCourse: Double?
+    @State private var noGpsToast: Bool = false
     @State private var showRowIndicator: Bool = true
     @State private var showEndConfirmation: Bool = false
     @State private var showSummary: Bool = false
@@ -314,34 +318,8 @@ struct ActiveTripView: View {
             ZStack(alignment: .topTrailing) {
                 mapView
 
-                VStack(spacing: 8) {
-                    Button {
-                        withAnimation(.snappy) {
-                            isFollowingUser = true
-                            position = .userLocation(fallback: .automatic)
-                        }
-                    } label: {
-                        Image(systemName: isFollowingUser ? "location.fill" : "location")
-                            .font(.title3)
-                            .foregroundStyle(isFollowingUser ? Color.accentColor : .primary)
-                            .frame(width: 44, height: 44)
-                            .background(.ultraThinMaterial, in: .circle)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        withAnimation(.snappy) {
-                            showRowIndicator.toggle()
-                        }
-                    } label: {
-                        Image(systemName: showRowIndicator ? "arrow.left.and.right.circle.fill" : "arrow.left.and.right.circle")
-                            .font(.title3)
-                            .frame(width: 44, height: 44)
-                            .background(.ultraThinMaterial, in: .circle)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(12)
+                mapControls
+                    .padding(12)
 
                 if showRowIndicator, canShowRowSides {
                     rowIndicatorOverlay
@@ -454,6 +432,24 @@ struct ActiveTripView: View {
         }
         .onMapCameraChange { _ in
             isFollowingUser = false
+            // User dragged the map → drop out of follow/navigation modes
+            // so we don't fight their gesture.
+            if mapMode != .free {
+                // Only react to gesture-initiated changes, not our own
+                // programmatic camera updates. The throttle below ensures
+                // navigation-mode auto updates don't immediately flip us
+                // back to free mode.
+                let now = Date()
+                if now.timeIntervalSince(lastNavCameraUpdate) > 0.6 {
+                    mapMode = .free
+                }
+            }
+        }
+        .onChange(of: locationService.location?.timestamp) { _, _ in
+            updateNavigationCameraIfNeeded()
+        }
+        .onChange(of: mapMode) { _, newMode in
+            applyMapMode(newMode)
         }
         .overlay(alignment: .top) {
             if showDiagnosticsToast {
@@ -467,6 +463,185 @@ struct ActiveTripView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .top) {
+            if noGpsToast {
+                Text("GPS unavailable")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.9), in: Capsule())
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    // MARK: - Map controls
+
+    /// Stacked map control column. Three actions, all designed for one-tap
+    /// use in a bouncing tractor: recenter, zoom-to-tractor (close), and
+    /// heading-up navigation mode.
+    private var mapControls: some View {
+        VStack(spacing: 8) {
+            mapControlButton(
+                systemImage: isFollowingUser && mapMode == .free ? "location.fill" : "location",
+                tint: isFollowingUser && mapMode == .free ? Color.accentColor : .primary
+            ) {
+                guard ensureGpsAvailable() else { return }
+                isFollowingUser = true
+                mapMode = .free
+                withAnimation(.snappy) {
+                    position = .userLocation(fallback: .automatic)
+                }
+            }
+
+            mapControlButton(
+                systemImage: "scope",
+                tint: mapMode == .zoomed ? Color.accentColor : .primary
+            ) {
+                mapMode = .zoomed
+            }
+
+            mapControlButton(
+                systemImage: mapMode == .navigation ? "location.north.line.fill" : "location.north.line",
+                tint: mapMode == .navigation ? Color.accentColor : .primary
+            ) {
+                mapMode = .navigation
+            }
+
+            mapControlButton(
+                systemImage: showRowIndicator ? "arrow.left.and.right.circle.fill" : "arrow.left.and.right.circle",
+                tint: .primary
+            ) {
+                withAnimation(.snappy) { showRowIndicator.toggle() }
+            }
+        }
+    }
+
+    private func mapControlButton(systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(tint)
+                .frame(width: 44, height: 44)
+                .background(.ultraThinMaterial, in: .circle)
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: tint)
+    }
+
+    private func ensureGpsAvailable() -> Bool {
+        if locationService.location != nil { return true }
+        withAnimation(.snappy) { noGpsToast = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(.snappy) { noGpsToast = false }
+        }
+        return false
+    }
+
+    /// Apply the camera state for a newly chosen map mode. Free mode is
+    /// no-op (we leave whatever the user has). Zoomed mode snaps to a
+    /// close top-down view of the live GPS. Navigation mode kicks off
+    /// the first heading-up camera; subsequent updates flow through
+    /// `updateNavigationCameraIfNeeded`.
+    private func applyMapMode(_ mode: MapFollowMode) {
+        switch mode {
+        case .free:
+            isFollowingUser = false
+        case .zoomed:
+            guard ensureGpsAvailable(), let loc = locationService.location else { return }
+            isFollowingUser = true
+            lastNavCameraUpdate = Date()
+            withAnimation(.easeInOut(duration: 0.4)) {
+                position = .camera(MapCamera(
+                    centerCoordinate: loc.coordinate,
+                    distance: 120,
+                    heading: 0,
+                    pitch: 0
+                ))
+            }
+        case .navigation:
+            guard ensureGpsAvailable(), let loc = locationService.location else { return }
+            isFollowingUser = true
+            lastNavCameraUpdate = Date()
+            let course = bestCourse(for: loc) ?? 0
+            smoothedCourse = course
+            withAnimation(.easeInOut(duration: 0.5)) {
+                position = .camera(MapCamera(
+                    centerCoordinate: loc.coordinate,
+                    distance: 180,
+                    heading: course,
+                    pitch: 55
+                ))
+            }
+        }
+    }
+
+    /// Refresh the camera while in zoomed/navigation mode. Throttled to
+    /// ~3Hz so MapKit isn't asked to animate on every CLLocation tick,
+    /// which causes jitter and battery drain.
+    private func updateNavigationCameraIfNeeded() {
+        guard mapMode != .free, let loc = locationService.location else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastNavCameraUpdate) > 0.33 else { return }
+        lastNavCameraUpdate = now
+
+        switch mapMode {
+        case .free:
+            return
+        case .zoomed:
+            withAnimation(.linear(duration: 0.3)) {
+                position = .camera(MapCamera(
+                    centerCoordinate: loc.coordinate,
+                    distance: 120,
+                    heading: 0,
+                    pitch: 0
+                ))
+            }
+        case .navigation:
+            // Use GPS course (movement-derived) over device compass —
+            // the iPad/iPhone may not be mounted straight in the cab.
+            // Fall back to the locked travel bearing the trip already
+            // tracks for row labels, then to whatever course MapKit had.
+            let raw = bestCourse(for: loc)
+            let target = raw ?? smoothedCourse ?? 0
+            // Circular EMA so the camera doesn't snap on every tick.
+            let prev = smoothedCourse ?? target
+            let blended = blendBearings(prev: prev, next: target, alpha: 0.25)
+            smoothedCourse = blended
+            withAnimation(.linear(duration: 0.3)) {
+                position = .camera(MapCamera(
+                    centerCoordinate: loc.coordinate,
+                    distance: 180,
+                    heading: blended,
+                    pitch: 55
+                ))
+            }
+        }
+    }
+
+    /// Pick the best available bearing for navigation-mode camera. Prefer
+    /// CLLocation.course when valid (≥0 and speed above the GPS noise
+    /// floor), then fall back to the bearing locked from row movement.
+    private func bestCourse(for loc: CLLocation) -> Double? {
+        if loc.course >= 0, loc.speed > 0.6 { return loc.course }
+        return lockedTravelBearing
+    }
+
+    /// Exponential moving average over circular degrees so we cross the
+    /// 0/360 boundary smoothly instead of spinning the camera around.
+    private func blendBearings(prev: Double, next: Double, alpha: Double) -> Double {
+        let prevRad = prev * .pi / 180
+        let nextRad = next * .pi / 180
+        let x = (1 - alpha) * cos(prevRad) + alpha * cos(nextRad)
+        let y = (1 - alpha) * sin(prevRad) + alpha * sin(nextRad)
+        var deg = atan2(y, x) * 180 / .pi
+        if deg < 0 { deg += 360 }
+        return deg
     }
 
     // MARK: - Diagnostics
@@ -753,6 +928,12 @@ struct ActiveTripView: View {
     }
 
     // MARK: - Map
+
+    enum MapFollowMode: Equatable {
+        case free
+        case zoomed
+        case navigation
+    }
 
     private var mapView: some View {
         Map(position: $position) {
