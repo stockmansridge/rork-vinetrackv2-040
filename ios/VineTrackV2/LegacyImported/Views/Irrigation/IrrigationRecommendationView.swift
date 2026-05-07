@@ -34,6 +34,10 @@ struct IrrigationRecommendationView: View {
     // one-tap path to set up rainfall sources.
     @State private var showWeatherWizard: Bool = false
     @State private var wuStationConfigured: Bool = false
+
+    // Missing rain data helper sheet — surfaced when the selected
+    // actual-rain window contains no-data days.
+    @State private var showMissingRainHelper: Bool = false
     @State private var didLoadWeatherWizardStatus: Bool = false
     private let wizardIntegrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -336,6 +340,19 @@ struct IrrigationRecommendationView: View {
             }
             .padding(.vertical, 4)
         }
+        .sheet(isPresented: $showMissingRainHelper, onDismiss: {
+            // Refresh persisted rainfall after the helper closes so the
+            // recommendation card and source labels reflect any new rows.
+            Task { await loadRecentRainfall() }
+        }) {
+            IrrigationMissingRainHelperSheet(
+                vineyardId: store.selectedVineyardId,
+                rainfallWindowDays: recentRainDays,
+                onCompleted: {
+                    Task { await loadRecentRainfall() }
+                }
+            )
+        }
         .sheet(isPresented: $showWeatherSettings) {
             NavigationStack {
                 WeatherDataSettingsView()
@@ -500,6 +517,7 @@ struct IrrigationRecommendationView: View {
                     Text("\(recentRainNoDataDays) day\(recentRainNoDataDays == 1 ? "" : "s") in this window have no recorded rainfall (treated as 0 mm in the deficit calculation).")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    missingRainHelperPrompt
                 }
 
                 Toggle(isOn: $includeRecentActualRain) {
@@ -518,6 +536,32 @@ struct IrrigationRecommendationView: View {
             .padding(.vertical, 4)
         } header: {
             Text("Recent Actual Rainfall")
+        }
+    }
+
+    @ViewBuilder
+    private var missingRainHelperPrompt: some View {
+        if accessControl.canChangeSettings {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Some rainfall days are missing. VineTrack can try Davis, Weather Underground, then Open-Meteo for remaining gaps.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    showMissingRainHelper = true
+                } label: {
+                    Label("Missing rain data? Fill gaps", systemImage: "cloud.rain.fill")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.orange)
+            }
+            .padding(.top, 2)
+        } else {
+            Text("Ask an Owner or Manager to fill missing rainfall data.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
