@@ -66,6 +66,7 @@ struct WeatherDataSettingsView: View {
     @State private var isBackfillingWu: Bool = false
     @State private var isClearingWu: Bool = false
     @State private var showWuStationPicker: Bool = false
+    @State private var showSetupWizard: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -138,6 +139,7 @@ struct WeatherDataSettingsView: View {
 
     var body: some View {
         Form {
+            if canEdit { wizardSection }
             headerSection
             if showMigratePrompt && canEdit { migrationPromptSection }
             if let msg = migrationMessage, !msg.isEmpty {
@@ -181,6 +183,11 @@ struct WeatherDataSettingsView: View {
             if let vid = vineyardId {
                 Task { await loadWuIntegration(for: vid) }
             }
+        }
+        .sheet(isPresented: $showSetupWizard) {
+            WeatherSetupWizardView()
+                .environment(store)
+                .environment(accessControl)
         }
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
@@ -251,6 +258,37 @@ struct WeatherDataSettingsView: View {
     }
 
     // MARK: - Sections
+
+    private var wizardSection: some View {
+        Section {
+            Button {
+                showSetupWizard = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(LinearGradient(colors: [.blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing), in: .rect(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Weather Setup Wizard")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Guided setup for Davis, Weather Underground and rainfall history")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
 
     private var headerSection: some View {
         Section {
