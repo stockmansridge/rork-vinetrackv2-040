@@ -60,6 +60,7 @@ struct WeatherSetupWizardView: View {
     @State private var wuSkipped: Bool = false
 
     // Open-Meteo state
+    @State private var showBuildHistorySheet: Bool = false
     @State private var isBackfillingOpenMeteo: Bool = false
     @State private var openMeteoStatus: String?
     @State private var openMeteoOk: Bool = false
@@ -146,6 +147,18 @@ struct WeatherSetupWizardView: View {
                         Task { await loadWu(for: vid) }
                     }
                 }
+            }
+            .sheet(isPresented: $showBuildHistorySheet) {
+                IrrigationMissingRainHelperSheet(
+                    vineyardId: vineyardId,
+                    rainfallWindowDays: 14,
+                    onCompleted: {
+                        NotificationCenter.default.post(
+                            name: .rainfallCalendarShouldReload, object: nil
+                        )
+                    }
+                )
+                .environment(accessControl)
             }
         }
         .onAppear {
@@ -500,6 +513,43 @@ struct WeatherSetupWizardView: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.08), in: .rect(cornerRadius: 10))
+
+            if canEdit {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "calendar.badge.clock")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.indigo)
+                            .frame(width: 32, height: 32)
+                            .background(Color.indigo.opacity(0.15), in: .rect(cornerRadius: 8))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Build full 365-day rainfall history")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Optional. Runs Davis → Weather Underground → Open-Meteo to fill the past year.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    Text("Open-Meteo only fills days still missing after Manual, Davis and Weather Underground records.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        showBuildHistorySheet = true
+                    } label: {
+                        Label("Build 365-day rainfall history", systemImage: "cloud.rain.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
+                    .disabled(vineyardId == nil)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.indigo.opacity(0.06), in: .rect(cornerRadius: 12))
+            }
         }
     }
 

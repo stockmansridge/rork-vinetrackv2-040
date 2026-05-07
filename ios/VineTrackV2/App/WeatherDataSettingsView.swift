@@ -71,6 +71,8 @@ struct WeatherDataSettingsView: View {
     @State private var isBackfillingOpenMeteo: Bool = false
     @State private var openMeteoBackfillStatus: String?
     @State private var openMeteoBackfillOk: Bool = false
+    // MARK: - Build 365-day rainfall history (chunked Davis → WU → Open-Meteo)
+    @State private var showBuildHistorySheet: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -169,6 +171,7 @@ struct WeatherDataSettingsView: View {
             weatherUndergroundVineyardSection
 
             if canEdit {
+                buildRainfallHistorySection
                 openMeteoFallbackSection
             }
 
@@ -196,6 +199,18 @@ struct WeatherDataSettingsView: View {
             WeatherSetupWizardView()
                 .environment(store)
                 .environment(accessControl)
+        }
+        .sheet(isPresented: $showBuildHistorySheet) {
+            IrrigationMissingRainHelperSheet(
+                vineyardId: vineyardId,
+                rainfallWindowDays: 14,
+                onCompleted: {
+                    NotificationCenter.default.post(
+                        name: .rainfallCalendarShouldReload, object: nil
+                    )
+                }
+            )
+            .environment(accessControl)
         }
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
@@ -1143,6 +1158,39 @@ struct WeatherDataSettingsView: View {
             Text("Davis diagnostics")
         } footer: {
             Text("Non-secret status only. Used to verify Davis WeatherLink persistence and parser detection in the field. API key, secret and credential-bearing URLs are never shown, copied or logged.")
+        }
+    }
+
+    // MARK: - Build 365-day rainfall history
+
+    private var buildRainfallHistorySection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.subheadline)
+                    .foregroundStyle(.indigo)
+                    .frame(width: 22)
+                Text("Build up to 365 days of rainfall history using the best available sources. VineTrack will try Davis first, then Weather Underground, then Open-Meteo for remaining gaps. Manual records are never overwritten.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+
+            Button {
+                showBuildHistorySheet = true
+            } label: {
+                Label("Build 365-day rainfall history", systemImage: "cloud.rain.fill")
+            }
+            .disabled(vineyardId == nil)
+
+            Text("Runs Davis (60-day chunks) → Weather Underground (30-day chunks) → Open-Meteo gap fill. Open-Meteo only fills days still missing after Manual, Davis and Weather Underground records. Resume support is preserved if a station source is rate-limited.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Build rainfall history")
+        } footer: {
+            Text("Use this for full historical fill. The 14-day quick backfill buttons above are still available for fast top-ups during setup.")
         }
     }
 
