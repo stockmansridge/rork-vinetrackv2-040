@@ -136,6 +136,21 @@ struct SyncDiagnosticsView: View {
                 if let result = lastRepushNamesResult {
                     repushNamesSummaryView(result)
                 }
+
+                Button {
+                    Task { await runTripSyncAudit() }
+                } label: {
+                    HStack {
+                        Label(isAuditingTripSync ? "Auditing…" : "Audit trip sync (selected vineyard)", systemImage: "checklist")
+                        Spacer()
+                        if isAuditingTripSync { ProgressView() }
+                    }
+                }
+                .disabled(isAuditingTripSync || !auth.isSignedIn || store.selectedVineyardId == nil)
+
+                if let audit = lastTripSyncAudit {
+                    tripSyncAuditView(audit)
+                }
             } header: {
                 Text("Trip Repair")
             } footer: {
@@ -197,9 +212,10 @@ struct SyncDiagnosticsView: View {
                 metric("Local", value: "\(audit.localForVineyard)")
                 metric("Remote", value: "\(audit.remoteForVineyard)")
                 metric("Local-only", value: "\(audit.localOnlyIds.count)", highlight: !audit.localOnlyIds.isEmpty)
-                metric("Mismatch", value: "\(audit.localVineyardMismatch.count)", highlight: !audit.localVineyardMismatch.isEmpty)
+                metric("Orphans", value: "\(audit.localVineyardMismatch.count)", highlight: !audit.localVineyardMismatch.isEmpty)
             }
             HStack(spacing: 14) {
+                metric("All local", value: "\(audit.localAcrossAllVineyards)")
                 metric("Pending", value: "\(tripSync.pendingUpsertCount)", highlight: tripSync.pendingUpsertCount > 0)
                 metric("Soft-deleted", value: "\(audit.remoteSoftDeleted)")
                 metric("Remote no-name", value: "\(audit.remoteMissingFunction)", highlight: audit.remoteMissingFunction > 0)
@@ -209,12 +225,18 @@ struct SyncDiagnosticsView: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
             }
-            if !audit.localOnlyIds.isEmpty {
-                DisclosureGroup("Local-only trips (\(audit.localOnlyIds.count))") {
-                    ForEach(audit.localOnlyIds, id: \.self) { id in
-                        Text(id.uuidString)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
+            if !audit.localOnlyDetails.isEmpty {
+                DisclosureGroup("Local-only trips (\(audit.localOnlyDetails.count))") {
+                    ForEach(audit.localOnlyDetails) { d in
+                        localTripDetailRow(d)
+                    }
+                }
+                .font(.footnote)
+            }
+            if !audit.orphanLocalDetails.isEmpty {
+                DisclosureGroup("Orphan local trips — wrong vineyard (\(audit.orphanLocalDetails.count))") {
+                    ForEach(audit.orphanLocalDetails) { d in
+                        localTripDetailRow(d)
                     }
                 }
                 .font(.footnote)
@@ -226,6 +248,38 @@ struct SyncDiagnosticsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func localTripDetailRow(_ d: TripSyncService.LocalTripDetail) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(d.function ?? d.title ?? "(no name)")
+                    .font(.caption.weight(.semibold))
+                if let s = d.startTime {
+                    Text(s.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if let p = d.paddockName, !p.isEmpty {
+                Text("paddocks: \(p)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("trip_id: \(d.id.uuidString)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+            Text("vineyard_id: \(d.localVineyardId.uuidString)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+            if d.inferredFromPaddocks, let inferred = d.inferredVineyardId, inferred != d.localVineyardId {
+                Text("→ paddocks resolve to: \(inferred.uuidString)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     private func runTripSyncAudit() async {
@@ -256,13 +310,33 @@ struct SyncDiagnosticsView: View {
             HStack(spacing: 14) {
                 metric("Scanned", value: "\(result.scanned)")
                 metric("With name", value: "\(result.withFunctionOrTitle)")
-                metric("Marked", value: "\(result.markedForUpload)", highlight: result.markedForUpload > 0)
+                metric("Repaired", value: "\(result.repairedFromPaddocks)", highlight: result.repairedFromPaddocks > 0)
                 metric("Pushed", value: "\(result.pushed)", highlight: result.pushed > 0)
+            }
+            HStack(spacing: 14) {
+                metric("Already OK", value: "\(result.alreadyAssigned)")
+                metric("Marked", value: "\(result.markedForUpload)", highlight: result.markedForUpload > 0)
+                metric("Skipped", value: "\(result.skipped.count)", highlight: !result.skipped.isEmpty)
             }
             if let err = result.error, !err.isEmpty {
                 Text("Error: \(err)")
                     .font(.caption2)
                     .foregroundStyle(.red)
+            }
+            if !result.skipped.isEmpty {
+                DisclosureGroup("Skipped trips (\(result.skipped.count))") {
+                    ForEach(Array(result.skipped.enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.tripId.uuidString)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                            Text(item.reason)
+                                .font(.caption2)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .font(.footnote)
             }
         }
         .padding(.vertical, 4)
@@ -484,9 +558,56 @@ struct SyncDiagnosticsView: View {
             }
             lines.append("  scanned: \(result.scanned)")
             lines.append("  with_function_or_title: \(result.withFunctionOrTitle)")
+            lines.append("  already_assigned: \(result.alreadyAssigned)")
+            lines.append("  repaired_from_paddocks: \(result.repairedFromPaddocks)")
             lines.append("  marked_for_upload: \(result.markedForUpload)")
             lines.append("  pushed: \(result.pushed)")
+            lines.append("  skipped: \(result.skipped.count)")
+            for item in result.skipped {
+                lines.append("    - \(item.tripId.uuidString): \(item.reason)")
+            }
             if let err = result.error, !err.isEmpty {
+                lines.append("  error: \(err)")
+            }
+        }
+        if let audit = lastTripSyncAudit {
+            lines.append("")
+            lines.append("Trip Sync Audit (selected vineyard)")
+            if let at = audit.ranAt {
+                lines.append("  ran_at: \(df.string(from: at))")
+            }
+            lines.append("  local_for_vineyard: \(audit.localForVineyard)")
+            lines.append("  local_across_all_vineyards: \(audit.localAcrossAllVineyards)")
+            lines.append("  remote_for_vineyard: \(audit.remoteForVineyard)")
+            lines.append("  remote_soft_deleted: \(audit.remoteSoftDeleted)")
+            lines.append("  remote_missing_name: \(audit.remoteMissingFunction)")
+            lines.append("  pending_upserts: \(audit.pendingUpsertIds.count)")
+            lines.append("  pending_deletes: \(audit.pendingDeleteIds.count)")
+            lines.append("  local_vineyard_mismatch: \(audit.localVineyardMismatch.count)")
+            lines.append("  local_only: \(audit.localOnlyIds.count)")
+            for d in audit.localOnlyDetails {
+                let label = d.function ?? d.title ?? "(no name)"
+                let when = d.startTime.map { df.string(from: $0) } ?? "-"
+                lines.append("    - LOCAL_ONLY \(d.id.uuidString) \"\(label)\" \(when)")
+                if let p = d.paddockName, !p.isEmpty { lines.append("        paddocks: \(p)") }
+                lines.append("        paddock_ids: [\(d.paddockIds.map { $0.uuidString }.joined(separator: ","))]")
+                lines.append("        vineyard_id: \(d.localVineyardId.uuidString)")
+                if d.inferredFromPaddocks, let inferred = d.inferredVineyardId, inferred != d.localVineyardId {
+                    lines.append("        paddocks_resolve_to: \(inferred.uuidString)")
+                }
+            }
+            for d in audit.orphanLocalDetails {
+                let label = d.function ?? d.title ?? "(no name)"
+                let when = d.startTime.map { df.string(from: $0) } ?? "-"
+                lines.append("    - ORPHAN \(d.id.uuidString) \"\(label)\" \(when)")
+                if let p = d.paddockName, !p.isEmpty { lines.append("        paddocks: \(p)") }
+                lines.append("        paddock_ids: [\(d.paddockIds.map { $0.uuidString }.joined(separator: ","))]")
+                lines.append("        vineyard_id: \(d.localVineyardId.uuidString)")
+                if d.inferredFromPaddocks, let inferred = d.inferredVineyardId, inferred != d.localVineyardId {
+                    lines.append("        paddocks_resolve_to: \(inferred.uuidString)")
+                }
+            }
+            if let err = audit.error, !err.isEmpty {
                 lines.append("  error: \(err)")
             }
         }

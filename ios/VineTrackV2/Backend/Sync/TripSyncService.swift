@@ -101,15 +101,33 @@ final class TripSyncService {
         var syncError: String?
     }
 
+    nonisolated struct LocalTripDetail: Sendable, Identifiable {
+        var id: UUID
+        var title: String?
+        var function: String?
+        var startTime: Date?
+        var paddockName: String?
+        var paddockIds: [UUID]
+        var localVineyardId: UUID
+        var inferredVineyardId: UUID?
+        var inferredFromPaddocks: Bool
+        var matchesSelectedVineyard: Bool
+    }
+
     nonisolated struct AuditResult: Sendable {
         var ranAt: Date?
         var localTotal: Int = 0
+        var localAcrossAllVineyards: Int = 0
         var localForVineyard: Int = 0
         var remoteForVineyard: Int = 0
         var remoteSoftDeleted: Int = 0
         var localOnlyIds: [UUID] = []
         var localOnlyMissingFunction: [UUID] = []
         var localVineyardMismatch: [UUID] = []
+        var localOnlyDetails: [LocalTripDetail] = []
+        var orphanLocalDetails: [LocalTripDetail] = []
+        var pendingUpsertIds: [UUID] = []
+        var pendingDeleteIds: [UUID] = []
         var remoteMissingFunction: Int = 0
         var error: String?
     }
@@ -120,18 +138,29 @@ final class TripSyncService {
         var ranAt: Date?
         var scanned: Int = 0
         var withFunctionOrTitle: Int = 0
+        var alreadyAssigned: Int = 0
+        var repairedFromPaddocks: Int = 0
         var markedForUpload: Int = 0
         var pushed: Int = 0
+        var skipped: [(tripId: UUID, reason: String)] = []
         var error: String?
     }
 
     var lastRepushNamesResult: RepushNamesResult = RepushNamesResult()
 
-    /// Mark every local trip for the selected vineyard that has a
-    /// `tripFunction` or `tripTitle` as dirty, then push to Supabase.
-    /// Used after running `sql/023_trips_function_title.sql` so existing
-    /// rows can have their trip name backfilled. Does not alter
-    /// `vineyardId`, `paddockId`, `paddockIds`, path data or status.
+    /// Scan **all** locally persisted trips (not just the selected vineyard
+    /// slice) that carry a `tripFunction` or `tripTitle`, attempt to assign
+    /// them to the currently selected vineyard, mark them dirty and push.
+    ///
+    /// Behaviour:
+    /// - Trips already assigned to `vineyardId` are marked dirty and pushed.
+    /// - Trips with a different/missing `vineyardId` are repaired only when
+    ///   every paddock on the trip resolves to the selected vineyard.
+    /// - Trips that cannot be safely assigned are listed in `skipped`.
+    ///
+    /// Used after running `sql/023_trips_function_title.sql` so existing rows
+    /// can have their trip name backfilled, and as a recovery path for older
+    /// local trips with stale vineyardId that never reached Supabase.
     func repushTripNames(vineyardId: UUID) async -> RepushNamesResult {
         var result = RepushNamesResult()
         result.ranAt = Date()
@@ -142,16 +171,58 @@ final class TripSyncService {
             return result
         }
 
-        let snapshot = store.trips.filter { $0.vineyardId == vineyardId }
-        result.scanned = snapshot.count
+        // Scan ALL persisted trips, not just the selected-vineyard slice.
+        let allTrips = store.tripRepo.loadAll()
+        result.scanned = allTrips.count
+
+        let paddockVineyard = Dictionary(
+            store.paddocks.map { ($0.id, $0.vineyardId) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         var idsToPush: [UUID] = []
         let now = Date()
-        for trip in snapshot {
+        for trip in allTrips {
             let hasFn = !(trip.tripFunction?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
             let hasTitle = !(trip.tripTitle?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
             guard hasFn || hasTitle else { continue }
             result.withFunctionOrTitle += 1
+
+            if trip.vineyardId == vineyardId {
+                result.alreadyAssigned += 1
+                metadata.markDirty(trip.id, at: now)
+                idsToPush.append(trip.id)
+                continue
+            }
+
+            // Try to repair from paddock ownership.
+            if trip.paddockIds.isEmpty {
+                result.skipped.append((trip.id, "no paddocks — cannot infer vineyard"))
+                continue
+            }
+            let resolved = trip.paddockIds.compactMap { paddockVineyard[$0] }
+            if resolved.count != trip.paddockIds.count {
+                result.skipped.append((trip.id, "paddock(s) missing locally — cannot infer vineyard"))
+                continue
+            }
+            let unique = Set(resolved)
+            if unique.count > 1 {
+                result.skipped.append((trip.id, "paddocks span multiple vineyards"))
+                continue
+            }
+            guard let only = unique.first else {
+                result.skipped.append((trip.id, "could not resolve vineyard"))
+                continue
+            }
+            if only != vineyardId {
+                result.skipped.append((trip.id, "paddocks belong to another vineyard (\(only))"))
+                continue
+            }
+            // Safe to repair: rewrite vineyardId and persist via store.
+            var repaired = trip
+            repaired.vineyardId = vineyardId
+            store.applyRemoteTripUpsert(repaired)
+            result.repairedFromPaddocks += 1
             metadata.markDirty(trip.id, at: now)
             idsToPush.append(trip.id)
         }
@@ -174,6 +245,9 @@ final class TripSyncService {
     /// Compare local trips against Supabase for the selected vineyard so the
     /// user can see whether locally-visible trips (e.g. "Harrowing") have
     /// reached the backend. Read-only — does not push or repair.
+    ///
+    /// Scans **every** persisted local trip (not just the selected slice) so
+    /// trips with stale or missing vineyardId are surfaced as orphans.
     func auditTripSync(vineyardId: UUID) async -> AuditResult {
         var result = AuditResult()
         result.ranAt = Date()
@@ -184,16 +258,60 @@ final class TripSyncService {
             return result
         }
 
-        let local = store.trips
+        let allLocal = store.tripRepo.loadAll()
+        let local = store.trips // selected-vineyard slice
         result.localTotal = local.count
-        let localForVineyard = local.filter { $0.vineyardId == vineyardId }
+        result.localAcrossAllVineyards = allLocal.count
+
+        let paddockVineyard = Dictionary(
+            store.paddocks.map { ($0.id, $0.vineyardId) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let paddockNames = Dictionary(
+            store.paddocks.map { ($0.id, $0.name) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let localForVineyard = allLocal.filter { $0.vineyardId == vineyardId }
         result.localForVineyard = localForVineyard.count
-        result.localVineyardMismatch = local
+        result.localVineyardMismatch = allLocal
             .filter { $0.vineyardId != vineyardId }
             .map { $0.id }
         result.localOnlyMissingFunction = localForVineyard
             .filter { ($0.tripFunction?.isEmpty ?? true) && ($0.tripTitle?.isEmpty ?? true) }
             .map { $0.id }
+        result.pendingUpsertIds = Array(metadata.pendingUpserts.keys)
+        result.pendingDeleteIds = Array(metadata.pendingDeletes.keys)
+
+        func detail(for trip: Trip) -> LocalTripDetail {
+            let resolved = trip.paddockIds.compactMap { paddockVineyard[$0] }
+            let unique = Set(resolved)
+            let inferred: UUID? = (resolved.count == trip.paddockIds.count && unique.count == 1) ? unique.first : nil
+            let names: String? = {
+                let n = trip.paddockIds.compactMap { paddockNames[$0] }
+                if n.isEmpty { return trip.paddockName.isEmpty ? nil : trip.paddockName }
+                return n.joined(separator: ", ")
+            }()
+            return LocalTripDetail(
+                id: trip.id,
+                title: trip.tripTitle,
+                function: trip.tripFunction,
+                startTime: trip.startTime,
+                paddockName: names,
+                paddockIds: trip.paddockIds,
+                localVineyardId: trip.vineyardId,
+                inferredVineyardId: inferred,
+                inferredFromPaddocks: inferred != nil,
+                matchesSelectedVineyard: trip.vineyardId == vineyardId
+            )
+        }
+
+        // Orphans: local trips with vineyardId that doesn't match selected.
+        result.orphanLocalDetails = allLocal
+            .filter { $0.vineyardId != vineyardId }
+            .sorted { ($0.startTime) > ($1.startTime) }
+            .prefix(50)
+            .map { detail(for: $0) }
 
         do {
             let remote = try await repository.fetchAllTrips(vineyardId: vineyardId)
@@ -201,9 +319,12 @@ final class TripSyncService {
             result.remoteForVineyard = active.count
             result.remoteSoftDeleted = remote.count - active.count
             let remoteIds = Set(active.map { $0.id })
-            result.localOnlyIds = localForVineyard
-                .filter { !remoteIds.contains($0.id) }
-                .map { $0.id }
+            let localOnly = localForVineyard.filter { !remoteIds.contains($0.id) }
+            result.localOnlyIds = localOnly.map { $0.id }
+            result.localOnlyDetails = localOnly
+                .sorted { ($0.startTime) > ($1.startTime) }
+                .prefix(50)
+                .map { detail(for: $0) }
             result.remoteMissingFunction = active.reduce(0) { acc, t in
                 let hasFn = !(t.tripFunction?.isEmpty ?? true) || !(t.tripTitle?.isEmpty ?? true)
                 return acc + (hasFn ? 0 : 1)
