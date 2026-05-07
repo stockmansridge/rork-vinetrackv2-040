@@ -16,7 +16,9 @@
 //     "stationId"?: string,            // for current / historic / backfill
 //     "startEpoch"?: number,           // for historic, seconds
 //     "endEpoch"?: number,             // for historic, seconds
-//     "days"?: number,                 // for backfill_rainfall (default 14, max 60)
+//     "days"?: number,                 // for backfill_rainfall: target window 1..365 (default 14)
+//     "offsetDays"?: number,           // skip first N days from yesterday (default 0)
+//     "chunkDays"?: number,            // process at most N days this call (default 60, max 60)
 //     "timezone"?: string,             // IANA tz, default 'Australia/Sydney'
 //     "apiKey"?: string,               // for "test" only (owner/manager)
 //     "apiSecret"?: string             // for "test" only (owner/manager)
@@ -54,7 +56,10 @@ const DAVIS_BASE = "https://api.weatherlink.com/v2";
 // which deployed code is actually serving requests. Surfaced in the
 // `_proxy.version` field of `current` responses and in the top-level
 // `version` field of every JSON response.
-const PROXY_VERSION = "rainfall-diagnostics-2026-05-07";
+const PROXY_VERSION = "chunked-backfill-2026-05-07";
+const BACKFILL_MAX_DAYS = 365;
+const BACKFILL_MAX_CHUNK = 60;
+const BACKFILL_DEFAULT_CHUNK = 60;
 
 // ---------------------------------------------------------------------------
 // Vineyard-local date helper.
@@ -584,8 +589,16 @@ Deno.serve(async (req: Request) => {
       if (!stationId) return json({ error: "stationId required" }, 400);
       const requestedDays = Number(body.days);
       const days = isFinite(requestedDays) && requestedDays > 0
-        ? Math.min(60, Math.floor(requestedDays))
+        ? Math.min(BACKFILL_MAX_DAYS, Math.floor(requestedDays))
         : 14;
+      const requestedOffset = Number(body.offsetDays);
+      const offsetDays = isFinite(requestedOffset) && requestedOffset > 0
+        ? Math.min(BACKFILL_MAX_DAYS, Math.floor(requestedOffset))
+        : 0;
+      const requestedChunk = Number(body.chunkDays);
+      const chunkDays = isFinite(requestedChunk) && requestedChunk > 0
+        ? Math.min(BACKFILL_MAX_CHUNK, Math.floor(requestedChunk))
+        : BACKFILL_DEFAULT_CHUNK;
       const timezone = typeof body.timezone === "string" && body.timezone
         ? body.timezone
         : "Australia/Sydney";
@@ -596,11 +609,17 @@ Deno.serve(async (req: Request) => {
       const todayLocal = localDateString(new Date(), timezone);
       const todayMidnightUtc = localMidnightUtc(todayLocal, timezone);
 
+      // Process the slice [offsetDays+1 .. endIndex] of the target window.
+      const startIndex = offsetDays + 1;
+      const endIndex = Math.min(days, offsetDays + chunkDays);
+      const sliceLength = Math.max(0, endIndex - startIndex + 1);
+
       let processed = 0;
       let upserted = 0;
+      let rateLimited = false;
       const errors: string[] = [];
 
-      for (let i = 1; i <= days; i++) {
+      for (let i = startIndex; i <= endIndex; i++) {
         const endUtc = new Date(todayMidnightUtc.getTime() - (i - 1) * 86400000);
         const startUtc = new Date(endUtc.getTime() - 86400000);
         const startEpoch = Math.floor(startUtc.getTime() / 1000);
@@ -614,6 +633,7 @@ Deno.serve(async (req: Request) => {
         );
         if (r.status === 429) {
           errors.push("rate_limited");
+          rateLimited = true;
           break;
         }
         if (r.status < 200 || r.status >= 300) {
@@ -661,13 +681,24 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      const reachedEnd = endIndex >= days;
+      const more = !reachedEnd && !rateLimited;
+      const nextOffsetDays = more ? endIndex : null;
+
       return json({
         success: errors.length === 0,
         days_requested: days,
         days_processed: processed,
         rows_upserted: upserted,
+        offset_days: offsetDays,
+        chunk_days: chunkDays,
+        slice_length: sliceLength,
+        next_offset_days: nextOffsetDays,
+        more,
+        rate_limited: rateLimited,
         timezone,
         errors_count: errors.length,
+        proxy_version: PROXY_VERSION,
       });
     }
 

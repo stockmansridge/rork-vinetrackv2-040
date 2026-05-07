@@ -14,7 +14,9 @@
 //     "vineyardId": "<uuid>",
 //     "action": "backfill_rainfall",
 //     "stationId"?: string,            // optional override
-//     "days"?: number,                 // default 14, max 60
+//     "days"?: number,                 // target window 1..365 (default 14)
+//     "offsetDays"?: number,           // skip first N days from yesterday (default 0)
+//     "chunkDays"?: number,            // process at most N days this call (default 30, max 30)
 //     "timezone"?: string              // IANA tz, default 'Australia/Sydney'
 //   }
 //
@@ -41,7 +43,10 @@ const CORS: Record<string, string> = {
 };
 
 const WU_BASE = "https://api.weather.com";
-const PROXY_VERSION = "wunderground-backfill-2026-05-07";
+const PROXY_VERSION = "wunderground-chunked-backfill-2026-05-07";
+const BACKFILL_MAX_DAYS = 365;
+const BACKFILL_MAX_CHUNK = 30;
+const BACKFILL_DEFAULT_CHUNK = 30;
 
 function json(body: unknown, status = 200): Response {
   let payload: unknown = body;
@@ -206,8 +211,16 @@ Deno.serve(async (req: Request) => {
 
       const requestedDays = Number(body.days);
       const days = isFinite(requestedDays) && requestedDays > 0
-        ? Math.min(60, Math.floor(requestedDays))
+        ? Math.min(BACKFILL_MAX_DAYS, Math.floor(requestedDays))
         : 14;
+      const requestedOffset = Number(body.offsetDays);
+      const offsetDays = isFinite(requestedOffset) && requestedOffset > 0
+        ? Math.min(BACKFILL_MAX_DAYS, Math.floor(requestedOffset))
+        : 0;
+      const requestedChunk = Number(body.chunkDays);
+      const chunkDays = isFinite(requestedChunk) && requestedChunk > 0
+        ? Math.min(BACKFILL_MAX_CHUNK, Math.floor(requestedChunk))
+        : BACKFILL_DEFAULT_CHUNK;
       const timezone = typeof body.timezone === "string" && body.timezone
         ? body.timezone
         : "Australia/Sydney";
@@ -220,11 +233,16 @@ Deno.serve(async (req: Request) => {
       let processed = 0;
       let upserted = 0;
       let errorsCount = 0;
+      let rateLimited = false;
 
-      // Iterate from yesterday backwards. Skip today: WU daily summary
-      // for an in-progress day is incomplete and would later need to
-      // be overwritten.
-      for (let i = 1; i <= days; i++) {
+      // Process slice [offsetDays+1 .. endIndex] from yesterday backwards.
+      // Skip today: WU daily summary for an in-progress day is incomplete
+      // and would later need to be overwritten.
+      const startIndex = offsetDays + 1;
+      const endIndex = Math.min(days, offsetDays + chunkDays);
+      const sliceLength = Math.max(0, endIndex - startIndex + 1);
+
+      for (let i = startIndex; i <= endIndex; i++) {
         const dateStr = subtractDays(todayLocal, i, timezone);
         attemptedDates.push(dateStr);
 
@@ -232,6 +250,7 @@ Deno.serve(async (req: Request) => {
         if (r.status === 429) {
           perDay.push({ date: dateStr, status: "rate_limited" });
           errorsCount++;
+          rateLimited = true;
           break;
         }
         if (r.status === 0) {
@@ -281,11 +300,21 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      const reachedEnd = endIndex >= days;
+      const more = !reachedEnd && !rateLimited;
+      const nextOffsetDays = more ? endIndex : null;
+
       return json({
         success: errorsCount === 0,
         days_requested: days,
         days_processed: processed,
         rows_upserted: upserted,
+        offset_days: offsetDays,
+        chunk_days: chunkDays,
+        slice_length: sliceLength,
+        next_offset_days: nextOffsetDays,
+        more,
+        rate_limited: rateLimited,
         errors_count: errorsCount,
         station_id: stationId,
         station_name: stationName,
