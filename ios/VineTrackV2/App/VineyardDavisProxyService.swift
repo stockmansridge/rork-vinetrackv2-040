@@ -48,6 +48,25 @@ nonisolated struct DavisProxyBackfillResult: Sendable, Equatable {
     public let rowsUpserted: Int
     public let errorsCount: Int
     public let timezone: String?
+    /// Offset (in days back from yesterday) this chunk started at.
+    public let offsetDays: Int
+    /// Chunk size used by the proxy for this call.
+    public let chunkDays: Int
+    /// Number of days actually included in this slice.
+    public let sliceLength: Int
+    /// Offset to use on the next call to continue the backfill, or nil
+    /// if the requested range is complete (or processing was halted by
+    /// a rate limit).
+    public let nextOffsetDays: Int?
+    /// True when the proxy still has more days to process for the
+    /// requested range and was not rate-limited.
+    public let more: Bool
+    /// True when the proxy stopped early because WeatherLink rate-limited
+    /// the historic endpoint. The chunk contains whatever was processed
+    /// before the limit hit.
+    public let rateLimited: Bool
+    /// Deployed proxy build identifier from `proxy_version`.
+    public let proxyVersion: String?
 }
 
 /// Errors surfaced by the davis-proxy edge function.
@@ -295,18 +314,24 @@ nonisolated enum VineyardDavisProxyService {
     static func backfillRainfall(
         vineyardId: UUID,
         stationId: String,
-        days: Int = 14
+        days: Int = 14,
+        offsetDays: Int = 0,
+        chunkDays: Int? = nil
     ) async throws -> DavisProxyBackfillResult {
         guard !stationId.isEmpty else { throw VineyardDavisProxyError.notConfigured }
-        let clamped = max(1, min(60, days))
-        let json = try await invoke(
-            payload: [
-                "vineyardId": vineyardId.uuidString,
-                "action": "backfill_rainfall",
-                "stationId": stationId,
-                "days": clamped,
-            ]
-        )
+        let clamped = max(1, min(365, days))
+        let clampedOffset = max(0, min(clamped, offsetDays))
+        var payload: [String: Any] = [
+            "vineyardId": vineyardId.uuidString,
+            "action": "backfill_rainfall",
+            "stationId": stationId,
+            "days": clamped,
+            "offsetDays": clampedOffset,
+        ]
+        if let chunkDays {
+            payload["chunkDays"] = max(1, min(60, chunkDays))
+        }
+        let json = try await invoke(payload: payload)
         let success = (json["success"] as? Bool) ?? false
         func intVal(_ k: String) -> Int {
             if let n = json[k] as? Int { return n }
@@ -314,13 +339,25 @@ nonisolated enum VineyardDavisProxyService {
             if let n = json[k] as? Double { return Int(n) }
             return 0
         }
+        let nextOffset: Int? = {
+            if let n = json["next_offset_days"] as? Int { return n }
+            if let n = json["next_offset_days"] as? NSNumber { return n.intValue }
+            return nil
+        }()
         return DavisProxyBackfillResult(
             success: success,
             daysRequested: intVal("days_requested"),
             daysProcessed: intVal("days_processed"),
             rowsUpserted: intVal("rows_upserted"),
             errorsCount: intVal("errors_count"),
-            timezone: json["timezone"] as? String
+            timezone: json["timezone"] as? String,
+            offsetDays: intVal("offset_days"),
+            chunkDays: intVal("chunk_days"),
+            sliceLength: intVal("slice_length"),
+            nextOffsetDays: nextOffset,
+            more: (json["more"] as? Bool) ?? false,
+            rateLimited: (json["rate_limited"] as? Bool) ?? false,
+            proxyVersion: json["proxy_version"] as? String
         )
     }
 

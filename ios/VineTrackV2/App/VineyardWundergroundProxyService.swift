@@ -14,6 +14,22 @@ nonisolated struct WundergroundProxyBackfillResult: Sendable, Equatable {
     public let stationName: String?
     public let timezone: String?
     public let proxyVersion: String?
+    /// Offset (in days back from yesterday) this chunk started at.
+    public let offsetDays: Int
+    /// Chunk size used by the proxy for this call.
+    public let chunkDays: Int
+    /// Number of days actually included in this slice.
+    public let sliceLength: Int
+    /// Offset to pass on the next call to continue the backfill, or nil
+    /// if the requested range is complete (or processing was halted by
+    /// a rate limit).
+    public let nextOffsetDays: Int?
+    /// True when the proxy still has more days to process for the
+    /// requested range and was not rate-limited.
+    public let more: Bool
+    /// True when the proxy stopped early because Weather Underground
+    /// rate-limited the history endpoint.
+    public let rateLimited: Bool
 }
 
 /// Errors surfaced by the wunderground-proxy edge function.
@@ -61,16 +77,23 @@ nonisolated enum VineyardWundergroundProxyService {
     static func backfillRainfall(
         vineyardId: UUID,
         stationId: String? = nil,
-        days: Int = 14
+        days: Int = 14,
+        offsetDays: Int = 0,
+        chunkDays: Int? = nil
     ) async throws -> WundergroundProxyBackfillResult {
-        let clamped = max(1, min(60, days))
+        let clamped = max(1, min(365, days))
+        let clampedOffset = max(0, min(clamped, offsetDays))
         var payload: [String: Any] = [
             "vineyardId": vineyardId.uuidString,
             "action": "backfill_rainfall",
             "days": clamped,
+            "offsetDays": clampedOffset,
         ]
         if let stationId, !stationId.isEmpty {
             payload["stationId"] = stationId
+        }
+        if let chunkDays {
+            payload["chunkDays"] = max(1, min(30, chunkDays))
         }
         let json = try await invoke(payload: payload)
         let success = (json["success"] as? Bool) ?? false
@@ -80,6 +103,11 @@ nonisolated enum VineyardWundergroundProxyService {
             if let n = json[k] as? Double { return Int(n) }
             return 0
         }
+        let nextOffset: Int? = {
+            if let n = json["next_offset_days"] as? Int { return n }
+            if let n = json["next_offset_days"] as? NSNumber { return n.intValue }
+            return nil
+        }()
         return WundergroundProxyBackfillResult(
             success: success,
             daysRequested: intVal("days_requested"),
@@ -90,7 +118,13 @@ nonisolated enum VineyardWundergroundProxyService {
             stationName: json["station_name"] as? String,
             timezone: json["timezone"] as? String,
             proxyVersion: (json["proxy_version"] as? String)
-                ?? (json["_proxy_version"] as? String)
+                ?? (json["_proxy_version"] as? String),
+            offsetDays: intVal("offset_days"),
+            chunkDays: intVal("chunk_days"),
+            sliceLength: intVal("slice_length"),
+            nextOffsetDays: nextOffset,
+            more: (json["more"] as? Bool) ?? false,
+            rateLimited: (json["rate_limited"] as? Bool) ?? false
         )
     }
 

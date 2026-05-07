@@ -3,13 +3,20 @@ import SwiftUI
 /// Guided helper that fills missing rainfall days surfaced by the
 /// Irrigation Advisor. Runs Davis → Weather Underground → Open-Meteo
 /// in priority order using the existing proxies. Owner/Manager only.
+///
+/// The Davis and WU steps run a chunked 365-day backfill (Davis: 60-day
+/// chunks, WU: 30-day chunks). Open-Meteo only runs after both station
+/// sources finish cleanly — if Davis or WU were rate-limited mid-run we
+/// stop here so Open-Meteo doesn't fill days a better source could have
+/// supplied on retry.
 struct IrrigationMissingRainHelperSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(BackendAccessControl.self) private var accessControl
 
     let vineyardId: UUID?
     /// The selected actual-rain window in the Irrigation Advisor (1, 2,
-    /// 7, 14). Used to inform the user which range was requested.
+    /// 7, 14). Used for context only — chunked station backfills always
+    /// target the past 365 days.
     let rainfallWindowDays: Int
     /// Called after the helper finishes (success or partial). The
     /// Irrigation Advisor uses this to reload persisted rainfall and
@@ -24,17 +31,12 @@ struct IrrigationMissingRainHelperSheet: View {
     @State private var isRunning: Bool = false
     @State private var hasRun: Bool = false
 
-    @State private var davisStatus: StepStatus = .pending
-    @State private var davisDetail: String?
-    @State private var davisRowsUpserted: Int = 0
+    @State private var davis: SourceProgress = .init()
+    @State private var wu: SourceProgress = .init()
+    @State private var openMeteo: SourceProgress = .init()
 
-    @State private var wuStatus: StepStatus = .pending
-    @State private var wuDetail: String?
-    @State private var wuRowsUpserted: Int = 0
-
-    @State private var openMeteoStatus: StepStatus = .pending
-    @State private var openMeteoDetail: String?
-    @State private var openMeteoRowsUpserted: Int = 0
+    @State private var davisResumeOffset: Int = 0
+    @State private var wuResumeOffset: Int = 0
 
     @State private var finalMessage: String?
 
@@ -43,21 +45,31 @@ struct IrrigationMissingRainHelperSheet: View {
 
     private var canEdit: Bool { accessControl.canChangeSettings }
 
-    /// Davis/WU proxies clamp to a 1..60 range. We use the larger of the
-    /// selected window or 14 days so a "24h" window still triggers a
-    /// useful station backfill.
-    private var davisDays: Int { max(rainfallWindowDays, 14) }
-    private var wuDays: Int { max(rainfallWindowDays, 14) }
-    /// Open-Meteo runs as the broad fallback. 365 days matches the
-    /// Settings → Weather Data button so behaviour stays consistent.
-    private var openMeteoDays: Int { 365 }
+    /// Long-range chunked backfill targets the past year. Quick 14-day
+    /// flows in Settings and the Weather Setup Wizard remain unchanged.
+    private let totalDays: Int = 365
+    private let davisChunkDays: Int = 60
+    private let wuChunkDays: Int = 30
 
-    enum StepStatus: Equatable {
+    enum StepStatus: Equatable, Sendable {
         case pending
         case skipped(String)
         case running
         case success
         case failed
+        case rateLimited
+    }
+
+    /// Per-source progress used by the steps section. Holds running
+    /// totals so the UI can show "X / 365 days" while the loop runs.
+    struct SourceProgress: Equatable {
+        var status: StepStatus = .pending
+        var detail: String?
+        var daysProcessed: Int = 0
+        var rowsUpserted: Int = 0
+        var errorsCount: Int = 0
+        var chunksCompleted: Int = 0
+        var resumeOffset: Int?
     }
 
     var body: some View {
@@ -80,7 +92,7 @@ struct IrrigationMissingRainHelperSheet: View {
                     }
                 }
             }
-            .navigationTitle("Fill missing rainfall data")
+            .navigationTitle("Build rainfall history")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -106,10 +118,10 @@ struct IrrigationMissingRainHelperSheet: View {
                     Image(systemName: "cloud.rain.fill")
                         .font(.title3)
                         .foregroundStyle(.tint)
-                    Text("Fill missing rainfall data")
+                    Text("Build 365-day rainfall history")
                         .font(.subheadline.weight(.semibold))
                 }
-                Text("VineTrack will try to fill missing rainfall days using your configured sources. Better sources are never overwritten.")
+                Text("VineTrack will pull rainfall from Davis, then Weather Underground, then fill remaining gaps with Open-Meteo. Better sources are never overwritten.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -120,7 +132,7 @@ struct IrrigationMissingRainHelperSheet: View {
 
     private var readOnlyNoticeSection: some View {
         Section {
-            Label("Ask an Owner or Manager to fill missing rainfall data.", systemImage: "lock.fill")
+            Label("Ask an Owner or Manager to build rainfall history.", systemImage: "lock.fill")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -130,8 +142,8 @@ struct IrrigationMissingRainHelperSheet: View {
         Section("Source priority") {
             VStack(alignment: .leading, spacing: 6) {
                 priorityRow(index: 1, name: "Manual entries", note: "Always wins. Never overwritten.")
-                priorityRow(index: 2, name: "Davis WeatherLink", note: davisConfigured ? "Configured." : "Not configured — will be skipped.")
-                priorityRow(index: 3, name: "Weather Underground", note: wuConfigured ? "Configured." : "Not configured — will be skipped.")
+                priorityRow(index: 2, name: "Davis WeatherLink", note: davisConfigured ? "Configured · 365 days in 60-day chunks." : "Not configured — will be skipped.")
+                priorityRow(index: 3, name: "Weather Underground", note: wuConfigured ? "Configured · 365 days in 30-day chunks." : "Not configured — will be skipped.")
                 priorityRow(index: 4, name: "Open-Meteo (fallback)", note: "Fills remaining gaps only.")
             }
             .padding(.vertical, 2)
@@ -157,22 +169,38 @@ struct IrrigationMissingRainHelperSheet: View {
 
     private var rangeSection: some View {
         Section {
-            LabeledContent("Selected window") {
+            LabeledContent("Advisor window") {
                 Text(windowLabel(rainfallWindowDays))
                     .foregroundStyle(.secondary)
             }
-            LabeledContent("Davis / WU range") {
-                Text("\(davisDays) days")
+            LabeledContent("Davis range") {
+                Text("\(totalDays) days · \(davisChunkDays)d chunks")
+                    .foregroundStyle(.secondary)
+            }
+            LabeledContent("Weather Underground range") {
+                Text("\(totalDays) days · \(wuChunkDays)d chunks")
                     .foregroundStyle(.secondary)
             }
             LabeledContent("Open-Meteo range") {
-                Text("\(openMeteoDays) days")
+                Text("\(totalDays) days · gaps only")
                     .foregroundStyle(.secondary)
+            }
+            if davisResumeOffset > 0 || wuResumeOffset > 0 {
+                VStack(alignment: .leading, spacing: 4) {
+                    if davisResumeOffset > 0 {
+                        Text("Davis will resume from offset \(davisResumeOffset) days.")
+                    }
+                    if wuResumeOffset > 0 {
+                        Text("Weather Underground will resume from offset \(wuResumeOffset) days.")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
         } header: {
             Text("Date ranges")
         } footer: {
-            Text("Stations need at least 14 days of history to be useful, so the Davis and Weather Underground steps use 14 days even when a shorter Irrigation Advisor window is selected. Open-Meteo fills the past year of gaps.")
+            Text("Station backfills target the past year so the Rain Calendar can be filled out as completely as possible. Open-Meteo only runs if Davis and Weather Underground complete without being rate-limited.")
         }
     }
 
@@ -181,25 +209,25 @@ struct IrrigationMissingRainHelperSheet: View {
             stepRow(
                 icon: "antenna.radiowaves.left.and.right",
                 title: "Davis WeatherLink",
-                status: davisStatus,
-                detail: davisDetail
+                progress: davis,
+                target: totalDays
             )
             stepRow(
                 icon: "cloud.sun.fill",
                 title: "Weather Underground",
-                status: wuStatus,
-                detail: wuDetail
+                progress: wu,
+                target: totalDays
             )
             stepRow(
                 icon: "tray.full.fill",
                 title: "Open-Meteo (fallback)",
-                status: openMeteoStatus,
-                detail: openMeteoDetail
+                progress: openMeteo,
+                target: totalDays
             )
         }
     }
 
-    private func stepRow(icon: String, title: String, status: StepStatus, detail: String?) -> some View {
+    private func stepRow(icon: String, title: String, progress: SourceProgress, target: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Image(systemName: icon)
@@ -208,9 +236,19 @@ struct IrrigationMissingRainHelperSheet: View {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                statusBadge(status)
+                statusBadge(progress.status)
             }
-            if let detail, !detail.isEmpty {
+            if progress.status == .running || progress.daysProcessed > 0 {
+                ProgressView(
+                    value: Double(min(progress.daysProcessed, target)),
+                    total: Double(max(target, 1))
+                )
+                .tint(.accentColor)
+                Text("\(progress.daysProcessed) / \(target) days · \(progress.rowsUpserted) rows · \(progress.chunksCompleted) chunk\(progress.chunksCompleted == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let detail = progress.detail, !detail.isEmpty {
                 Text(detail)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -246,6 +284,10 @@ struct IrrigationMissingRainHelperSheet: View {
             Label("Failed", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.orange)
+        case .rateLimited:
+            Label("Rate limited", systemImage: "hourglass")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
         }
     }
 
@@ -257,10 +299,10 @@ struct IrrigationMissingRainHelperSheet: View {
                 HStack {
                     if isRunning {
                         ProgressView()
-                        Text("Filling missing data…")
+                        Text("Building rainfall history…")
                     } else {
                         Image(systemName: "drop.fill")
-                        Text(hasRun ? "Run again" : "Fill missing data now")
+                        Text(hasRun ? "Run again" : "Build rainfall history")
                     }
                     Spacer()
                 }
@@ -269,7 +311,7 @@ struct IrrigationMissingRainHelperSheet: View {
             .disabled(isRunning || isLoadingConfig || vineyardId == nil)
             .buttonStyle(.borderedProminent)
         } footer: {
-            Text("Runs Davis, then Weather Underground, then Open-Meteo. Each source only writes its own rows and never overwrites a higher-priority source.")
+            Text("Runs Davis (60-day chunks) → Weather Underground (30-day chunks) → Open-Meteo gap fill. Each source only writes its own rows and never overwrites a higher-priority source.")
         }
     }
 
@@ -302,6 +344,8 @@ struct IrrigationMissingRainHelperSheet: View {
         } catch {
             wuConfigured = false
         }
+        davisResumeOffset = RainfallHistoryBackfillService.loadResumeOffset(.davis, vineyardId: vid)
+        wuResumeOffset = RainfallHistoryBackfillService.loadResumeOffset(.wunderground, vineyardId: vid)
         didLoad = true
     }
 
@@ -311,43 +355,47 @@ struct IrrigationMissingRainHelperSheet: View {
         guard canEdit, let vid = vineyardId, !isRunning else { return }
         isRunning = true
         finalMessage = nil
-        davisStatus = .pending
-        wuStatus = .pending
-        openMeteoStatus = .pending
-        davisDetail = nil
-        wuDetail = nil
-        openMeteoDetail = nil
-        davisRowsUpserted = 0
-        wuRowsUpserted = 0
-        openMeteoRowsUpserted = 0
+        davis = SourceProgress()
+        wu = SourceProgress()
+        openMeteo = SourceProgress()
 
         var anyRowsWritten = false
+        var blockOpenMeteo = false
 
         // Davis
         if davisConfigured {
             await runDavis(vineyardId: vid)
-            if davisRowsUpserted > 0 { anyRowsWritten = true }
+            if davis.rowsUpserted > 0 { anyRowsWritten = true }
+            if davis.status == .rateLimited || davis.status == .failed {
+                blockOpenMeteo = true
+            }
         } else {
-            davisStatus = .skipped("Not configured")
-            davisDetail = "Davis WeatherLink isn't configured for this vineyard."
+            davis.status = .skipped("Not configured")
+            davis.detail = "Davis WeatherLink isn't configured for this vineyard."
         }
 
         // Weather Underground
         if wuConfigured {
             await runWunderground(vineyardId: vid)
-            if wuRowsUpserted > 0 { anyRowsWritten = true }
+            if wu.rowsUpserted > 0 { anyRowsWritten = true }
+            if wu.status == .rateLimited || wu.status == .failed {
+                blockOpenMeteo = true
+            }
         } else {
-            wuStatus = .skipped("Not configured")
-            wuDetail = "No Weather Underground station saved for this vineyard."
+            wu.status = .skipped("Not configured")
+            wu.detail = "No Weather Underground station saved for this vineyard."
         }
 
-        // Open-Meteo (always attempted as fallback)
-        await runOpenMeteo(vineyardId: vid)
-        if openMeteoRowsUpserted > 0 { anyRowsWritten = true }
+        // Open-Meteo (only if no station source was rate-limited)
+        if blockOpenMeteo {
+            openMeteo.status = .skipped("Held back")
+            openMeteo.detail = "Skipped to avoid filling days that Davis or Weather Underground may supply on retry. Try again later to continue."
+        } else {
+            await runOpenMeteo(vineyardId: vid)
+            if openMeteo.rowsUpserted > 0 { anyRowsWritten = true }
+        }
 
-        finalMessage = anyRowsWritten
-            ? "Rainfall data refreshed. Recalculating irrigation advice…"
-            : "No new rainfall rows were written. Try again later or check Settings → Weather Data & Forecasting."
+        finalMessage = composeFinalMessage(anyRowsWritten: anyRowsWritten, blockedOpenMeteo: blockOpenMeteo)
 
         if anyRowsWritten {
             NotificationCenter.default.post(
@@ -363,73 +411,161 @@ struct IrrigationMissingRainHelperSheet: View {
         onCompleted()
     }
 
+    private func composeFinalMessage(anyRowsWritten: Bool, blockedOpenMeteo: Bool) -> String {
+        var parts: [String] = []
+        if anyRowsWritten {
+            parts.append("Rainfall data refreshed. Recalculating irrigation advice…")
+        } else {
+            parts.append("No new rainfall rows were written.")
+        }
+        if davis.status == .rateLimited {
+            parts.append("Davis was rate-limited after \(davis.daysProcessed) days. Try again later to continue from offset \(davis.resumeOffset ?? davis.daysProcessed).")
+        }
+        if wu.status == .rateLimited {
+            parts.append("Weather Underground was rate-limited after \(wu.daysProcessed) days. Try again later to continue from offset \(wu.resumeOffset ?? wu.daysProcessed).")
+        }
+        if blockedOpenMeteo {
+            parts.append("Open-Meteo was held back so it doesn't fill days a station source could supply on retry.")
+        }
+        return parts.joined(separator: " ")
+    }
+
     private func runDavis(vineyardId vid: UUID) async {
-        davisStatus = .running
-        davisDetail = nil
+        davis.status = .running
+        davis.detail = nil
         let cfg = WeatherProviderStore.shared.config(for: vid)
         guard let sid = cfg.davisStationId, !sid.isEmpty else {
-            davisStatus = .skipped("No station")
-            davisDetail = "No Davis station ID is selected."
+            davis.status = .skipped("No station")
+            davis.detail = "No Davis station ID is selected."
             return
         }
+        let startOffset = RainfallHistoryBackfillService.loadResumeOffset(.davis, vineyardId: vid)
         do {
-            let r = try await VineyardDavisProxyService.backfillRainfall(
-                vineyardId: vid, stationId: sid, days: davisDays
+            let r = try await RainfallHistoryBackfillService.backfillDavisChunked(
+                vineyardId: vid,
+                stationId: sid,
+                totalDays: totalDays,
+                chunkDays: davisChunkDays,
+                startOffset: startOffset,
+                progress: { p in
+                    Task { @MainActor in
+                        davis.daysProcessed = p.daysProcessed
+                        davis.rowsUpserted = p.rowsUpsertedTotal
+                        davis.chunksCompleted = p.chunksCompleted
+                    }
+                }
             )
-            davisRowsUpserted = r.rowsUpserted
-            davisStatus = r.success && r.errorsCount == 0 ? .success : .failed
-            davisDetail = "Days requested: \(r.daysRequested) · Processed: \(r.daysProcessed) · Rows upserted: \(r.rowsUpserted) · Errors: \(r.errorsCount)"
+            davis.daysProcessed = r.daysProcessed
+            davis.rowsUpserted = r.rowsUpserted
+            davis.errorsCount = r.errorsCount
+            davis.chunksCompleted = r.chunksCompleted
+            davis.resumeOffset = r.resumeOffset
+            RainfallHistoryBackfillService.saveResumeOffset(.davis, vineyardId: vid, offset: r.resumeOffset)
+            davisResumeOffset = r.resumeOffset ?? 0
+            if r.rateLimited {
+                davis.status = .rateLimited
+                davis.detail = "Rate-limited after \(r.daysProcessed) days · Rows: \(r.rowsUpserted) · Chunks: \(r.chunksCompleted)"
+            } else if r.completed && r.errorsCount == 0 {
+                davis.status = .success
+                davis.detail = "Days processed: \(r.daysProcessed) · Rows upserted: \(r.rowsUpserted) · Chunks: \(r.chunksCompleted)"
+            } else {
+                davis.status = .failed
+                davis.detail = "Days processed: \(r.daysProcessed) · Rows: \(r.rowsUpserted) · Errors: \(r.errorsCount)"
+            }
         } catch let error as VineyardDavisProxyError {
-            davisStatus = .failed
-            davisDetail = error.errorDescription ?? "Davis backfill failed."
+            if case .rateLimited = error {
+                davis.status = .rateLimited
+            } else {
+                davis.status = .failed
+            }
+            davis.detail = error.errorDescription ?? "Davis backfill failed."
         } catch {
-            davisStatus = .failed
-            davisDetail = "Davis backfill failed — \(error.localizedDescription)"
+            davis.status = .failed
+            davis.detail = "Davis backfill failed — \(error.localizedDescription)"
         }
     }
 
     private func runWunderground(vineyardId vid: UUID) async {
-        wuStatus = .running
-        wuDetail = nil
+        wu.status = .running
+        wu.detail = nil
+        let startOffset = RainfallHistoryBackfillService.loadResumeOffset(.wunderground, vineyardId: vid)
         do {
-            let r = try await VineyardWundergroundProxyService.backfillRainfall(
-                vineyardId: vid, stationId: nil, days: wuDays
+            let r = try await RainfallHistoryBackfillService.backfillWundergroundChunked(
+                vineyardId: vid,
+                stationId: nil,
+                totalDays: totalDays,
+                chunkDays: wuChunkDays,
+                startOffset: startOffset,
+                progress: { p in
+                    Task { @MainActor in
+                        wu.daysProcessed = p.daysProcessed
+                        wu.rowsUpserted = p.rowsUpsertedTotal
+                        wu.chunksCompleted = p.chunksCompleted
+                    }
+                }
             )
-            wuRowsUpserted = r.rowsUpserted
-            wuStatus = r.success && r.errorsCount == 0 ? .success : .failed
-            var parts: [String] = []
-            parts.append("Days requested: \(r.daysRequested) · Processed: \(r.daysProcessed) · Rows upserted: \(r.rowsUpserted) · Errors: \(r.errorsCount)")
-            if let name = r.stationName, !name.isEmpty {
-                parts.append("Station: \(name)")
-            } else if let sid = r.stationId, !sid.isEmpty {
-                parts.append("Station: \(sid)")
+            wu.daysProcessed = r.daysProcessed
+            wu.rowsUpserted = r.rowsUpserted
+            wu.errorsCount = r.errorsCount
+            wu.chunksCompleted = r.chunksCompleted
+            wu.resumeOffset = r.resumeOffset
+            RainfallHistoryBackfillService.saveResumeOffset(.wunderground, vineyardId: vid, offset: r.resumeOffset)
+            wuResumeOffset = r.resumeOffset ?? 0
+            var detailParts: [String] = []
+            if let label = r.stationLabel, !label.isEmpty {
+                detailParts.append("Station: \(label)")
             }
-            wuDetail = parts.joined(separator: " · ")
+            if r.rateLimited {
+                wu.status = .rateLimited
+                detailParts.insert(
+                    "Rate-limited after \(r.daysProcessed) days · Rows: \(r.rowsUpserted) · Chunks: \(r.chunksCompleted)",
+                    at: 0
+                )
+            } else if r.completed && r.errorsCount == 0 {
+                wu.status = .success
+                detailParts.insert(
+                    "Days processed: \(r.daysProcessed) · Rows upserted: \(r.rowsUpserted) · Chunks: \(r.chunksCompleted)",
+                    at: 0
+                )
+            } else {
+                wu.status = .failed
+                detailParts.insert(
+                    "Days processed: \(r.daysProcessed) · Rows: \(r.rowsUpserted) · Errors: \(r.errorsCount)",
+                    at: 0
+                )
+            }
+            wu.detail = detailParts.joined(separator: " · ")
         } catch let error as VineyardWundergroundProxyError {
-            wuStatus = .failed
-            wuDetail = error.errorDescription ?? "Weather Underground backfill failed."
+            if case .rateLimited = error {
+                wu.status = .rateLimited
+            } else {
+                wu.status = .failed
+            }
+            wu.detail = error.errorDescription ?? "Weather Underground backfill failed."
         } catch {
-            wuStatus = .failed
-            wuDetail = "Weather Underground backfill failed — \(error.localizedDescription)"
+            wu.status = .failed
+            wu.detail = "Weather Underground backfill failed — \(error.localizedDescription)"
         }
     }
 
     private func runOpenMeteo(vineyardId vid: UUID) async {
-        openMeteoStatus = .running
-        openMeteoDetail = nil
+        openMeteo.status = .running
+        openMeteo.detail = nil
         do {
             let r = try await VineyardOpenMeteoProxyService.backfillRainfallGaps(
-                vineyardId: vid, days: openMeteoDays, timezone: TimeZone.current.identifier
+                vineyardId: vid, days: totalDays, timezone: TimeZone.current.identifier
             )
-            openMeteoRowsUpserted = r.rowsUpserted
-            openMeteoStatus = r.success && r.errorsCount == 0 ? .success : .failed
-            openMeteoDetail = "Rows upserted: \(r.rowsUpserted) · Skipped (better source): \(r.daysSkippedBetterSource) · Skipped (no data): \(r.daysSkippedNoData) · Errors: \(r.errorsCount)"
+            openMeteo.rowsUpserted = r.rowsUpserted
+            openMeteo.daysProcessed = r.daysProcessed
+            openMeteo.errorsCount = r.errorsCount
+            openMeteo.status = r.success && r.errorsCount == 0 ? .success : .failed
+            openMeteo.detail = "Rows upserted: \(r.rowsUpserted) · Skipped (better source): \(r.daysSkippedBetterSource) · Skipped (no data): \(r.daysSkippedNoData) · Errors: \(r.errorsCount)"
         } catch let error as VineyardOpenMeteoProxyError {
-            openMeteoStatus = .failed
-            openMeteoDetail = error.errorDescription ?? "Open-Meteo gap fill failed."
+            openMeteo.status = .failed
+            openMeteo.detail = error.errorDescription ?? "Open-Meteo gap fill failed."
         } catch {
-            openMeteoStatus = .failed
-            openMeteoDetail = "Open-Meteo gap fill failed — \(error.localizedDescription)"
+            openMeteo.status = .failed
+            openMeteo.detail = "Open-Meteo gap fill failed — \(error.localizedDescription)"
         }
     }
 }
