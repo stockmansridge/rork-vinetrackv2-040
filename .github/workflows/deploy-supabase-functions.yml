@@ -1,4 +1,4 @@
-name: Deploy Supabase Edge Functions
+name: Deploy Supabase Edge Functions — VineTrack
 
 on:
   workflow_dispatch:
