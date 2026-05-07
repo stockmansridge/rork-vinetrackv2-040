@@ -381,6 +381,10 @@ final class TripTrackingService {
 
         locationService.startUpdating()
         locationService.startBackgroundUpdating()
+        // Active trips need the freshest possible GPS for row guidance and
+        // pin placement, so opt-in to BestForNavigation while a trip is
+        // running. Restored when the trip ends or pauses.
+        locationService.enableHighAccuracyForActiveTrip()
         breadcrumb("beginTracking")
         isTracking = true
         isPaused = false
@@ -426,6 +430,7 @@ final class TripTrackingService {
         // Always stop background updates when the tracking loop pauses or
         // ends — we only want background location during an active trip.
         locationService?.stopBackgroundUpdating()
+        locationService?.disableHighAccuracy()
         if stopLocation {
             locationService?.stopUpdating()
         }

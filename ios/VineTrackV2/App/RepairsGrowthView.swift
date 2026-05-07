@@ -337,10 +337,16 @@ struct RepairsGrowthView: View {
 
     private func handleButtonTap(button: ButtonConfig, side: PinSide) {
         guard canCreate else { return }
-        guard let coord = locationService.location?.coordinate else {
+        let fix = locationService.freshLocation()
+        guard let loc = fix.location else {
             showError("Location unavailable \u{2014} enable location services to drop a pin.")
             return
         }
+        if let warning = staleOrLowAccuracyWarning(for: fix.quality) {
+            showError(warning)
+            return
+        }
+        let coord = loc.coordinate
         let proceed = { createRepairPin(button: button, side: side, coord: coord) }
         if let dup = checkDuplicate(at: coord) {
             recordDuplicateWarningShown(dup)
@@ -382,10 +388,16 @@ struct RepairsGrowthView: View {
 
     private func handleGrowthStageSelected(_ stage: GrowthStage) {
         guard canCreate else { return }
-        guard let coord = locationService.location?.coordinate else {
+        let fix = locationService.freshLocation()
+        guard let loc = fix.location else {
             showError("Location unavailable \u{2014} enable location services to drop a pin.")
             return
         }
+        if let warning = staleOrLowAccuracyWarning(for: fix.quality) {
+            showError(warning)
+            return
+        }
+        let coord = loc.coordinate
         let proceed = { createGrowthPin(stage: stage, coord: coord) }
         if let dup = checkDuplicate(at: coord) {
             recordDuplicateWarningShown(dup)
@@ -422,6 +434,19 @@ struct RepairsGrowthView: View {
         if store.settings.autoPhotoPrompt {
             pendingPhotoPinId = createdPin.id
             showAutoPhotoConfirm = true
+        }
+    }
+
+    private func staleOrLowAccuracyWarning(for quality: LocationService.LocationQuality) -> String? {
+        switch quality {
+        case .fresh:
+            return nil
+        case .stale:
+            return "GPS fix is stale \u{2014} wait a moment for a fresh location before dropping a pin."
+        case .lowAccuracy:
+            return "GPS accuracy is low \u{2014} move to open sky and try again for a precise pin."
+        case .unavailable:
+            return "Location unavailable \u{2014} enable location services to drop a pin."
         }
     }
 

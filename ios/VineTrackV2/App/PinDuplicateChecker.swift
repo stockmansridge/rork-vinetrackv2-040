@@ -7,11 +7,20 @@ import CoreLocation
 nonisolated enum PinDuplicateChecker {
 
     /// Default fallback radius (metres) when no row-spacing is known.
-    static let fallbackRadiusMeters: Double = 1.75
+    /// Sized for typical field GPS error (3-5 m) so two pins placed at the
+    /// same vine actually trigger a duplicate warning even when the GPS
+    /// fix has drifted between drops.
+    static let fallbackRadiusMeters: Double = 3.0
 
-    /// Hard cap on radius. Half-row-width above this is unreasonable as a
-    /// "duplicate" zone for most vineyards.
-    static let maxRadiusMeters: Double = 3.5
+    /// Hard cap on radius. Above this, two pins are clearly different
+    /// targets — but this is intentionally generous to account for GPS
+    /// noise during active trips at slow speeds.
+    static let maxRadiusMeters: Double = 6.0
+
+    /// Minimum radius even when row spacing is known. Prevents very narrow
+    /// row paddocks (~1 m spacing) from making duplicates effectively
+    /// impossible to detect.
+    static let minRadiusMeters: Double = 1.5
 
     /// Compute the duplicate-warning radius for a pin being dropped at
     /// `coordinate`. Uses half the row spacing of the most relevant paddock
@@ -24,12 +33,12 @@ nonisolated enum PinDuplicateChecker {
     ) -> Double {
         if let containing = RowGuidance.paddock(for: coordinate, in: paddocks),
            containing.rowWidth > 0 {
-            return min(maxRadiusMeters, max(0.75, containing.rowWidth / 2.0))
+            return min(maxRadiusMeters, max(minRadiusMeters, containing.rowWidth / 2.0))
         }
         if let id = paddockId,
            let paddock = paddocks.first(where: { $0.id == id }),
            paddock.rowWidth > 0 {
-            return min(maxRadiusMeters, max(0.75, paddock.rowWidth / 2.0))
+            return min(maxRadiusMeters, max(minRadiusMeters, paddock.rowWidth / 2.0))
         }
         return fallbackRadiusMeters
     }

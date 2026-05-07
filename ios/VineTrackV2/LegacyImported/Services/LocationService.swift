@@ -11,6 +11,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private var mockFallbackTask: Task<Void, Never>?
 
     private(set) var isBackgroundUpdatingEnabled: Bool = false
+    private(set) var isHighAccuracyEnabled: Bool = false
+
+    /// Maximum age (seconds) before a cached GPS fix is considered stale
+    /// for pin creation. Anything older than this should trigger a warning
+    /// rather than silently saving a bad pin.
+    static let staleLocationThreshold: TimeInterval = 5.0
+
+    /// Minimum acceptable horizontal accuracy (metres) for pin creation.
+    /// Above this we still allow the drop but show a warning so the
+    /// operator can wait for a better fix if they want to.
+    static let lowAccuracyThreshold: Double = 15.0
 
     override init() {
         super.init()
@@ -76,6 +87,52 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         guard isBackgroundUpdatingEnabled else { return }
         manager.allowsBackgroundLocationUpdates = false
         isBackgroundUpdatingEnabled = false
+    }
+
+    /// Switch to highest-practical GPS accuracy for active trips. Uses
+    /// `kCLLocationAccuracyBestForNavigation` so live row guidance and
+    /// pin placement get the freshest, most accurate fix the device can
+    /// provide. Restored to `kCLLocationAccuracyBest` once the trip ends
+    /// to preserve battery during normal app use.
+    func enableHighAccuracyForActiveTrip() {
+        guard !isHighAccuracyEnabled else { return }
+        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        manager.distanceFilter = kCLDistanceFilterNone
+        isHighAccuracyEnabled = true
+    }
+
+    func disableHighAccuracy() {
+        guard isHighAccuracyEnabled else { return }
+        manager.desiredAccuracy = kCLLocationAccuracyBest
+        isHighAccuracyEnabled = false
+    }
+
+    /// Returns true if the latest fix is recent enough and accurate enough
+    /// to safely use for pin placement. Use `freshLocation()` instead when
+    /// you need the actual coordinate plus the freshness/accuracy verdict.
+    func isLocationFreshEnough() -> Bool {
+        guard let loc = location else { return false }
+        let age = -loc.timestamp.timeIntervalSinceNow
+        return age <= Self.staleLocationThreshold && loc.horizontalAccuracy >= 0
+    }
+
+    enum LocationQuality {
+        case fresh
+        case stale
+        case lowAccuracy
+        case unavailable
+    }
+
+    /// Inspect the latest fix and return both the location and a quality
+    /// verdict so callers can decide whether to warn before creating a pin.
+    func freshLocation() -> (location: CLLocation?, quality: LocationQuality) {
+        guard let loc = location else { return (nil, .unavailable) }
+        let age = -loc.timestamp.timeIntervalSinceNow
+        if age > Self.staleLocationThreshold { return (loc, .stale) }
+        if loc.horizontalAccuracy < 0 || loc.horizontalAccuracy > Self.lowAccuracyThreshold {
+            return (loc, .lowAccuracy)
+        }
+        return (loc, .fresh)
     }
 
     func startUpdating() {
