@@ -16,12 +16,16 @@ struct SyncDiagnosticsView: View {
 
     @State private var copyConfirmation: String?
     @State private var isSyncingAll: Bool = false
+    @State private var isRepairingTrips: Bool = false
+    @State private var lastRepairResult: TripSyncService.RepairResult?
+    @State private var lastRepairAt: Date?
 
     var body: some View {
         Form {
             contextSection
             entitiesSection
             actionsSection
+            repairSection
             footerSection
         }
         .navigationTitle("Sync Diagnostics")
@@ -85,6 +89,95 @@ struct SyncDiagnosticsView: View {
         } header: {
             Text("Actions")
         }
+    }
+
+    @ViewBuilder
+    private var repairSection: some View {
+        if canRepairTrips {
+            Section {
+                Button {
+                    Task { await repairTripVineyardIds() }
+                } label: {
+                    HStack {
+                        Label(isRepairingTrips ? "Repairing…" : "Repair trip vineyard IDs", systemImage: "wrench.and.screwdriver")
+                        Spacer()
+                        if isRepairingTrips { ProgressView() }
+                    }
+                }
+                .disabled(isRepairingTrips || !auth.isSignedIn || store.selectedVineyardId == nil)
+
+                if let result = lastRepairResult {
+                    repairSummaryView(result)
+                }
+            } header: {
+                Text("Trip Repair")
+            } footer: {
+                Text("Scans local trips for missing or mismatched vineyard IDs and repairs them when paddock ownership clearly resolves to the selected vineyard. Trips with ambiguous or missing paddocks are skipped. After repair, sync runs automatically to push fixed trips to Supabase.")
+            }
+        }
+    }
+
+    private var canRepairTrips: Bool {
+        switch accessControl.currentRole {
+        case .owner, .manager: return true
+        default: return false
+        }
+    }
+
+    @ViewBuilder
+    private func repairSummaryView(_ result: TripSyncService.RepairResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Last repair")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                metric("Scanned", value: "\(result.scanned)")
+                metric("Repaired", value: "\(result.repaired)", highlight: result.repaired > 0)
+                metric("Pushed", value: "\(result.pushed)", highlight: result.pushed > 0)
+                metric("Skipped", value: "\(result.skipped.count)", highlight: !result.skipped.isEmpty)
+            }
+            if let err = result.syncError, !err.isEmpty {
+                Text("Sync error: \(err)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+            if !result.skipped.isEmpty {
+                DisclosureGroup("Skipped trips (\(result.skipped.count))") {
+                    ForEach(Array(result.skipped.enumerated()), id: \.offset) { _, item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.tripId.uuidString)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                            Text(item.reason)
+                                .font(.caption2)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .font(.footnote)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func metric(_ label: String, value: String, highlight: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout.weight(.semibold).monospacedDigit())
+                .foregroundStyle(highlight ? Color.orange : .primary)
+        }
+    }
+
+    private func repairTripVineyardIds() async {
+        guard !isRepairingTrips, let vineyardId = store.selectedVineyardId else { return }
+        isRepairingTrips = true
+        defer { isRepairingTrips = false }
+        let result = await tripSync.repairVineyardIds(selectedVineyardId: vineyardId)
+        lastRepairResult = result
+        lastRepairAt = Date()
     }
 
     private var footerSection: some View {
@@ -259,6 +352,24 @@ struct SyncDiagnosticsView: View {
         }
         lines.append("")
         lines.append("Sync running: \(isSyncingAll ? "yes" : "no")")
+        if let result = lastRepairResult {
+            lines.append("")
+            lines.append("Trip Vineyard ID Repair")
+            if let at = lastRepairAt {
+                lines.append("  ran_at: \(df.string(from: at))")
+            }
+            lines.append("  scanned: \(result.scanned)")
+            lines.append("  already_correct: \(result.alreadyCorrect)")
+            lines.append("  repaired: \(result.repaired)")
+            lines.append("  pushed: \(result.pushed)")
+            lines.append("  skipped: \(result.skipped.count)")
+            for item in result.skipped {
+                lines.append("    - \(item.tripId.uuidString): \(item.reason)")
+            }
+            if let err = result.syncError, !err.isEmpty {
+                lines.append("  sync_error: \(err)")
+            }
+        }
         return lines.joined(separator: "\n")
     }
 }

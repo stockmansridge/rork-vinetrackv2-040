@@ -90,6 +90,81 @@ final class TripSyncService {
         }
     }
 
+    // MARK: - Repair
+
+    nonisolated struct RepairResult: Sendable {
+        var scanned: Int = 0
+        var repaired: Int = 0
+        var alreadyCorrect: Int = 0
+        var pushed: Int = 0
+        var skipped: [(tripId: UUID, reason: String)] = []
+        var syncError: String?
+    }
+
+    /// Scan local trips and force-repair any whose `vineyardId` is missing or
+    /// mismatched, when all paddocks resolve to `selectedVineyardId`. Then runs
+    /// a normal sync so repaired trips are pushed to Supabase.
+    /// - Returns: A summary of what was scanned/repaired/pushed/skipped.
+    func repairVineyardIds(selectedVineyardId: UUID) async -> RepairResult {
+        var result = RepairResult()
+        guard let store else { return result }
+
+        let paddockVineyard = Dictionary(
+            store.paddocks.map { ($0.id, $0.vineyardId) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let snapshot = store.trips
+        result.scanned = snapshot.count
+
+        var repairedIds: [UUID] = []
+        for trip in snapshot {
+            if trip.vineyardId == selectedVineyardId {
+                result.alreadyCorrect += 1
+                continue
+            }
+            if trip.paddockIds.isEmpty {
+                result.skipped.append((trip.id, "no paddocks on trip"))
+                continue
+            }
+            let resolved = trip.paddockIds.compactMap { paddockVineyard[$0] }
+            if resolved.count != trip.paddockIds.count {
+                result.skipped.append((trip.id, "paddock(s) missing locally — cannot infer vineyard"))
+                continue
+            }
+            let uniqueVineyards = Set(resolved)
+            if uniqueVineyards.count > 1 {
+                result.skipped.append((trip.id, "paddocks span multiple vineyards"))
+                continue
+            }
+            guard let onlyVineyard = uniqueVineyards.first else {
+                result.skipped.append((trip.id, "could not resolve vineyard"))
+                continue
+            }
+            if onlyVineyard != selectedVineyardId {
+                result.skipped.append((trip.id, "paddocks belong to another vineyard (\(onlyVineyard))"))
+                continue
+            }
+            var repaired = trip
+            repaired.vineyardId = selectedVineyardId
+            store.applyRemoteTripUpsert(repaired)
+            markTripDirty(trip.id)
+            repairedIds.append(trip.id)
+        }
+        result.repaired = repairedIds.count
+
+        if !repairedIds.isEmpty {
+            let pendingBefore = metadata.pendingUpserts.keys.filter { repairedIds.contains($0) }.count
+            await sync(vineyardId: selectedVineyardId)
+            let pendingAfter = metadata.pendingUpserts.keys.filter { repairedIds.contains($0) }.count
+            result.pushed = max(0, pendingBefore - pendingAfter)
+            if case let .failure(message) = syncStatus {
+                result.syncError = message
+            }
+        }
+        return result
+    }
+
     // MARK: - Push
 
     func pushLocalTrips(vineyardId: UUID) async throws {
