@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - davis-proxy
+          - wunderground-proxy
           - all
 
 env:
@@ -38,6 +39,14 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy davis-proxy \
+            --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy wunderground-proxy
+        if: ${{ github.event.inputs.function == 'wunderground-proxy' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy wunderground-proxy \
             --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Deploy all functions
