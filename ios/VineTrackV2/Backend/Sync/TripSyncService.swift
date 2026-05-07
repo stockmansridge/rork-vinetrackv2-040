@@ -101,6 +101,66 @@ final class TripSyncService {
         var syncError: String?
     }
 
+    nonisolated struct AuditResult: Sendable {
+        var ranAt: Date?
+        var localTotal: Int = 0
+        var localForVineyard: Int = 0
+        var remoteForVineyard: Int = 0
+        var remoteSoftDeleted: Int = 0
+        var localOnlyIds: [UUID] = []
+        var localOnlyMissingFunction: [UUID] = []
+        var localVineyardMismatch: [UUID] = []
+        var remoteMissingFunction: Int = 0
+        var error: String?
+    }
+
+    var lastAuditResult: AuditResult = AuditResult()
+
+    /// Compare local trips against Supabase for the selected vineyard so the
+    /// user can see whether locally-visible trips (e.g. "Harrowing") have
+    /// reached the backend. Read-only — does not push or repair.
+    func auditTripSync(vineyardId: UUID) async -> AuditResult {
+        var result = AuditResult()
+        result.ranAt = Date()
+        guard let store else { return result }
+        guard SupabaseClientProvider.shared.isConfigured else {
+            result.error = "Supabase not configured"
+            lastAuditResult = result
+            return result
+        }
+
+        let local = store.trips
+        result.localTotal = local.count
+        let localForVineyard = local.filter { $0.vineyardId == vineyardId }
+        result.localForVineyard = localForVineyard.count
+        result.localVineyardMismatch = local
+            .filter { $0.vineyardId != vineyardId }
+            .map { $0.id }
+        result.localOnlyMissingFunction = localForVineyard
+            .filter { ($0.tripFunction?.isEmpty ?? true) && ($0.tripTitle?.isEmpty ?? true) }
+            .map { $0.id }
+
+        do {
+            let remote = try await repository.fetchAllTrips(vineyardId: vineyardId)
+            let active = remote.filter { $0.deletedAt == nil }
+            result.remoteForVineyard = active.count
+            result.remoteSoftDeleted = remote.count - active.count
+            let remoteIds = Set(active.map { $0.id })
+            result.localOnlyIds = localForVineyard
+                .filter { !remoteIds.contains($0.id) }
+                .map { $0.id }
+            result.remoteMissingFunction = active.reduce(0) { acc, t in
+                let hasFn = !(t.tripFunction?.isEmpty ?? true) || !(t.tripTitle?.isEmpty ?? true)
+                return acc + (hasFn ? 0 : 1)
+            }
+        } catch {
+            result.error = error.localizedDescription
+        }
+
+        lastAuditResult = result
+        return result
+    }
+
     /// Scan local trips and force-repair any whose `vineyardId` is missing or
     /// mismatched, when all paddocks resolve to `selectedVineyardId`. Then runs
     /// a normal sync so repaired trips are pushed to Supabase.

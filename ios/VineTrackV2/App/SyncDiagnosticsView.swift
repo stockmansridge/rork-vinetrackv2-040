@@ -20,6 +20,8 @@ struct SyncDiagnosticsView: View {
     @State private var lastRepairResult: TripSyncService.RepairResult?
     @State private var lastRepairAt: Date?
     @State private var auditService = TripAuditService()
+    @State private var isAuditingTripSync: Bool = false
+    @State private var lastTripSyncAudit: TripSyncService.AuditResult?
 
     var body: some View {
         Form {
@@ -165,6 +167,55 @@ struct SyncDiagnosticsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func tripSyncAuditView(_ audit: TripSyncService.AuditResult) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Last trip sync audit")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 14) {
+                metric("Local", value: "\(audit.localForVineyard)")
+                metric("Remote", value: "\(audit.remoteForVineyard)")
+                metric("Local-only", value: "\(audit.localOnlyIds.count)", highlight: !audit.localOnlyIds.isEmpty)
+                metric("Mismatch", value: "\(audit.localVineyardMismatch.count)", highlight: !audit.localVineyardMismatch.isEmpty)
+            }
+            HStack(spacing: 14) {
+                metric("Pending", value: "\(tripSync.pendingUpsertCount)", highlight: tripSync.pendingUpsertCount > 0)
+                metric("Soft-deleted", value: "\(audit.remoteSoftDeleted)")
+                metric("Remote no-name", value: "\(audit.remoteMissingFunction)", highlight: audit.remoteMissingFunction > 0)
+            }
+            if let err = audit.error, !err.isEmpty {
+                Text("Error: \(err)")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+            if !audit.localOnlyIds.isEmpty {
+                DisclosureGroup("Local-only trips (\(audit.localOnlyIds.count))") {
+                    ForEach(audit.localOnlyIds, id: \.self) { id in
+                        Text(id.uuidString)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.footnote)
+            }
+            if audit.remoteMissingFunction > 0 {
+                Text("\(audit.remoteMissingFunction) remote trip(s) have no trip_function/trip_title. If iOS shows a label like \"Harrowing\" but Supabase shows blank, run sql/023_trips_function_title.sql on the database, then Sync now.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func runTripSyncAudit() async {
+        guard !isAuditingTripSync, let vineyardId = store.selectedVineyardId else { return }
+        isAuditingTripSync = true
+        defer { isAuditingTripSync = false }
+        let result = await tripSync.auditTripSync(vineyardId: vineyardId)
+        lastTripSyncAudit = result
     }
 
     private func metric(_ label: String, value: String, highlight: Bool = false) -> some View {
