@@ -204,22 +204,80 @@ final class TripTrackingService {
 
     // MARK: - Quick pin during trip
 
+    /// Result of an in-trip pin drop. `.duplicateNearby` lets the caller
+    /// surface a duplicate-warning sheet (View existing / Create anyway /
+    /// Cancel) before retrying with `force: true`.
+    enum DropPinResult {
+        case created(VinePin)
+        case duplicateNearby(existing: VinePin, distance: Double, radius: Double)
+        case staleLocation(String)
+        case failed(String)
+    }
+
     @discardableResult
     func dropPinDuringTrip(
         button: ButtonConfig,
         paddockId: UUID? = nil,
         rowNumber: Int? = nil,
         side: PinSide = .right,
-        notes: String? = nil
-    ) -> VinePin? {
-        guard let store, let trip = activeTrip else { return nil }
-        guard let location = locationService?.location else {
-            errorMessage = "Waiting for GPS location."
-            return nil
+        notes: String? = nil,
+        force: Bool = false
+    ) -> DropPinResult {
+        guard let store, let trip = activeTrip else {
+            return .failed("No active trip.")
         }
+        let fix = locationService?.freshLocation() ?? (nil, .unavailable)
+        guard let location = fix.location else {
+            errorMessage = "Location unavailable \u{2014} enable location services to drop a pin."
+            return .staleLocation(errorMessage ?? "Location unavailable.")
+        }
+        switch fix.quality {
+        case .fresh:
+            break
+        case .stale:
+            let msg = "GPS fix is stale \u{2014} wait a moment for a fresh location before dropping a pin."
+            errorMessage = msg
+            return .staleLocation(msg)
+        case .lowAccuracy:
+            let msg = "GPS accuracy is low \u{2014} move to open sky and try again for a precise pin."
+            errorMessage = msg
+            return .staleLocation(msg)
+        case .unavailable:
+            let msg = "Location unavailable \u{2014} enable location services to drop a pin."
+            errorMessage = msg
+            return .staleLocation(msg)
+        }
+
         let resolved = PinContextResolver.resolve(coordinate: location.coordinate, store: store, tracking: self)
         let resolvedPaddock = paddockId ?? resolved.paddockId ?? trip.paddockId
         let resolvedRow = rowNumber ?? resolved.rowNumber
+
+        if !force {
+            let radius = PinDuplicateChecker.duplicateRadius(
+                coordinate: location.coordinate,
+                paddockId: resolvedPaddock,
+                paddocks: store.paddocks
+            )
+            diagDuplicateRadiusMeters = radius
+            if let match = PinDuplicateChecker.nearbyPin(
+                coordinate: location.coordinate,
+                vineyardId: store.selectedVineyardId,
+                paddockId: resolvedPaddock,
+                radius: radius,
+                in: store.pins
+            ) {
+                let title = match.pin.buttonName.isEmpty ? "pin" : match.pin.buttonName
+                let status = match.pin.isCompleted ? "completed" : "active"
+                let dist = String(format: "%.2f", match.distance)
+                diagDuplicateCheckResult =
+                    "duplicate_warning_shown: \(title), \(dist)m, status=\(status)"
+                return .duplicateNearby(existing: match.pin, distance: match.distance, radius: radius)
+            }
+            diagDuplicateCheckResult = "no_duplicate_found"
+        } else {
+            diagDuplicateCheckResult = "duplicate_create_anyway"
+        }
+
         guard var pin = store.createPinFromButton(
             button: button,
             coordinate: location.coordinate,
@@ -228,7 +286,7 @@ final class TripTrackingService {
             paddockId: resolvedPaddock,
             rowNumber: resolvedRow,
             notes: notes
-        ) else { return nil }
+        ) else { return .failed("Could not create pin \u{2014} no vineyard selected.") }
         print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: button.mode, resolved: resolved, store: store, tracking: self))
 
         pin.tripId = trip.id
@@ -239,7 +297,7 @@ final class TripTrackingService {
             updatedTrip.pinIds.append(pin.id)
             store.updateTrip(updatedTrip)
         }
-        return pin
+        return .created(pin)
     }
 
     // MARK: - Tank workflow

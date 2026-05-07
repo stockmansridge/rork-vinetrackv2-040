@@ -6,6 +6,7 @@ struct QuickPinSheet: View {
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(LocationService.self) private var locationService
     @Environment(BackendAccessControl.self) private var accessControl
+    @Environment(TripTrackingService.self) private var tracking
     @Environment(\.dismiss) private var dismiss
 
     @State private var mode: PinMode = .repairs
@@ -17,6 +18,16 @@ struct QuickPinSheet: View {
     @State private var showGrowthPicker: Bool = false
     @State private var pendingGrowthButton: ButtonConfig?
     @State private var errorMessage: String?
+    @State private var duplicateWarning: DuplicateWarning?
+    @State private var pinForDetailSheet: VinePin?
+
+    private struct DuplicateWarning: Identifiable {
+        let id = UUID()
+        let existing: VinePin
+        let distance: Double
+        let radius: Double
+        let proceed: () -> Void
+    }
 
     private var canCreate: Bool { accessControl.canCreateOperationalRecords }
 
@@ -145,6 +156,31 @@ struct QuickPinSheet: View {
                     handleGrowthStageSelected(stage)
                 }
             }
+            .sheet(item: $duplicateWarning) { warning in
+                PinDuplicateWarningSheet(
+                    existingPin: warning.existing,
+                    distance: warning.distance,
+                    radius: warning.radius,
+                    onCreateAnyway: {
+                        tracking.diagDuplicateCheckResult = "duplicate_create_anyway"
+                        warning.proceed()
+                    },
+                    onViewExisting: {
+                        tracking.diagDuplicateCheckResult = "duplicate_view_existing"
+                        pinForDetailSheet = warning.existing
+                    },
+                    onCancel: {
+                        tracking.diagDuplicateCheckResult = "duplicate_cancelled"
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $pinForDetailSheet) { pin in
+                PinDetailSheet(pin: pin)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
         }
     }
 
@@ -155,8 +191,13 @@ struct QuickPinSheet: View {
     private func handleDrop() {
         guard canCreate else { return }
         guard let button = selectedButton else { return }
-        guard let location = locationService.location else {
-            errorMessage = "Waiting for GPS location."
+        let fix = locationService.freshLocation()
+        guard let loc = fix.location else {
+            errorMessage = "Location unavailable \u{2014} enable location services to drop a pin."
+            return
+        }
+        if let warning = staleOrLowAccuracyWarning(for: fix.quality) {
+            errorMessage = warning
             return
         }
 
@@ -166,11 +207,45 @@ struct QuickPinSheet: View {
             return
         }
 
-        createPin(button: button, location: location)
+        let proceed = { createPin(button: button, location: loc) }
+        if let dup = checkDuplicate(at: loc.coordinate) {
+            recordDuplicateWarningShown(dup)
+            duplicateWarning = DuplicateWarning(
+                existing: dup.pin,
+                distance: dup.distance,
+                radius: dup.radius,
+                proceed: proceed
+            )
+            return
+        }
+        proceed()
     }
 
     private func handleGrowthStageSelected(_ stage: GrowthStage) {
-        guard let location = locationService.location else { return }
+        let fix = locationService.freshLocation()
+        guard let loc = fix.location else {
+            errorMessage = "Location unavailable \u{2014} enable location services to drop a pin."
+            return
+        }
+        if let warning = staleOrLowAccuracyWarning(for: fix.quality) {
+            errorMessage = warning
+            return
+        }
+        let proceed = { createGrowthPin(stage: stage, location: loc) }
+        if let dup = checkDuplicate(at: loc.coordinate) {
+            recordDuplicateWarningShown(dup)
+            duplicateWarning = DuplicateWarning(
+                existing: dup.pin,
+                distance: dup.distance,
+                radius: dup.radius,
+                proceed: proceed
+            )
+            return
+        }
+        proceed()
+    }
+
+    private func createGrowthPin(stage: GrowthStage, location: CLLocation) {
         let rowNumber = Int(rowText.trimmingCharacters(in: .whitespacesAndNewlines))
         store.createGrowthStagePin(
             stageCode: stage.code,
@@ -199,5 +274,51 @@ struct QuickPinSheet: View {
             notes: notes.isEmpty ? nil : notes
         )
         dismiss()
+    }
+
+    private func staleOrLowAccuracyWarning(for quality: LocationService.LocationQuality) -> String? {
+        switch quality {
+        case .fresh:
+            return nil
+        case .stale:
+            return "GPS fix is stale \u{2014} wait a moment for a fresh location before dropping a pin."
+        case .lowAccuracy:
+            return "GPS accuracy is low \u{2014} move to open sky and try again for a precise pin."
+        case .unavailable:
+            return "Location unavailable \u{2014} enable location services to drop a pin."
+        }
+    }
+
+    private func checkDuplicate(
+        at coord: CLLocationCoordinate2D
+    ) -> (pin: VinePin, distance: Double, radius: Double)? {
+        let radius = PinDuplicateChecker.duplicateRadius(
+            coordinate: coord,
+            paddockId: selectedPaddockId,
+            paddocks: store.paddocks
+        )
+        tracking.diagDuplicateRadiusMeters = radius
+        guard let match = PinDuplicateChecker.nearbyPin(
+            coordinate: coord,
+            vineyardId: store.selectedVineyardId,
+            paddockId: selectedPaddockId,
+            radius: radius,
+            in: store.pins
+        ) else {
+            tracking.diagDuplicateCheckResult = "no_duplicate_found"
+            return nil
+        }
+        return (match.pin, match.distance, radius)
+    }
+
+    private func recordDuplicateWarningShown(
+        _ dup: (pin: VinePin, distance: Double, radius: Double)
+    ) {
+        let title = dup.pin.buttonName.isEmpty ? "pin" : dup.pin.buttonName
+        let status = dup.pin.isCompleted ? "completed" : "active"
+        let dist = String(format: "%.2f", dup.distance)
+        tracking.diagDuplicateRadiusMeters = dup.radius
+        tracking.diagDuplicateCheckResult =
+            "duplicate_warning_shown: \(title), \(dist)m, status=\(status)"
     }
 }

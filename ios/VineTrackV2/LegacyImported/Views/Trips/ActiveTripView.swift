@@ -599,6 +599,7 @@ struct ActiveTripView: View {
         lines.append("  left label: \(leftRowLabel)")
         lines.append("  right label: \(rightRowLabel)")
         lines.append("  off-planned-path warning active: \(isOffPlannedPath)")
+        lines.append("  warningActive: \(isOffPlannedPath)")
         lines.append("")
         lines.append("Map / trail:")
         lines.append("  full point count: \(live.pathPoints.count)")
@@ -834,31 +835,45 @@ struct ActiveTripView: View {
 
     private var rowIndicatorOverlay: some View {
         HStack {
-            VStack(spacing: 4) {
-                Image(systemName: "arrow.left").font(.caption2.weight(.bold))
-                Text(leftRowLabel)
-                    .font(.system(.caption, design: .rounded, weight: .bold))
-                    .contentTransition(.numericText())
-            }
-            .frame(width: 78, height: 60)
-            .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
-            .padding(.leading, 12)
+            rowChip(arrow: "arrow.left", label: leftRowLabel)
+                .padding(.leading, 12)
 
             Spacer()
 
-            VStack(spacing: 4) {
-                Image(systemName: "arrow.right").font(.caption2.weight(.bold))
-                Text(rightRowLabel)
-                    .font(.system(.caption, design: .rounded, weight: .bold))
-                    .contentTransition(.numericText())
-            }
-            .frame(width: 78, height: 60)
-            .background(.ultraThinMaterial, in: .rect(cornerRadius: 10))
-            .padding(.trailing, 12)
+            rowChip(arrow: "arrow.right", label: rightRowLabel)
+                .padding(.trailing, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .allowsHitTesting(false)
         .transition(.opacity)
+    }
+
+    /// Row side chip. When the wrong-path warning is active the chip
+    /// switches to a red background and pulses so the operator can see
+    /// at a glance that the displayed row labels apply to the LIVE path,
+    /// not the planned target.
+    private func rowChip(arrow: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: arrow).font(.caption2.weight(.bold))
+            Text(label)
+                .font(.system(.caption, design: .rounded, weight: .bold))
+                .contentTransition(.numericText())
+        }
+        .foregroundStyle(isOffPlannedPath ? Color.white : Color.primary)
+        .frame(width: 78, height: 60)
+        .background {
+            if isOffPlannedPath {
+                PulsingRedBackground()
+            } else {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isOffPlannedPath ? Color.white.opacity(0.6) : Color.clear, lineWidth: 1)
+        )
+        .animation(.easeInOut(duration: 0.25), value: isOffPlannedPath)
     }
 
     // MARK: - Trail throttling
@@ -997,21 +1012,21 @@ struct ActiveTripView: View {
         HStack(spacing: 10) {
             Image(systemName: "location.fill")
                 .font(.subheadline)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("CURRENT PATH")
+                Text(isOffPlannedPath ? "LIVE PATH (WRONG ROW)" : "CURRENT PATH")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isOffPlannedPath ? Color.white.opacity(0.9) : .secondary)
                 HStack(spacing: 4) {
                     Text("Path \(formatPath(displayPath))")
                         .font(.system(.title3, design: .rounded, weight: .bold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
                         .contentTransition(.numericText())
                     if let blockName = currentPaddock?.name {
                         Text("• \(blockName)")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(isOffPlannedPath ? Color.white.opacity(0.85) : .secondary)
                             .lineLimit(1)
                     }
                 }
@@ -1024,13 +1039,20 @@ struct ActiveTripView: View {
             } label: {
                 Image(systemName: "list.bullet.clipboard")
                     .font(.title3)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground))
+        .background {
+            if isOffPlannedPath {
+                PulsingRedBackground(cornerRadius: 0)
+            } else {
+                Color(.secondarySystemGroupedBackground)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: isOffPlannedPath)
     }
 
     private func sprayBanner(record: SprayRecord) -> some View {
