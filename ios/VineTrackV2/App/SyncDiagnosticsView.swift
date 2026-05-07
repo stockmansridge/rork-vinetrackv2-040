@@ -126,7 +126,7 @@ struct SyncDiagnosticsView: View {
                     Task { await repushTripNames() }
                 } label: {
                     HStack {
-                        Label(isRepushingNames ? "Re-pushing…" : "Re-push trip names", systemImage: "text.badge.plus")
+                        Label(isRepushingNames ? "Repairing & pushing…" : "Repair & push local trips", systemImage: "text.badge.plus")
                         Spacer()
                         if isRepushingNames { ProgressView() }
                     }
@@ -154,7 +154,7 @@ struct SyncDiagnosticsView: View {
             } header: {
                 Text("Trip Repair")
             } footer: {
-                Text("Quick repair fixes local trips for the selected vineyard. The Admin audit scans trips across every vineyard you can access (including deleted ones) and offers per-trip manual reassignment for cases that aren't safe to auto-repair.")
+    Text("Quick repair fixes local trips for the selected vineyard. Repair & push local trips scans every local trip, safely repairs vineyard mismatches when paddocks resolve unambiguously, and pushes trip function/title plus vineyard/paddock data to Supabase. The Admin audit scans trips across every vineyard you can access (including deleted ones) and offers per-trip manual reassignment for cases that aren't safe to auto-repair.")
             }
         }
     }
@@ -383,7 +383,7 @@ struct SyncDiagnosticsView: View {
     @ViewBuilder
     private func repushNamesSummaryView(_ result: TripSyncService.RepushNamesResult) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Last re-push trip names")
+            Text("Last repair & push local trips")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: 14) {
@@ -631,7 +631,7 @@ struct SyncDiagnosticsView: View {
         }
         if let result = lastRepushNamesResult {
             lines.append("")
-            lines.append("Re-push Trip Names")
+            lines.append("Repair & Push Local Trips")
             if let at = lastRepushNamesAt {
                 lines.append("  ran_at: \(df.string(from: at))")
             }
