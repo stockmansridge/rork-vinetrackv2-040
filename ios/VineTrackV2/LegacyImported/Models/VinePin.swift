@@ -15,8 +15,10 @@ nonisolated struct VinePin: Codable, Identifiable, Sendable, Hashable {
     let rowNumber: Int?
     let timestamp: Date
     var createdBy: String?
+    var createdByUserId: UUID?
     var isCompleted: Bool
     var completedBy: String?
+    var completedByUserId: UUID?
     var completedAt: Date?
     var photoData: Data?
     var photoPath: String?
@@ -42,8 +44,10 @@ nonisolated struct VinePin: Codable, Identifiable, Sendable, Hashable {
         rowNumber: Int? = nil,
         timestamp: Date = Date(),
         createdBy: String? = nil,
+        createdByUserId: UUID? = nil,
         isCompleted: Bool = false,
         completedBy: String? = nil,
+        completedByUserId: UUID? = nil,
         completedAt: Date? = nil,
         photoData: Data? = nil,
         photoPath: String? = nil,
@@ -64,8 +68,10 @@ nonisolated struct VinePin: Codable, Identifiable, Sendable, Hashable {
         self.rowNumber = rowNumber
         self.timestamp = timestamp
         self.createdBy = createdBy
+        self.createdByUserId = createdByUserId
         self.isCompleted = isCompleted
         self.completedBy = completedBy
+        self.completedByUserId = completedByUserId
         self.completedAt = completedAt
         self.photoData = photoData
         self.photoPath = photoPath

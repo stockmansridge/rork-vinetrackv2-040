@@ -256,6 +256,7 @@ struct QuickPinSheet: View {
             paddockId: selectedPaddockId,
             rowNumber: rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: notes.isEmpty ? nil : notes
         )
         dismiss()
@@ -271,6 +272,7 @@ struct QuickPinSheet: View {
             paddockId: selectedPaddockId,
             rowNumber: rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: notes.isEmpty ? nil : notes
         )
         dismiss()

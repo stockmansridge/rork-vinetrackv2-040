@@ -21,6 +21,7 @@ nonisolated struct BackendPin: Codable, Sendable, Identifiable {
     let growthStageCode: String?
     let isCompleted: Bool
     let completedBy: String?
+    let completedByUserId: UUID?
     let completedAt: Date?
     let photoPath: String?
     let createdBy: UUID?
@@ -52,6 +53,7 @@ nonisolated struct BackendPin: Codable, Sendable, Identifiable {
         case growthStageCode = "growth_stage_code"
         case isCompleted = "is_completed"
         case completedBy = "completed_by"
+        case completedByUserId = "completed_by_user_id"
         case completedAt = "completed_at"
         case photoPath = "photo_path"
         case createdBy = "created_by"
@@ -84,6 +86,7 @@ nonisolated struct BackendPinUpsert: Encodable, Sendable {
     let growthStageCode: String?
     let isCompleted: Bool
     let completedBy: String?
+    let completedByUserId: UUID?
     let completedAt: Date?
     let photoPath: String?
     let createdBy: UUID?
@@ -106,6 +109,7 @@ nonisolated struct BackendPinUpsert: Encodable, Sendable {
         case growthStageCode = "growth_stage_code"
         case isCompleted = "is_completed"
         case completedBy = "completed_by"
+        case completedByUserId = "completed_by_user_id"
         case completedAt = "completed_at"
         case photoPath = "photo_path"
         case createdBy = "created_by"
@@ -135,16 +139,17 @@ extension BackendPin {
             growthStageCode: pin.growthStageCode,
             isCompleted: pin.isCompleted,
             completedBy: pin.completedBy,
+            completedByUserId: pin.completedByUserId,
             completedAt: pin.completedAt,
             photoPath: pin.photoPath,
-            createdBy: UUID(uuidString: pin.createdBy ?? ""),
+            createdBy: pin.createdByUserId,
             clientUpdatedAt: clientUpdatedAt
         )
     }
 
     /// Map a remote BackendPin into a local VinePin. Returns nil if the remote
     /// row is missing critical coordinates.
-    func toVinePin(preservingPhoto existingPhoto: Data? = nil) -> VinePin? {
+    func toVinePin(preservingPhoto existingPhoto: Data? = nil, preservingCreatedByText existingCreatedByText: String? = nil) -> VinePin? {
         guard let latitude, let longitude else { return nil }
         let pinSide = PinSide(rawValue: side ?? "") ?? .left
         let pinMode = PinMode(rawValue: mode ?? "") ?? .repairs
@@ -161,9 +166,11 @@ extension BackendPin {
             paddockId: paddockId,
             rowNumber: rowNumber,
             timestamp: createdAt ?? Date(),
-            createdBy: createdBy?.uuidString,
+            createdBy: existingCreatedByText,
+            createdByUserId: createdBy,
             isCompleted: isCompleted,
             completedBy: completedBy,
+            completedByUserId: completedByUserId,
             completedAt: completedAt,
             photoData: existingPhoto,
             photoPath: photoPath,

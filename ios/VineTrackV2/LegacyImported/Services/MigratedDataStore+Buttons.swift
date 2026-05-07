@@ -128,6 +128,7 @@ extension MigratedDataStore {
         paddockId: UUID? = nil,
         rowNumber: Int? = nil,
         createdBy: String? = nil,
+        createdByUserId: UUID? = nil,
         growthStageCode: String? = nil,
         notes: String? = nil
     ) -> VinePin? {
@@ -145,6 +146,7 @@ extension MigratedDataStore {
             rowNumber: rowNumber,
             timestamp: Date(),
             createdBy: createdBy,
+            createdByUserId: createdByUserId,
             isCompleted: false,
             growthStageCode: growthStageCode,
             notes: notes
@@ -164,6 +166,7 @@ extension MigratedDataStore {
         paddockId: UUID? = nil,
         rowNumber: Int? = nil,
         createdBy: String? = nil,
+        createdByUserId: UUID? = nil,
         notes: String? = nil
     ) -> VinePin? {
         guard let vineyardId = selectedVineyardId else { return nil }
@@ -180,6 +183,7 @@ extension MigratedDataStore {
             rowNumber: rowNumber,
             timestamp: Date(),
             createdBy: createdBy,
+            createdByUserId: createdByUserId,
             isCompleted: false,
             growthStageCode: stageCode,
             notes: notes ?? stageDescription

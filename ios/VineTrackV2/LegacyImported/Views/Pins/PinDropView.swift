@@ -372,6 +372,7 @@ struct PinDropView: View {
             paddockId: selectedPaddockId,
             rowNumber: rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: nil
         )
         showFeedback("Pin: \(button.name) (\(side == .left ? "L" : "R"))", kind: .success)
@@ -393,6 +394,7 @@ struct PinDropView: View {
             paddockId: selectedPaddockId,
             rowNumber: rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: nil
         )
         showFeedback("Growth pin: EL \(stage.code)", kind: .success)

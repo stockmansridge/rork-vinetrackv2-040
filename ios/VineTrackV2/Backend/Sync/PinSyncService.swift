@@ -236,8 +236,12 @@ final class PinSyncService {
         let existingPin: VinePin? = existingIndex.map { store.pins[$0] }
         let existingPhotoData: Data? = existingPin?.photoData
         let existingPhotoPath: String? = existingPin?.photoPath
+        let existingCreatedByText: String? = existingPin?.createdBy
 
-        guard var mapped = backendPin.toVinePin(preservingPhoto: existingPhotoData) else { return }
+        guard var mapped = backendPin.toVinePin(
+            preservingPhoto: existingPhotoData,
+            preservingCreatedByText: existingCreatedByText
+        ) else { return }
 
         // If the remote has a photoPath, try the disk cache first, then
         // fall back to a network download. Failures are non-fatal — we keep

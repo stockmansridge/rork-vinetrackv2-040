@@ -685,9 +685,11 @@ struct PinsListView: View {
         if updated.isCompleted {
             updated.completedAt = Date()
             updated.completedBy = auth.userName
+            updated.completedByUserId = auth.userId
         } else {
             updated.completedAt = nil
             updated.completedBy = nil
+            updated.completedByUserId = nil
         }
         store.updatePin(updated)
     }
@@ -1070,6 +1072,23 @@ struct PinDetailSheet: View {
     @State private var showDirections: Bool = false
     @State private var showPhotoPicker: Bool = false
     @State private var showFullPhoto: Bool = false
+    @State private var memberDirectory: [UUID: String] = [:]
+    private let teamRepository: any TeamRepositoryProtocol = SupabaseTeamRepository()
+
+    private func resolveDisplayName(userId: UUID?, fallbackText: String?) -> String? {
+        let trimmed = fallbackText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Prefer the locally-saved display text if it is present and not just a UUID.
+        if let trimmed, !trimmed.isEmpty, UUID(uuidString: trimmed) == nil {
+            return trimmed
+        }
+        if let userId {
+            if let name = memberDirectory[userId], !name.isEmpty { return name }
+            if userId == auth.userId, let me = auth.userName, !me.isEmpty { return me }
+        }
+        // As a last resort fall back to whatever text we have, even if empty UUID-like.
+        if let trimmed, !trimmed.isEmpty { return trimmed }
+        return nil
+    }
 
     private var paddockName: String {
         guard let paddockId = pin.paddockId else { return "—" }
@@ -1170,10 +1189,10 @@ struct PinDetailSheet: View {
                     }
                     LabeledContent("Side", value: "\(pin.side.rawValue) hand")
                     LabeledContent("Facing", value: "\(compassDirection) (\(Int(pin.heading))\u{00B0})")
-                    if let createdBy = pin.createdBy, !createdBy.isEmpty {
-                        LabeledContent("Created By", value: createdBy)
+                    if let createdByName = resolveDisplayName(userId: pin.createdByUserId, fallbackText: pin.createdBy) {
+                        LabeledContent("Created by", value: createdByName)
                     }
-                    LabeledContent("Time", value: pin.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    LabeledContent("Created", value: pin.timestamp.formatted(date: .abbreviated, time: .shortened))
                     LabeledContent("Latitude", value: String(format: "%.6f", pin.latitude))
                     LabeledContent("Longitude", value: String(format: "%.6f", pin.longitude))
                     LabeledContent("Status", value: pin.isCompleted ? "Completed" : "Active")
@@ -1181,11 +1200,11 @@ struct PinDetailSheet: View {
 
                 if pin.isCompleted {
                     Section("Completion") {
-                        if let completedBy = pin.completedBy {
-                            LabeledContent("Completed By", value: completedBy)
+                        if let completedByName = resolveDisplayName(userId: pin.completedByUserId, fallbackText: pin.completedBy) {
+                            LabeledContent("Completed by", value: completedByName)
                         }
                         if let completedAt = pin.completedAt {
-                            LabeledContent("Completed At", value: completedAt.formatted(date: .abbreviated, time: .shortened))
+                            LabeledContent("Completed", value: completedAt.formatted(date: .abbreviated, time: .shortened))
                         }
                     }
                 }
@@ -1200,6 +1219,7 @@ struct PinDetailSheet: View {
             }
             .onAppear {
                 notesDraft = pin.notes ?? ""
+                Task { await loadMemberDirectory() }
             }
             .sheet(isPresented: $showDirections) {
                 PinDirectionsSheet(pin: pin)
@@ -1232,9 +1252,11 @@ struct PinDetailSheet: View {
         if updated.isCompleted {
             updated.completedAt = Date()
             updated.completedBy = auth.userName
+            updated.completedByUserId = auth.userId
         } else {
             updated.completedAt = nil
             updated.completedBy = nil
+            updated.completedByUserId = nil
         }
         store.updatePin(updated)
     }
@@ -1244,6 +1266,23 @@ struct PinDetailSheet: View {
         var updated = pin
         updated.photoData = data
         store.updatePin(updated)
+    }
+
+    private func loadMemberDirectory() async {
+        guard let vineyardId = store.selectedVineyardId else { return }
+        do {
+            let members = try await teamRepository.listMembers(vineyardId: vineyardId)
+            var map: [UUID: String] = [:]
+            for m in members {
+                let trimmed = (m.displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    map[m.userId] = trimmed
+                }
+            }
+            memberDirectory = map
+        } catch {
+            // Non-fatal — fall back to text/UUID handling.
+        }
     }
 }
 
