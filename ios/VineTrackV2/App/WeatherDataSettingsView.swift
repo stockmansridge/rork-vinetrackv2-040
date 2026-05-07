@@ -67,6 +67,10 @@ struct WeatherDataSettingsView: View {
     @State private var isClearingWu: Bool = false
     @State private var showWuStationPicker: Bool = false
     @State private var showSetupWizard: Bool = false
+    // MARK: - Open-Meteo gap fill state
+    @State private var isBackfillingOpenMeteo: Bool = false
+    @State private var openMeteoBackfillStatus: String?
+    @State private var openMeteoBackfillOk: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -163,6 +167,10 @@ struct WeatherDataSettingsView: View {
             davisDiagnosticsSection
 
             weatherUndergroundVineyardSection
+
+            if canEdit {
+                openMeteoFallbackSection
+            }
 
             historicalFallbackSection
 
@@ -1135,6 +1143,101 @@ struct WeatherDataSettingsView: View {
             Text("Davis diagnostics")
         } footer: {
             Text("Non-secret status only. Used to verify Davis WeatherLink persistence and parser detection in the field. API key, secret and credential-bearing URLs are never shown, copied or logged.")
+        }
+    }
+
+    // MARK: - Open-Meteo fallback (gap fill)
+
+    private var openMeteoFallbackSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "tray.full.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.gray)
+                    .frame(width: 22)
+                Text("Open-Meteo fills missing rainfall days only. It will not replace Manual, Davis or Weather Underground records.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+
+            Button {
+                Task { await backfillOpenMeteoRainfall() }
+            } label: {
+                if isBackfillingOpenMeteo {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Filling rainfall gaps from Open-Meteo…")
+                    }
+                } else {
+                    Label("Fill remaining rainfall gaps from Open-Meteo", systemImage: "calendar.badge.plus")
+                }
+            }
+            .disabled(isBackfillingOpenMeteo || vineyardId == nil)
+
+            if let msg = openMeteoBackfillStatus, !msg.isEmpty {
+                Text(msg)
+                    .font(.caption2)
+                    .foregroundStyle(openMeteoBackfillOk ? .green : .red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("Default range: last 365 days. Today and yesterday are skipped because the archive is incomplete. Safe to re-run.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Open-Meteo fallback")
+        } footer: {
+            Text("Lowest priority rainfall source. Manual → Davis → Weather Underground → Open-Meteo. Only days with no better source are filled.")
+        }
+    }
+
+    private func backfillOpenMeteoRainfall() async {
+        guard canEdit else {
+            openMeteoBackfillStatus = "Owner or manager role required."
+            openMeteoBackfillOk = false
+            return
+        }
+        guard let vid = vineyardId else {
+            openMeteoBackfillStatus = "No vineyard selected."
+            openMeteoBackfillOk = false
+            return
+        }
+        isBackfillingOpenMeteo = true
+        openMeteoBackfillStatus = nil
+        defer { isBackfillingOpenMeteo = false }
+        print("[OpenMeteoProxy] backfill requested vineyardId=\(vid) days=365")
+        do {
+            let result = try await VineyardOpenMeteoProxyService.backfillRainfallGaps(
+                vineyardId: vid, days: 365, timezone: TimeZone.current.identifier
+            )
+            var lines: [String] = []
+            lines.append(result.success
+                ? "Open-Meteo gap fill complete."
+                : "Open-Meteo gap fill finished with errors.")
+            lines.append("Days requested: \(result.daysRequested). Processed: \(result.daysProcessed). Rows upserted: \(result.rowsUpserted). Skipped (better source): \(result.daysSkippedBetterSource). Skipped (no data): \(result.daysSkippedNoData). Errors: \(result.errorsCount).")
+            if let src = result.coordsSource, !src.isEmpty {
+                lines.append("Coordinates source: \(src).")
+            }
+            if let v = result.proxyVersion, !v.isEmpty {
+                lines.append("Proxy version: \(v).")
+            }
+            openMeteoBackfillStatus = lines.joined(separator: " ")
+            openMeteoBackfillOk = result.success
+            if result.rowsUpserted > 0 {
+                NotificationCenter.default.post(
+                    name: .rainfallCalendarShouldReload, object: nil
+                )
+            }
+        } catch let error as VineyardOpenMeteoProxyError {
+            openMeteoBackfillOk = false
+            openMeteoBackfillStatus = "Open-Meteo gap fill failed — \(error.errorDescription ?? "unknown error")"
+            print("[OpenMeteoProxy] backfill failed vineyardId=\(vid) reason=\(error.errorDescription ?? "-")")
+        } catch {
+            openMeteoBackfillOk = false
+            openMeteoBackfillStatus = "Open-Meteo gap fill failed — \(error.localizedDescription)"
+            print("[OpenMeteoProxy] backfill failed vineyardId=\(vid) reason=\(error.localizedDescription)")
         }
     }
 

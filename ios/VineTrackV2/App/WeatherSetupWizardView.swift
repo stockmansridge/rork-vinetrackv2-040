@@ -19,12 +19,13 @@ struct WeatherSetupWizardView: View {
     @Environment(BackendAccessControl.self) private var accessControl
 
     enum Step: Int, CaseIterable, Hashable {
-        case intro, davis, wunderground, summary, finish
+        case intro, davis, wunderground, openMeteo, summary, finish
         var title: String {
             switch self {
             case .intro: return "Welcome"
             case .davis: return "Davis WeatherLink"
             case .wunderground: return "Weather Underground"
+            case .openMeteo: return "Open-Meteo"
             case .summary: return "Summary"
             case .finish: return "Done"
             }
@@ -57,6 +58,13 @@ struct WeatherSetupWizardView: View {
     @State private var wuBackfillOk: Bool = false
     @State private var wuRowsBackfilled: Int = 0
     @State private var wuSkipped: Bool = false
+
+    // Open-Meteo state
+    @State private var isBackfillingOpenMeteo: Bool = false
+    @State private var openMeteoStatus: String?
+    @State private var openMeteoOk: Bool = false
+    @State private var openMeteoRowsBackfilled: Int = 0
+    @State private var openMeteoSkipped: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -108,6 +116,7 @@ struct WeatherSetupWizardView: View {
                         case .intro: introStep
                         case .davis: davisStep
                         case .wunderground: wuStep
+                        case .openMeteo: openMeteoStep
                         case .summary: summaryStep
                         case .finish: finishStep
                         }
@@ -408,6 +417,48 @@ struct WeatherSetupWizardView: View {
         }
     }
 
+    private var openMeteoStep: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeader(symbol: "tray.full.fill", color: .gray, title: "Open-Meteo fallback")
+
+            Text("Use Open-Meteo archive data only for days where no Manual, Davis or Weather Underground rainfall record exists.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            infoCard(color: .gray, symbol: "info.circle.fill",
+                     title: "Optional step",
+                     body: "You can skip this and run it later from Weather Data & Forecasting. Open-Meteo never overwrites Manual, Davis or Weather Underground rows.")
+
+            if canEdit {
+                Button {
+                    Task { await runOpenMeteoBackfill() }
+                } label: {
+                    HStack {
+                        if isBackfillingOpenMeteo { ProgressView().controlSize(.small) }
+                        Label(isBackfillingOpenMeteo ? "Filling gaps…" : "Fill remaining gaps with Open-Meteo (365 days)",
+                              systemImage: "calendar.badge.plus")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.gray)
+                .disabled(isBackfillingOpenMeteo || vineyardId == nil)
+
+                if let msg = openMeteoStatus, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundStyle(openMeteoOk ? .green : .red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("Today and yesterday are skipped because the archive is incomplete.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var summaryStep: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader(symbol: "list.bullet.rectangle", color: .indigo, title: "Setup summary")
@@ -429,6 +480,10 @@ struct WeatherSetupWizardView: View {
                            label: "WU rows backfilled",
                            value: "\(wuRowsBackfilled)",
                            ok: wuRowsBackfilled > 0)
+                summaryRow(symbol: "tray.full.fill",
+                           label: "Open-Meteo rows backfilled",
+                           value: openMeteoSkipped && openMeteoRowsBackfilled == 0 ? "Skipped" : "\(openMeteoRowsBackfilled)",
+                           ok: openMeteoRowsBackfilled > 0)
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -519,6 +574,7 @@ struct WeatherSetupWizardView: View {
         case .intro: return "Get started"
         case .davis: return davisConfigured ? "Continue" : "Skip Davis"
         case .wunderground: return wuConfigured ? "Continue" : "Skip Weather Underground"
+        case .openMeteo: return openMeteoRowsBackfilled > 0 ? "Continue" : "Skip Open-Meteo"
         case .summary: return "Finish"
         case .finish: return "Done"
         }
@@ -527,6 +583,7 @@ struct WeatherSetupWizardView: View {
     private func advance() {
         if step == .davis && !davisConfigured { davisSkipped = true }
         if step == .wunderground && !wuConfigured { wuSkipped = true }
+        if step == .openMeteo && openMeteoRowsBackfilled == 0 { openMeteoSkipped = true }
         let next = min(step.rawValue + 1, Step.allCases.count - 1)
         if let s = Step(rawValue: next) {
             withAnimation(.easeInOut) { step = s }
@@ -776,6 +833,40 @@ struct WeatherSetupWizardView: View {
         } catch {
             wuBackfillOk = false
             wuBackfillStatus = "WU backfill failed — \(error.localizedDescription)"
+        }
+    }
+
+    private func runOpenMeteoBackfill() async {
+        guard canEdit, let vid = vineyardId else { return }
+        isBackfillingOpenMeteo = true
+        openMeteoStatus = nil
+        defer { isBackfillingOpenMeteo = false }
+        do {
+            let r = try await VineyardOpenMeteoProxyService.backfillRainfallGaps(
+                vineyardId: vid, days: 365, timezone: TimeZone.current.identifier
+            )
+            openMeteoRowsBackfilled = r.rowsUpserted
+            openMeteoOk = r.success
+            var lines: [String] = []
+            lines.append(r.success
+                         ? "Open-Meteo gap fill complete."
+                         : "Open-Meteo gap fill finished with errors.")
+            lines.append("Days requested: \(r.daysRequested). Processed: \(r.daysProcessed). Rows upserted: \(r.rowsUpserted). Skipped (better source): \(r.daysSkippedBetterSource). Skipped (no data): \(r.daysSkippedNoData). Errors: \(r.errorsCount).")
+            if let v = r.proxyVersion, !v.isEmpty {
+                lines.append("Proxy version: \(v).")
+            }
+            openMeteoStatus = lines.joined(separator: " ")
+            if r.rowsUpserted > 0 {
+                NotificationCenter.default.post(
+                    name: .rainfallCalendarShouldReload, object: nil
+                )
+            }
+        } catch let error as VineyardOpenMeteoProxyError {
+            openMeteoOk = false
+            openMeteoStatus = "Open-Meteo gap fill failed — \(error.errorDescription ?? "unknown error")"
+        } catch {
+            openMeteoOk = false
+            openMeteoStatus = "Open-Meteo gap fill failed — \(error.localizedDescription)"
         }
     }
 }

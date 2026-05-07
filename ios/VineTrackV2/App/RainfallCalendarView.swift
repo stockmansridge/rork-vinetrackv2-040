@@ -170,7 +170,7 @@ struct RainfallCalendarView: View {
             if service.archiveDaysCovered > 0 {
                 calendarSourceRow(
                     label: "Older / fallback",
-                    value: "Open-Meteo Archive",
+                    value: "Open-Meteo (fallback) · \(service.archiveDaysCovered) day\(service.archiveDaysCovered == 1 ? "" : "s")",
                     icon: "tray.full.fill",
                     tint: .secondary
                 )
