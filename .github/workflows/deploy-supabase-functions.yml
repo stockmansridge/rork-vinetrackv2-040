@@ -11,6 +11,7 @@ on:
         options:
           - davis-proxy
           - wunderground-proxy
+          - open-meteo-proxy
           - all
 
 env:
@@ -47,6 +48,14 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           supabase functions deploy wunderground-proxy \
+            --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy open-meteo-proxy
+        if: ${{ github.event.inputs.function == 'open-meteo-proxy' }}
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy open-meteo-proxy \
             --project-ref "$SUPABASE_PROJECT_REF"
 
       - name: Deploy all functions
