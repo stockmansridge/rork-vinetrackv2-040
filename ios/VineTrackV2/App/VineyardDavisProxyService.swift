@@ -23,6 +23,10 @@ nonisolated struct DavisProxyCurrentDiagnostics: Sendable, Equatable {
     public let stationId: String?
     public let stationName: String?
     public let timezone: String?
+    /// Deployed proxy build identifier, taken from `_proxy.version` (or
+    /// the top-level `_proxy_version` fallback). Lets the UI prove which
+    /// edge function code is actually serving requests.
+    public let version: String?
 }
 
 /// Bundles the parsed current conditions with the server-side proxy
@@ -148,15 +152,33 @@ nonisolated enum VineyardDavisProxyService {
             json,
             fallbackStationId: stationId
         )
-        let diagnostics = parseProxyDiagnostics(json["_proxy"])
+        let topLevelVersion = json["_proxy_version"] as? String
+        let diagnostics = parseProxyDiagnostics(json["_proxy"], topLevelVersion: topLevelVersion)
         return DavisProxyCurrentResult(conditions: conditions, diagnostics: diagnostics)
     }
 
     /// Parses the `_proxy` diagnostics block returned by the edge
     /// function. Returns nil when an older proxy build (no `_proxy` key)
     /// is deployed, so callers can fall back to a generic message.
-    private static func parseProxyDiagnostics(_ raw: Any?) -> DavisProxyCurrentDiagnostics? {
-        guard let dict = raw as? [String: Any] else { return nil }
+    private static func parseProxyDiagnostics(
+        _ raw: Any?,
+        topLevelVersion: String? = nil
+    ) -> DavisProxyCurrentDiagnostics? {
+        guard let dict = raw as? [String: Any] else {
+            // Even an old proxy without a `_proxy` block may now stamp
+            // `_proxy_version` at the top level. Surface that on its own
+            // so the UI can still prove which build is live.
+            if let v = topLevelVersion {
+                return DavisProxyCurrentDiagnostics(
+                    observations: DavisProxyWriteStatus(attempted: false, success: false, code: nil, message: nil),
+                    rainfallDaily: DavisProxyWriteStatus(attempted: false, success: false, code: nil, message: nil),
+                    rainfallDate: nil, rainTodayMm: nil,
+                    stationId: nil, stationName: nil, timezone: nil,
+                    version: v
+                )
+            }
+            return nil
+        }
         func parseStatus(_ v: Any?) -> DavisProxyWriteStatus {
             let d = (v as? [String: Any]) ?? [:]
             return DavisProxyWriteStatus(
@@ -180,6 +202,7 @@ nonisolated enum VineyardDavisProxyService {
             if let n = rainBlock["rain_today_mm"] as? NSNumber { return n.doubleValue }
             return nil
         }()
+        let version = (dict["version"] as? String) ?? topLevelVersion
         return DavisProxyCurrentDiagnostics(
             observations: obs,
             rainfallDaily: rain,
@@ -187,7 +210,8 @@ nonisolated enum VineyardDavisProxyService {
             rainTodayMm: rainMm,
             stationId: dict["station_id"] as? String,
             stationName: dict["station_name"] as? String,
-            timezone: dict["timezone"] as? String
+            timezone: dict["timezone"] as? String,
+            version: version
         )
     }
 

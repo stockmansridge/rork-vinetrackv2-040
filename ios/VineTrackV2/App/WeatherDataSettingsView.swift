@@ -1154,6 +1154,11 @@ struct WeatherDataSettingsView: View {
                 let rainAttempted = diag.rainfallDaily.attempted
 
                 var lines: [String] = ["Davis updated at \(timestamp) — \(summary)."]
+                if let v = diag.version, !v.isEmpty {
+                    lines.append("Proxy version: \(v).")
+                } else {
+                    lines.append("Proxy version: unknown (older deployment).")
+                }
                 switch (obsOk, rainOk, rainAttempted) {
                 case (true, true, _):
                     lines.append("Server refreshed vineyard_weather_observations and rainfall_daily.")
@@ -1178,7 +1183,7 @@ struct WeatherDataSettingsView: View {
             } else {
                 // Older proxy build without the `_proxy` block. Be honest
                 // and tell the user we can't confirm the writes.
-                davisForceRefreshStatus = "Davis updated at \(timestamp) — \(summary). Server did not return persistence diagnostics; redeploy davis-proxy to confirm rainfall_daily writes."
+                davisForceRefreshStatus = "Davis updated at \(timestamp) — \(summary). Server did not return persistence diagnostics or a proxy version; the deployed davis-proxy is older than the rainfall-diagnostics build. Redeploy from GitHub Actions to confirm rainfall_daily writes."
                 davisForceRefreshOk = false
             }
             // Refresh integration metadata so the cached RPC display is

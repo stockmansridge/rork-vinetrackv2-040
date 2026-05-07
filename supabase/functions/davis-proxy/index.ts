@@ -50,6 +50,12 @@ const CORS: Record<string, string> = {
 
 const DAVIS_BASE = "https://api.weatherlink.com/v2";
 
+// Bumped whenever the proxy contract changes so the iOS client can prove
+// which deployed code is actually serving requests. Surfaced in the
+// `_proxy.version` field of `current` responses and in the top-level
+// `version` field of every JSON response.
+const PROXY_VERSION = "rainfall-diagnostics-2026-05-07";
+
 // ---------------------------------------------------------------------------
 // Vineyard-local date helper.
 // Computes the YYYY-MM-DD date for an instant in a given IANA timezone.
@@ -213,7 +219,15 @@ function parseDavisCurrent(body: any): {
 
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+  // Stamp every JSON response with the deployed proxy version so callers
+  // can confirm which build is live without depending on Edge Function
+  // log access. Top-level `_proxy_version` does not collide with Davis
+  // payloads (Davis uses no underscore-prefixed keys).
+  let payload: unknown = body;
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    payload = { _proxy_version: PROXY_VERSION, ...(body as Record<string, unknown>) };
+  }
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...CORS, "Content-Type": "application/json" },
   });
@@ -545,6 +559,7 @@ Deno.serve(async (req: Request) => {
         const augmented = {
           ...(r.body && typeof r.body === "object" ? r.body : {}),
           _proxy: {
+            version: PROXY_VERSION,
             observations: obsStatus,
             rainfall_daily: {
               ...rainStatus,
