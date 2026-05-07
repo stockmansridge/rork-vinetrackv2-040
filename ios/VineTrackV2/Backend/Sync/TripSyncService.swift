@@ -98,10 +98,34 @@ final class TripSyncService {
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
             let byId = Dictionary(store.trips.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            // Build a paddockId -> vineyardId lookup for repair inference.
+            let paddockVineyard = Dictionary(
+                store.paddocks.map { ($0.id, $0.vineyardId) },
+                uniquingKeysWith: { first, _ in first }
+            )
             var payloads: [BackendTripUpsert] = []
             var pushedIds: [UUID] = []
+            var skipped: [(UUID, String)] = []
             for (tripId, ts) in dirty {
-                guard let trip = byId[tripId], trip.vineyardId == vineyardId else { continue }
+                guard var trip = byId[tripId] else { continue }
+                if trip.vineyardId != vineyardId {
+                    // Try to repair: only if every paddock on the trip resolves to the
+                    // currently selected vineyard. Never guess across vineyards.
+                    let resolved = trip.paddockIds.compactMap { paddockVineyard[$0] }
+                    let allMatch = !resolved.isEmpty
+                        && resolved.count == trip.paddockIds.count
+                        && resolved.allSatisfy { $0 == vineyardId }
+                    if allMatch {
+                        trip.vineyardId = vineyardId
+                        store.applyRemoteTripUpsert(trip)
+                        #if DEBUG
+                        print("[TripSync] repaired trip \(tripId) vineyard_id from paddockIds")
+                        #endif
+                    } else {
+                        skipped.append((tripId, "vineyard mismatch (trip=\(trip.vineyardId), selected=\(vineyardId))"))
+                        continue
+                    }
+                }
                 payloads.append(BackendTrip.upsert(from: trip, createdBy: createdBy, clientUpdatedAt: ts))
                 pushedIds.append(tripId)
             }
@@ -109,6 +133,13 @@ final class TripSyncService {
                 try await repository.upsertTrips(payloads)
                 metadata.clearDirty(pushedIds)
             }
+            #if DEBUG
+            if !skipped.isEmpty {
+                for (id, reason) in skipped {
+                    print("[TripSync] skipped trip \(id): \(reason)")
+                }
+            }
+            #endif
         }
 
         let deletes = metadata.pendingDeletes
@@ -155,9 +186,31 @@ final class TripSyncService {
         let remote = try await repository.fetchTrips(vineyardId: vineyardId, since: lastSync)
 
         // Initial sync: if remote is empty AND we have local trips AND we have
-        // never synced before, push them all up.
+        // never synced before, push them all up. Also include any trips whose
+        // paddockIds all resolve to the selected vineyard (repair stale
+        // vineyardId on legacy local trips).
         if remote.isEmpty, lastSync == nil {
-            let localForVineyard = store.trips.filter { $0.vineyardId == vineyardId }
+            let paddockVineyard = Dictionary(
+                store.paddocks.map { ($0.id, $0.vineyardId) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            var localForVineyard: [Trip] = []
+            for trip in store.trips {
+                if trip.vineyardId == vineyardId {
+                    localForVineyard.append(trip)
+                    continue
+                }
+                let resolved = trip.paddockIds.compactMap { paddockVineyard[$0] }
+                let allMatch = !resolved.isEmpty
+                    && resolved.count == trip.paddockIds.count
+                    && resolved.allSatisfy { $0 == vineyardId }
+                if allMatch {
+                    var repaired = trip
+                    repaired.vineyardId = vineyardId
+                    store.applyRemoteTripUpsert(repaired)
+                    localForVineyard.append(repaired)
+                }
+            }
             if !localForVineyard.isEmpty {
                 let now = Date()
                 let createdBy = auth?.userId

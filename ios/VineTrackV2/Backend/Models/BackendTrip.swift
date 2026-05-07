@@ -161,10 +161,18 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
 extension BackendTrip {
     /// Map a local Trip into an upsert payload.
     static func upsert(from trip: Trip, createdBy: UUID?, clientUpdatedAt: Date) -> BackendTripUpsert {
-        BackendTripUpsert(
+        // Ensure scalar paddock_id is populated for single-paddock trips so that
+        // portal/admin queries that filter on paddock_id can find them. Multi-paddock
+        // trips intentionally leave the scalar nil and rely on paddock_ids JSONB.
+        let resolvedPaddockId: UUID? = {
+            if let pid = trip.paddockId { return pid }
+            if trip.paddockIds.count == 1 { return trip.paddockIds.first }
+            return nil
+        }()
+        return BackendTripUpsert(
             id: trip.id,
             vineyardId: trip.vineyardId,
-            paddockId: trip.paddockId,
+            paddockId: resolvedPaddockId,
             paddockIds: trip.paddockIds,
             paddockName: trip.paddockName,
             trackingPattern: trip.trackingPattern.rawValue,
