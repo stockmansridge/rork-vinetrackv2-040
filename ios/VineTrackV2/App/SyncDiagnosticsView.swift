@@ -19,6 +19,7 @@ struct SyncDiagnosticsView: View {
     @State private var isRepairingTrips: Bool = false
     @State private var lastRepairResult: TripSyncService.RepairResult?
     @State private var lastRepairAt: Date?
+    @State private var auditService = TripAuditService()
 
     var body: some View {
         Form {
@@ -109,10 +110,16 @@ struct SyncDiagnosticsView: View {
                 if let result = lastRepairResult {
                     repairSummaryView(result)
                 }
+
+                NavigationLink {
+                    AdminTripAuditView(service: auditService)
+                } label: {
+                    Label("Admin trip vineyard audit", systemImage: "binoculars")
+                }
             } header: {
                 Text("Trip Repair")
             } footer: {
-                Text("Scans local trips for missing or mismatched vineyard IDs and repairs them when paddock ownership clearly resolves to the selected vineyard. Trips with ambiguous or missing paddocks are skipped. After repair, sync runs automatically to push fixed trips to Supabase.")
+                Text("Quick repair fixes local trips for the selected vineyard. The Admin audit scans trips across every vineyard you can access (including deleted ones) and offers per-trip manual reassignment for cases that aren't safe to auto-repair.")
             }
         }
     }
@@ -369,6 +376,10 @@ struct SyncDiagnosticsView: View {
             if let err = result.syncError, !err.isEmpty {
                 lines.append("  sync_error: \(err)")
             }
+        }
+        if auditService.lastResult.scanned > 0 || auditService.lastResult.ranAt != nil {
+            lines.append("")
+            lines.append(contentsOf: auditService.diagnosticsSnippet())
         }
         return lines.joined(separator: "\n")
     }

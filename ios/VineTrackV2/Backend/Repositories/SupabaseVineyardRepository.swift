@@ -19,6 +19,20 @@ final class SupabaseVineyardRepository: VineyardRepositoryProtocol {
             .value
     }
 
+    func listAllAccessibleVineyards(includeDeleted: Bool) async throws -> [BackendVineyard] {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        if includeDeleted {
+            return try await provider.client
+                .from("vineyards")
+                .select()
+                .order("name", ascending: true)
+                .execute()
+                .value
+        } else {
+            return try await listMyVineyards()
+        }
+    }
+
     func createVineyard(name: String, country: String?) async throws -> BackendVineyard {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         guard provider.client.auth.currentUser != nil else { throw BackendRepositoryError.missingAuthenticatedUser }

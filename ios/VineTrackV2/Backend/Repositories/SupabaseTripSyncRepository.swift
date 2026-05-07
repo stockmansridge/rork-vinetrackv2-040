@@ -49,11 +49,48 @@ final class SupabaseTripSyncRepository: TripSyncRepositoryProtocol {
             .execute()
     }
 
+    func fetchAllAccessibleTrips() async throws -> [BackendTrip] {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        return try await provider.client
+            .from("trips")
+            .select()
+            .is("deleted_at", value: nil)
+            .order("updated_at", ascending: false)
+            .limit(10_000)
+            .execute()
+            .value
+    }
+
+    func updateTripVineyardAssignment(id: UUID, vineyardId: UUID, paddockId: UUID?) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        try await provider.client
+            .from("trips")
+            .update(TripVineyardAssignmentUpdate(
+                vineyardId: vineyardId,
+                paddockId: paddockId,
+                clientUpdatedAt: Date()
+            ))
+            .eq("id", value: id.uuidString)
+            .execute()
+    }
+
     func softDeleteTrip(id: UUID) async throws {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         try await provider.client
             .rpc("soft_delete_trip", params: SoftDeleteTripRequest(tripId: id))
             .execute()
+    }
+}
+
+nonisolated private struct TripVineyardAssignmentUpdate: Encodable, Sendable {
+    let vineyardId: UUID
+    let paddockId: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case vineyardId = "vineyard_id"
+        case paddockId = "paddock_id"
+        case clientUpdatedAt = "client_updated_at"
     }
 }
 

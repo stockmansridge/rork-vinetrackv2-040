@@ -2,6 +2,9 @@ import Foundation
 
 protocol VineyardRepositoryProtocol: Sendable {
     func listMyVineyards() async throws -> [BackendVineyard]
+    /// List every vineyard the current user can see, optionally including
+    /// soft-deleted ones (RLS gates the result). Used by the admin trip audit.
+    func listAllAccessibleVineyards(includeDeleted: Bool) async throws -> [BackendVineyard]
     func createVineyard(name: String, country: String?) async throws -> BackendVineyard
     func updateVineyard(_ vineyard: BackendVineyard) async throws
     func updateVineyardLogoPath(vineyardId: UUID, logoPath: String?) async throws -> Date?
