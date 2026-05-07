@@ -400,18 +400,41 @@ Deno.serve(async (req: Request) => {
           : "Australia/Sydney";
 
         let parsed: ReturnType<typeof parseDavisCurrent> | null = null;
+        let parseError: string | null = null;
         try {
           parsed = parseDavisCurrent(r.body);
         } catch (e) {
+          parseError = e instanceof Error ? e.message : String(e);
           console.log(JSON.stringify({
             tag: "davis-proxy.current.parse_failed",
             vineyardId, stationId,
-            error: e instanceof Error ? e.message : String(e),
+            error: parseError,
           }));
         }
 
+        // Diagnostics block returned to the caller alongside the raw
+        // Davis payload so the iOS UI can confirm exactly which writes
+        // succeeded server-side without depending on Edge Function logs
+        // (Supabase only surfaces boot/shutdown lines in the dashboard
+        // for some projects).
+        const obsStatus = {
+          attempted: false,
+          success: false,
+          code: null as string | null,
+          message: null as string | null,
+        };
+        const rainStatus = {
+          attempted: false,
+          success: false,
+          code: null as string | null,
+          message: null as string | null,
+        };
+        let diagLocalDate: string | null = null;
+        let diagRainMm: number | null = null;
+
         if (parsed && parsed.observed_at) {
           // 1) Observations cache.
+          obsStatus.attempted = true;
           try {
             const safePayload = {
               station_id: parsed.station_id ?? stationId,
@@ -437,33 +460,37 @@ Deno.serve(async (req: Request) => {
                 raw_payload: safePayload,
               }, { onConflict: "vineyard_id,source" });
             if (obsErr) {
+              obsStatus.code = (obsErr as any).code ?? null;
+              obsStatus.message = obsErr.message ?? null;
               console.log(JSON.stringify({
                 tag: "davis-proxy.current.observations_failed",
                 vineyardId, stationId,
-                code: (obsErr as any).code ?? null,
-                message: obsErr.message,
+                code: obsStatus.code,
+                message: obsStatus.message,
               }));
+            } else {
+              obsStatus.success = true;
             }
           } catch (e) {
+            obsStatus.message = e instanceof Error ? e.message : String(e);
             console.log(JSON.stringify({
               tag: "davis-proxy.current.observations_threw",
               vineyardId, stationId,
-              error: e instanceof Error ? e.message : String(e),
+              error: obsStatus.message,
             }));
           }
 
           // 2) Rain calendar daily row. Independent try so a failure here
-          //    is logged separately from the observations write. We write
-          //    even when rain_today_mm is 0 so the calendar reflects "no
-          //    rain yet today" and the row exists once a station reports.
+          //    is reported separately from the observations write. We
+          //    write even when rain_today_mm is 0 so the calendar reflects
+          //    "no rain yet today" and the row exists once a station
+          //    reports.
           const rainMm = parsed.rain_today_mm;
           const localDate = localDateString(new Date(parsed.observed_at), tz);
-          let rainfallAttempted = false;
-          let rainfallOk = false;
-          let rainfallCode: string | null = null;
-          let rainfallMessage: string | null = null;
+          diagLocalDate = localDate;
+          diagRainMm = rainMm;
           if (rainMm != null && isFinite(rainMm) && rainMm >= 0) {
-            rainfallAttempted = true;
+            rainStatus.attempted = true;
             try {
               const { error: rpcErr } = await admin.rpc(
                 "upsert_davis_rainfall_daily",
@@ -476,14 +503,16 @@ Deno.serve(async (req: Request) => {
                 },
               );
               if (rpcErr) {
-                rainfallCode = (rpcErr as any).code ?? null;
-                rainfallMessage = rpcErr.message ?? null;
+                rainStatus.code = (rpcErr as any).code ?? null;
+                rainStatus.message = rpcErr.message ?? null;
               } else {
-                rainfallOk = true;
+                rainStatus.success = true;
               }
             } catch (e) {
-              rainfallMessage = e instanceof Error ? e.message : String(e);
+              rainStatus.message = e instanceof Error ? e.message : String(e);
             }
+          } else {
+            rainStatus.message = "rain_today_mm not available in parsed payload";
           }
 
           console.log(JSON.stringify({
@@ -493,19 +522,41 @@ Deno.serve(async (req: Request) => {
             stationName,
             localDate,
             rainTodayMm: rainMm,
-            attempted: rainfallAttempted,
-            success: rainfallOk,
-            code: rainfallCode,
-            message: rainfallMessage,
+            attempted: rainStatus.attempted,
+            success: rainStatus.success,
+            code: rainStatus.code,
+            message: rainStatus.message,
           }));
         } else {
           console.log(JSON.stringify({
             tag: "davis-proxy.current.no_observed_at",
             vineyardId, stationId,
             hasParsed: parsed != null,
+            parseError,
           }));
+          obsStatus.message = parseError ?? "Davis payload had no observed_at";
+          rainStatus.message = parseError ?? "Davis payload had no observed_at";
         }
-        return json(r.body ?? {});
+
+        // Augment the raw Davis payload with a `_proxy` diagnostics block
+        // so the iOS client can render an accurate success/failure
+        // message. The Davis JSON itself never uses an `_proxy` key, so
+        // this is non-conflicting for downstream parsers.
+        const augmented = {
+          ...(r.body && typeof r.body === "object" ? r.body : {}),
+          _proxy: {
+            observations: obsStatus,
+            rainfall_daily: {
+              ...rainStatus,
+              date: diagLocalDate,
+              rain_today_mm: diagRainMm,
+            },
+            station_id: String(parsed?.station_id ?? stationId),
+            station_name: stationName,
+            timezone: tz,
+          },
+        };
+        return json(augmented);
       }
       return json({ error: `WeatherLink HTTP ${r.status}` }, 502);
     }

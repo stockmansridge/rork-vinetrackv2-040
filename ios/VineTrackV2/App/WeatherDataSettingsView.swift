@@ -1125,9 +1125,11 @@ struct WeatherDataSettingsView: View {
         defer { isForceRefreshingDavis = false }
         print("[DavisProxy] forceRefresh requested vineyardId=\(vid) stationId=\(sid)")
         do {
-            let cur = try await VineyardDavisProxyService.fetchCurrentConditions(
-                vineyardId: vid, stationId: sid
-            )
+            let result = try await VineyardDavisProxyService
+                .fetchCurrentConditionsWithDiagnostics(
+                    vineyardId: vid, stationId: sid
+                )
+            let cur = result.conditions
             lastDavisCurrent = cur
             lastDavisSensorSummary = cur.sensors
             // Surface freshly-written values so users can verify
@@ -1141,8 +1143,44 @@ struct WeatherDataSettingsView: View {
                 cur.rainMmLastHour.map { String(format: "rain %.1f mm", $0) },
             ].compactMap { $0 }
             let summary = parts.isEmpty ? "OK" : parts.joined(separator: " · ")
-            davisForceRefreshStatus = "Davis updated at \(df.string(from: Date())) — \(summary). Server has refreshed vineyard_weather_observations and rainfall_daily."
-            davisForceRefreshOk = true
+
+            // Build the persistence message strictly from the server's
+            // diagnostics block. Never claim rainfall_daily was refreshed
+            // unless the proxy explicitly reports success.
+            let timestamp = df.string(from: Date())
+            if let diag = result.diagnostics {
+                let obsOk = diag.observations.success
+                let rainOk = diag.rainfallDaily.success
+                let rainAttempted = diag.rainfallDaily.attempted
+
+                var lines: [String] = ["Davis updated at \(timestamp) — \(summary)."]
+                switch (obsOk, rainOk, rainAttempted) {
+                case (true, true, _):
+                    lines.append("Server refreshed vineyard_weather_observations and rainfall_daily.")
+                    davisForceRefreshOk = true
+                case (true, false, true):
+                    let detail = diag.rainfallDaily.message ?? diag.rainfallDaily.code ?? "unknown error"
+                    lines.append("Observations updated, but rainfall history was not saved: \(detail).")
+                    davisForceRefreshOk = false
+                case (true, false, false):
+                    let detail = diag.rainfallDaily.message ?? "rain_today_mm not present in payload"
+                    lines.append("Observations updated, but rainfall history was not saved (\(detail)).")
+                    davisForceRefreshOk = false
+                case (false, _, _):
+                    let obsDetail = diag.observations.message ?? diag.observations.code ?? "unknown error"
+                    lines.append("Server did not save observations: \(obsDetail).")
+                    davisForceRefreshOk = false
+                }
+                if let date = diag.rainfallDate, let mm = diag.rainTodayMm {
+                    lines.append(String(format: "Rain attempted: %.2f mm on %@.", mm, date))
+                }
+                davisForceRefreshStatus = lines.joined(separator: " ")
+            } else {
+                // Older proxy build without the `_proxy` block. Be honest
+                // and tell the user we can't confirm the writes.
+                davisForceRefreshStatus = "Davis updated at \(timestamp) — \(summary). Server did not return persistence diagnostics; redeploy davis-proxy to confirm rainfall_daily writes."
+                davisForceRefreshOk = false
+            }
             // Refresh integration metadata so the cached RPC display is
             // re-pulled on next read.
             await VineyardWeatherIntegrationCache.shared.refresh(for: vid)

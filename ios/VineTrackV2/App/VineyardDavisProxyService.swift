@@ -1,6 +1,37 @@
 import Foundation
 import Supabase
 
+/// Status of a single server-side write performed by the davis-proxy
+/// edge function during a `current` action. Returned in the response
+/// body so the iOS UI can confirm exactly which writes succeeded
+/// without depending on Edge Function log access.
+nonisolated struct DavisProxyWriteStatus: Sendable, Equatable {
+    public let attempted: Bool
+    public let success: Bool
+    public let code: String?
+    public let message: String?
+}
+
+/// Server-side diagnostics returned by the davis-proxy `current` action.
+/// Reports whether `vineyard_weather_observations` and `rainfall_daily`
+/// were written, plus the vineyard-local date and parsed rain value used.
+nonisolated struct DavisProxyCurrentDiagnostics: Sendable, Equatable {
+    public let observations: DavisProxyWriteStatus
+    public let rainfallDaily: DavisProxyWriteStatus
+    public let rainfallDate: String?
+    public let rainTodayMm: Double?
+    public let stationId: String?
+    public let stationName: String?
+    public let timezone: String?
+}
+
+/// Bundles the parsed current conditions with the server-side proxy
+/// diagnostics for a `current` action.
+nonisolated struct DavisProxyCurrentResult: Sendable {
+    public let conditions: DavisCurrentConditions
+    public let diagnostics: DavisProxyCurrentDiagnostics?
+}
+
 /// Errors surfaced by the davis-proxy edge function.
 nonisolated enum VineyardDavisProxyError: LocalizedError, Sendable {
     case notAuthenticated
@@ -90,6 +121,21 @@ nonisolated enum VineyardDavisProxyService {
         vineyardId: UUID,
         stationId: String
     ) async throws -> DavisCurrentConditions {
+        let result = try await fetchCurrentConditionsWithDiagnostics(
+            vineyardId: vineyardId, stationId: stationId
+        )
+        return result.conditions
+    }
+
+    /// Variant of ``fetchCurrentConditions(vineyardId:stationId:)`` that
+    /// also returns the server-side write diagnostics. Use this from
+    /// places that need to confirm `rainfall_daily` and
+    /// `vineyard_weather_observations` writes succeeded (e.g. the
+    /// "Refresh Davis now" button).
+    static func fetchCurrentConditionsWithDiagnostics(
+        vineyardId: UUID,
+        stationId: String
+    ) async throws -> DavisProxyCurrentResult {
         guard !stationId.isEmpty else { throw VineyardDavisProxyError.notConfigured }
         let json = try await invoke(
             payload: [
@@ -98,9 +144,50 @@ nonisolated enum VineyardDavisProxyService {
                 "stationId": stationId,
             ]
         )
-        return DavisWeatherLinkService.parseCurrentConditionsJSON(
+        let conditions = DavisWeatherLinkService.parseCurrentConditionsJSON(
             json,
             fallbackStationId: stationId
+        )
+        let diagnostics = parseProxyDiagnostics(json["_proxy"])
+        return DavisProxyCurrentResult(conditions: conditions, diagnostics: diagnostics)
+    }
+
+    /// Parses the `_proxy` diagnostics block returned by the edge
+    /// function. Returns nil when an older proxy build (no `_proxy` key)
+    /// is deployed, so callers can fall back to a generic message.
+    private static func parseProxyDiagnostics(_ raw: Any?) -> DavisProxyCurrentDiagnostics? {
+        guard let dict = raw as? [String: Any] else { return nil }
+        func parseStatus(_ v: Any?) -> DavisProxyWriteStatus {
+            let d = (v as? [String: Any]) ?? [:]
+            return DavisProxyWriteStatus(
+                attempted: (d["attempted"] as? Bool) ?? false,
+                success: (d["success"] as? Bool) ?? false,
+                code: d["code"] as? String,
+                message: d["message"] as? String
+            )
+        }
+        let obs = parseStatus(dict["observations"])
+        let rainBlock = (dict["rainfall_daily"] as? [String: Any]) ?? [:]
+        let rain = DavisProxyWriteStatus(
+            attempted: (rainBlock["attempted"] as? Bool) ?? false,
+            success: (rainBlock["success"] as? Bool) ?? false,
+            code: rainBlock["code"] as? String,
+            message: rainBlock["message"] as? String
+        )
+        let rainDate = rainBlock["date"] as? String
+        let rainMm: Double? = {
+            if let n = rainBlock["rain_today_mm"] as? Double { return n }
+            if let n = rainBlock["rain_today_mm"] as? NSNumber { return n.doubleValue }
+            return nil
+        }()
+        return DavisProxyCurrentDiagnostics(
+            observations: obs,
+            rainfallDaily: rain,
+            rainfallDate: rainDate,
+            rainTodayMm: rainMm,
+            stationId: dict["station_id"] as? String,
+            stationName: dict["station_name"] as? String,
+            timezone: dict["timezone"] as? String
         )
     }
 
