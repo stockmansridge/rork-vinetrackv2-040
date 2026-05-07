@@ -76,6 +76,9 @@ final class WorkTaskSyncService {
     var lastSyncDate: Date?
     var errorMessage: String?
 
+    var pendingUpsertCount: Int { metadata.pendingUpserts.count }
+    var pendingDeleteCount: Int { metadata.pendingDeletes.count }
+
     private weak var store: MigratedDataStore?
     private weak var auth: NewBackendAuthService?
     private let repository: any WorkTaskSyncRepositoryProtocol

@@ -101,6 +101,16 @@ struct BackendSettingsView: View {
                             color: .blue
                         )
                     }
+                    NavigationLink {
+                        SyncDiagnosticsView()
+                    } label: {
+                        SettingsRow(
+                            title: "Sync Diagnostics",
+                            subtitle: "Pending uploads, last sync & status",
+                            symbol: "stethoscope",
+                            color: .teal
+                        )
+                    }
                 } header: {
                     SettingsSectionHeader(title: "Preferences & Data", symbol: "gearshape.fill", color: .indigo)
                 }

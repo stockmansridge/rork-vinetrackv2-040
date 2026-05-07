@@ -20,6 +20,11 @@ final class PinSyncService {
     var lastSyncDate: Date?
     var errorMessage: String?
 
+    /// Diagnostics-only: count of locally pending upserts not yet pushed.
+    var pendingUpsertCount: Int { metadata.pendingUpserts.count }
+    /// Diagnostics-only: count of locally pending soft-deletes not yet pushed.
+    var pendingDeleteCount: Int { metadata.pendingDeletes.count }
+
     private weak var store: MigratedDataStore?
     private weak var auth: NewBackendAuthService?
     private let repository: any PinSyncRepositoryProtocol
