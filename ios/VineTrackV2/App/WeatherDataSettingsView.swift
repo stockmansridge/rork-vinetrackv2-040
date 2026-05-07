@@ -53,6 +53,18 @@ struct WeatherDataSettingsView: View {
     @State private var davisBackfillStatus: String?
     @State private var davisBackfillOk: Bool = false
     @State private var isBackfillingDavis: Bool = false
+    // MARK: - Weather Underground (vineyard-shared) state
+    @State private var wuIntegration: VineyardWeatherIntegration?
+    @State private var isLoadingWuIntegration: Bool = false
+    @State private var wuStationIdInput: String = ""
+    @State private var wuStationNameInput: String = ""
+    @State private var wuSaveStatus: String?
+    @State private var wuSaveOk: Bool = false
+    @State private var isSavingWu: Bool = false
+    @State private var wuBackfillStatus: String?
+    @State private var wuBackfillOk: Bool = false
+    @State private var isBackfillingWu: Bool = false
+    @State private var isClearingWu: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -147,6 +159,8 @@ struct WeatherDataSettingsView: View {
 
             davisDiagnosticsSection
 
+            weatherUndergroundVineyardSection
+
             historicalFallbackSection
 
             usageSection
@@ -161,7 +175,12 @@ struct WeatherDataSettingsView: View {
         }
         .navigationTitle("Weather Data & Forecasting")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { loadConfig() }
+        .onAppear {
+            loadConfig()
+            if let vid = vineyardId {
+                Task { await loadWuIntegration(for: vid) }
+            }
+        }
         .sheet(isPresented: $showStationPicker) {
             WeatherStationPickerSheet()
         }
@@ -1066,6 +1085,267 @@ struct WeatherDataSettingsView: View {
             Text("Davis diagnostics")
         } footer: {
             Text("Non-secret status only. Used to verify Davis WeatherLink persistence and parser detection in the field. API key, secret and credential-bearing URLs are never shown, copied or logged.")
+        }
+    }
+
+    // MARK: - Weather Underground (vineyard-shared)
+
+    private var weatherUndergroundVineyardSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .frame(width: 22)
+                Text("Uses platform Weather Underground connection. Owners and managers can set the vineyard's PWS station ID. Rainfall is backfilled into vineyard history server-side.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+
+            if !canEdit {
+                wuOperatorReadOnlyCard
+            } else {
+                wuOwnerEditableControls
+            }
+        } header: {
+            Text("Weather Underground")
+        } footer: {
+            Text("Manual entries override Davis. Davis overrides Weather Underground. Weather Underground overrides Open-Meteo. Backfill only writes Weather Underground rows — Manual and Davis rows are never overwritten.")
+        }
+    }
+
+    @ViewBuilder
+    private var wuOperatorReadOnlyCard: some View {
+        let sid = wuIntegration?.stationId ?? ""
+        let name = wuIntegration?.stationName ?? ""
+        VStack(alignment: .leading, spacing: 6) {
+            if sid.isEmpty {
+                Label("No Weather Underground station configured", systemImage: "questionmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                LabeledContent("Station ID") {
+                    Text(sid).foregroundStyle(.secondary)
+                }
+                if !name.isEmpty {
+                    LabeledContent("Station name") {
+                        Text(name).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Text("Managed by your owner or manager.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var wuOwnerEditableControls: some View {
+        let savedStationId = wuIntegration?.stationId ?? ""
+        let hasSaved = !savedStationId.isEmpty
+
+        HStack {
+            Text("Station ID")
+            Spacer()
+            TextField("e.g. KCASANFR123", text: $wuStationIdInput)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 220)
+        }
+        HStack {
+            Text("Station name")
+            Spacer()
+            TextField("Optional", text: $wuStationNameInput)
+                .autocorrectionDisabled()
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 220)
+        }
+
+        Button {
+            Task { await saveWuStation() }
+        } label: {
+            HStack {
+                if isSavingWu { ProgressView().controlSize(.small) }
+                Label(isSavingWu ? "Saving…" : "Save station", systemImage: "externaldrive.fill.badge.icloud")
+            }
+        }
+        .disabled(isSavingWu || wuStationIdInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+        if hasSaved {
+            Button(role: .destructive) {
+                Task { await clearWuStation() }
+            } label: {
+                if isClearingWu {
+                    HStack { ProgressView().controlSize(.small); Text("Clearing…") }
+                } else {
+                    Label("Remove Weather Underground station", systemImage: "trash")
+                }
+            }
+            .disabled(isClearingWu)
+        }
+
+        if let msg = wuSaveStatus, !msg.isEmpty {
+            Text(msg)
+                .font(.caption2)
+                .foregroundStyle(wuSaveOk ? .green : .red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // Backfill button
+        Button {
+            Task { await backfillWundergroundRainfall() }
+        } label: {
+            if isBackfillingWu {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Backfilling Weather Underground rainfall…")
+                }
+            } else {
+                Label("Backfill Weather Underground rainfall", systemImage: "calendar.badge.clock")
+            }
+        }
+        .disabled(isBackfillingWu || !hasSaved || (vineyardId == nil))
+
+        if let msg = wuBackfillStatus, !msg.isEmpty {
+            Text(msg)
+                .font(.caption2)
+                .foregroundStyle(wuBackfillOk ? .green : .red)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Text("Imports the last 14 days of Weather Underground rainfall into vineyard history. Safe to re-run — Manual and Davis rainfall are preserved. Today is skipped because the daily summary is incomplete.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+    }
+
+    private func loadWuIntegration(for vineyardId: UUID) async {
+        isLoadingWuIntegration = true
+        defer { isLoadingWuIntegration = false }
+        do {
+            let integ = try await integrationRepository.fetch(
+                vineyardId: vineyardId, provider: "wunderground"
+            )
+            wuIntegration = integ
+            wuStationIdInput = integ?.stationId ?? ""
+            wuStationNameInput = integ?.stationName ?? ""
+            print("[WundergroundConfig] load vineyardId=\(vineyardId) provider=wunderground stationId=\(integ?.stationId ?? "-") stationName=\(integ?.stationName ?? "-")")
+        } catch {
+            print("[WundergroundConfig] load failed vineyardId=\(vineyardId) error=\(error.localizedDescription)")
+        }
+    }
+
+    private func saveWuStation() async {
+        guard canEdit, let vid = vineyardId else { return }
+        let trimmedId = wuStationIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedId.isEmpty else { return }
+        let trimmedName = wuStationNameInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        isSavingWu = true
+        wuSaveStatus = nil
+        defer { isSavingWu = false }
+        do {
+            let payload = VineyardWeatherIntegrationSave(
+                p_vineyard_id: vid,
+                p_provider: "wunderground",
+                p_api_key: nil,
+                p_api_secret: nil,
+                p_station_id: trimmedId,
+                p_station_name: trimmedName.isEmpty ? nil : trimmedName,
+                p_station_latitude: nil,
+                p_station_longitude: nil,
+                p_has_leaf_wetness: nil,
+                p_has_rain: true,
+                p_has_wind: nil,
+                p_has_temperature_humidity: nil,
+                p_detected_sensors: nil,
+                p_last_tested_at: nil,
+                p_last_test_status: nil,
+                p_is_active: true
+            )
+            try await integrationRepository.save(payload)
+            wuSaveOk = true
+            wuSaveStatus = "Weather Underground station saved."
+            await loadWuIntegration(for: vid)
+        } catch {
+            wuSaveOk = false
+            wuSaveStatus = "Could not save — \(error.localizedDescription)"
+        }
+    }
+
+    private func clearWuStation() async {
+        guard canEdit, let vid = vineyardId else { return }
+        isClearingWu = true
+        defer { isClearingWu = false }
+        do {
+            try await integrationRepository.delete(
+                vineyardId: vid, provider: "wunderground"
+            )
+            wuIntegration = nil
+            wuStationIdInput = ""
+            wuStationNameInput = ""
+            wuSaveOk = true
+            wuSaveStatus = "Weather Underground station removed."
+        } catch {
+            wuSaveOk = false
+            wuSaveStatus = "Could not remove — \(error.localizedDescription)"
+        }
+    }
+
+    private func backfillWundergroundRainfall() async {
+        guard canEdit else {
+            wuBackfillStatus = "Owner or manager role required."
+            wuBackfillOk = false
+            return
+        }
+        guard let vid = vineyardId else {
+            wuBackfillStatus = "No vineyard selected."
+            wuBackfillOk = false
+            return
+        }
+        let savedStationId = wuIntegration?.stationId ?? ""
+        guard !savedStationId.isEmpty else {
+            wuBackfillStatus = "Add a Weather Underground station ID first."
+            wuBackfillOk = false
+            return
+        }
+        isBackfillingWu = true
+        wuBackfillStatus = nil
+        defer { isBackfillingWu = false }
+        print("[WundergroundProxy] backfill requested vineyardId=\(vid) stationId=\(savedStationId) days=14")
+        do {
+            let result = try await VineyardWundergroundProxyService.backfillRainfall(
+                vineyardId: vid, stationId: nil, days: 14
+            )
+            var lines: [String] = []
+            lines.append(result.success
+                ? "Weather Underground rainfall backfill complete."
+                : "Weather Underground rainfall backfill finished with errors.")
+            lines.append("Days requested: \(result.daysRequested). Processed: \(result.daysProcessed). Rows upserted: \(result.rowsUpserted). Errors: \(result.errorsCount).")
+            if let sid = result.stationId, !sid.isEmpty {
+                let nm = result.stationName ?? ""
+                lines.append("Station: \(sid)\(nm.isEmpty ? "" : " — \(nm)").")
+            }
+            if let v = result.proxyVersion, !v.isEmpty {
+                lines.append("Proxy version: \(v).")
+            }
+            wuBackfillStatus = lines.joined(separator: " ")
+            wuBackfillOk = result.success
+            if result.rowsUpserted > 0 {
+                NotificationCenter.default.post(
+                    name: .rainfallCalendarShouldReload, object: nil
+                )
+            }
+        } catch let error as VineyardWundergroundProxyError {
+            wuBackfillOk = false
+            wuBackfillStatus = "Weather Underground backfill failed — \(error.errorDescription ?? "unknown error")"
+            print("[WundergroundProxy] backfill failed vineyardId=\(vid) reason=\(error.errorDescription ?? "-")")
+        } catch {
+            wuBackfillOk = false
+            wuBackfillStatus = "Weather Underground backfill failed — \(error.localizedDescription)"
+            print("[WundergroundProxy] backfill failed vineyardId=\(vid) reason=\(error.localizedDescription)")
         }
     }
 

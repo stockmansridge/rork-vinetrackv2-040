@@ -64,7 +64,7 @@ final class RainfallCalendarService {
     /// Per-day source (start-of-day → provenance).
     var sources: [Date: RainfallSource] = [:]
     var providerLabel: String = "Source: Vineyard rainfall history"
-    var fallbackNote: String = "Persisted vineyard rainfall (manual → Davis → Open-Meteo)"
+    var fallbackNote: String = "Persisted vineyard rainfall (manual → Davis → Weather Underground → Open-Meteo)"
     var coverageSummary: String?
     var lastUpdated: Date?
     var fallbackUsed: Bool = false
@@ -263,8 +263,10 @@ final class RainfallCalendarService {
         var sources: [Date: RainfallSource] = [:]
         var manualCount = 0
         var davisCount = 0
+        var wuCount = 0
         var openMeteoCount = 0
         var resolvedStationName: String?
+        var resolvedWuStationName: String?
         var todayHadValue = false
         var hasFreshPersisted = false
 
@@ -291,6 +293,16 @@ final class RainfallCalendarService {
                 if resolvedStationName == nil,
                    let name = row.stationName, !name.isEmpty {
                     resolvedStationName = name
+                }
+            case "wunderground_pws":
+                sources[key] = .wunderground
+                wuCount += 1
+                if resolvedWuStationName == nil {
+                    if let name = row.stationName, !name.isEmpty {
+                        resolvedWuStationName = name
+                    } else if let sid = row.stationId, !sid.isEmpty {
+                        resolvedWuStationName = sid
+                    }
                 }
             case "open_meteo":
                 sources[key] = .archive
@@ -323,12 +335,14 @@ final class RainfallCalendarService {
         }
         _ = today
 
-        let totalCovered = manualCount + davisCount + openMeteoCount
+        let totalCovered = manualCount + davisCount + wuCount + openMeteoCount
         let dominantLabel: String
-        if davisCount >= manualCount, davisCount >= openMeteoCount, davisCount > 0 {
+        if davisCount > 0, davisCount >= manualCount, davisCount >= wuCount, davisCount >= openMeteoCount {
             dominantLabel = "Davis WeatherLink" + (resolvedStationName.map { " — \($0)" } ?? "")
-        } else if manualCount > 0, manualCount >= openMeteoCount {
+        } else if manualCount > 0, manualCount >= wuCount, manualCount >= openMeteoCount {
             dominantLabel = "Manual entries"
+        } else if wuCount > 0, wuCount >= openMeteoCount {
+            dominantLabel = "Weather Underground" + (resolvedWuStationName.map { " — \($0)" } ?? "")
         } else if openMeteoCount > 0 {
             dominantLabel = "Open-Meteo Archive"
         } else {
@@ -338,16 +352,18 @@ final class RainfallCalendarService {
         self.dailyRainMm = daily
         self.sources = sources
         self.providerLabel = "Source: Vineyard rainfall history (\(dominantLabel))"
-        self.stationName = resolvedStationName
-        self.isMeasured = davisCount > 0 || manualCount > 0
+        // Prefer Davis station name when present; otherwise expose the WU
+        // station label so the source card can render it.
+        self.stationName = resolvedStationName ?? resolvedWuStationName
+        self.isMeasured = davisCount > 0 || manualCount > 0 || wuCount > 0
         self.fallbackUsed = false
         self.rateLimited = false
         self.manualDaysCovered = manualCount
         self.davisDaysCovered = davisCount
-        self.wuDaysCovered = 0
+        self.wuDaysCovered = wuCount
         self.archiveDaysCovered = openMeteoCount
         self.coverageSummary = coverageSummaryString(
-            manual: manualCount, davis: davisCount, wu: 0, archive: openMeteoCount
+            manual: manualCount, davis: davisCount, wu: wuCount, archive: openMeteoCount
         )
         self.usedPersistedHistory = true
         self.todayFromLiveDavis = todayFromLive
@@ -355,7 +371,7 @@ final class RainfallCalendarService {
             ? "No persisted rainfall yet — tap Refresh Davis now in Weather Data settings to populate today."
             : (todayFromLive
                 ? "Persisted vineyard history. Today shown from live Davis cache."
-                : "Persisted vineyard rainfall (manual → Davis → Open-Meteo).")
+                : "Persisted vineyard rainfall (manual → Davis → Weather Underground → Open-Meteo).")
         self.lastUpdated = Date()
     }
 
@@ -393,6 +409,15 @@ final class RainfallCalendarService {
                    let name = row.stationName, !name.isEmpty {
                     resolvedStationName = name
                 }
+            case "wunderground_pws":
+                mergedSources[key] = .wunderground
+                if resolvedStationName == nil {
+                    if let name = row.stationName, !name.isEmpty {
+                        resolvedStationName = name
+                    } else if let sid = row.stationId, !sid.isEmpty {
+                        resolvedStationName = sid
+                    }
+                }
             case "open_meteo":
                 mergedSources[key] = .archive
             default:
@@ -426,7 +451,7 @@ final class RainfallCalendarService {
         self.davisDaysCovered = mergedSources.values.filter { $0 == .davis }.count
         self.wuDaysCovered = mergedSources.values.filter { $0 == .wunderground }.count
         self.archiveDaysCovered = mergedSources.values.filter { $0 == .archive }.count
-        self.isMeasured = manualDaysCovered > 0 || davisDaysCovered > 0
+        self.isMeasured = manualDaysCovered > 0 || davisDaysCovered > 0 || wuDaysCovered > 0
         self.fallbackUsed = false
         self.rateLimited = false
         self.coverageSummary = coverageSummaryString(
@@ -438,7 +463,7 @@ final class RainfallCalendarService {
         self.todayFromLiveDavis = todayFromLive
         self.fallbackNote = todayFromLive
             ? "Persisted vineyard history. Today shown from live Davis cache."
-            : "Persisted vineyard rainfall (manual → Davis → Open-Meteo)."
+            : "Persisted vineyard rainfall (manual → Davis → Weather Underground → Open-Meteo)."
         self.lastUpdated = Date()
     }
 

@@ -140,16 +140,24 @@ struct RainfallCalendarView: View {
             if service.davisDaysCovered > 0 {
                 calendarSourceRow(
                     label: "Recent actual",
-                    value: "Davis WeatherLink — \(service.stationName ?? "station")",
+                    value: "Davis WeatherLink — \(service.stationName ?? "station") · \(service.davisDaysCovered) day\(service.davisDaysCovered == 1 ? "" : "s")",
                     icon: "sensor.tag.radiowaves.forward.fill",
                     tint: VineyardTheme.leafGreen
                 )
+                if service.wuDaysCovered > 0 {
+                    calendarSourceRow(
+                        label: "Also from",
+                        value: "Weather Underground · \(service.wuDaysCovered) day\(service.wuDaysCovered == 1 ? "" : "s")",
+                        icon: "antenna.radiowaves.left.and.right",
+                        tint: .orange
+                    )
+                }
             } else if service.wuDaysCovered > 0 {
                 calendarSourceRow(
                     label: "Recent actual",
-                    value: "Weather Underground — \(service.stationName ?? "station")",
-                    icon: "sensor.tag.radiowaves.forward.fill",
-                    tint: VineyardTheme.leafGreen
+                    value: "Weather Underground — \(service.stationName ?? "station") · \(service.wuDaysCovered) day\(service.wuDaysCovered == 1 ? "" : "s")",
+                    icon: "antenna.radiowaves.left.and.right",
+                    tint: .orange
                 )
             } else {
                 calendarSourceRow(
