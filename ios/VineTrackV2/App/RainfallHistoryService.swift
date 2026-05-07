@@ -651,6 +651,184 @@ enum RainfallHistoryService {
         )
     }
 
+    /// Recent-window rainfall preferring persisted vineyard history
+    /// (`get_daily_rainfall` RPC). The RPC already prioritises
+    /// `manual > davis_weatherlink > open_meteo` per day, so this is the
+    /// preferred source for irrigation deficit calculations.
+    ///
+    /// Today is only ever filled from the live Davis cached snapshot
+    /// (`get_vineyard_current_weather`) when persisted history has no
+    /// row for today yet. Older days are never re-fetched live — that
+    /// avoids hammering Davis on every irrigation refresh.
+    ///
+    /// Falls back to `fetchRecentRainfall` (legacy live path) when no
+    /// vineyard is selected, the RPC fails, or the RPC returned no
+    /// usable values and no live Davis snapshot exists.
+    static func fetchRecentRainfallPreferringPersisted(
+        vineyardId: UUID?,
+        latitude: Double,
+        longitude: Double,
+        days: Int,
+        weatherStationId: String?
+    ) async -> RainfallHistoryResult {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let from = cal.date(byAdding: .day, value: -max(0, days - 1), to: today) ?? today
+
+        if let vid = vineyardId {
+            do {
+                let rows = try await PersistedRainfallService.fetchDailyRainfall(
+                    vineyardId: vid, from: from, to: today
+                )
+                if let result = await buildRecentResultFromPersisted(
+                    rows: rows,
+                    vineyardId: vid,
+                    from: from,
+                    to: today
+                ) {
+                    return result
+                }
+            } catch {
+                print("[Irrigation] persisted recent rainfall fetch failed: \(error.localizedDescription) — falling back to live")
+            }
+        }
+
+        return await fetchRecentRainfall(
+            vineyardId: vineyardId,
+            latitude: latitude,
+            longitude: longitude,
+            days: days,
+            weatherStationId: weatherStationId
+        )
+    }
+
+    /// Build a `RainfallHistoryResult` from a persisted-RPC response,
+    /// merging in today's value from the live Davis cache when needed.
+    /// Returns `nil` when there is genuinely nothing to show, so the
+    /// caller can fall back to the legacy live path.
+    private static func buildRecentResultFromPersisted(
+        rows: [PersistedRainfallDay],
+        vineyardId: UUID,
+        from: Date,
+        to: Date
+    ) async -> RainfallHistoryResult? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        var daily: [Date: Double] = [:]
+        var sourceMap: [Date: RainfallSource] = [:]
+        var manualCount = 0
+        var davisCount = 0
+        var openMeteoCount = 0
+        var resolvedStationName: String?
+        var todayHadValue = false
+
+        for row in rows {
+            let key = cal.startOfDay(for: row.date)
+            guard let mm = row.rainfallMm else { continue }
+            daily[key] = mm
+            switch row.source {
+            case "manual":
+                sourceMap[key] = .manual
+                manualCount += 1
+            case "davis_weatherlink":
+                sourceMap[key] = .davis
+                davisCount += 1
+                if resolvedStationName == nil,
+                   let n = row.stationName, !n.isEmpty {
+                    resolvedStationName = n
+                }
+            case "open_meteo":
+                sourceMap[key] = .archive
+                openMeteoCount += 1
+            default:
+                sourceMap[key] = .archive
+                openMeteoCount += 1
+            }
+            if cal.isDate(key, inSameDayAs: today) { todayHadValue = true }
+        }
+
+        // Only fall back to live Davis cache for today, and only when
+        // the requested window actually includes today.
+        var todayFromLive = false
+        if !todayHadValue, cal.startOfDay(for: to) >= today {
+            if let snap = try? await WeatherCurrentService().fetchCachedCurrent(vineyardId: vineyardId),
+               let mm = snap.rainTodayMm {
+                daily[today] = mm
+                sourceMap[today] = .davis
+                davisCount += 1
+                todayFromLive = true
+                if resolvedStationName == nil,
+                   let n = snap.stationName, !n.isEmpty {
+                    resolvedStationName = n
+                }
+            }
+        }
+
+        let total = manualCount + davisCount + openMeteoCount
+        guard total > 0 else { return nil }
+
+        let sourcesPresent = [manualCount > 0, davisCount > 0, openMeteoCount > 0].filter { $0 }.count
+        let stationSuffix = resolvedStationName.map { " — \($0)" } ?? ""
+
+        let label: String
+        let effective: WeatherProvider
+        if sourcesPresent > 1 {
+            var parts: [String] = []
+            if manualCount > 0 { parts.append("Manual") }
+            if davisCount > 0 { parts.append("Davis WeatherLink\(stationSuffix)") }
+            if openMeteoCount > 0 { parts.append("Open-Meteo") }
+            label = "Source: Mixed — \(parts.joined(separator: " + "))"
+            effective = davisCount > 0 ? .davis : .automatic
+        } else if davisCount > 0 {
+            label = "Source: Davis WeatherLink\(stationSuffix)"
+            effective = .davis
+        } else if manualCount > 0 {
+            label = "Source: Manual entries"
+            effective = .automatic
+        } else {
+            label = "Source: Open-Meteo Archive"
+            effective = .automatic
+        }
+
+        let fallbackReason: String? = todayFromLive
+            ? "Today shown from live Davis cache; older days from persisted vineyard history."
+            : nil
+
+        let coverage = persistedCoverageSummary(
+            manual: manualCount,
+            davis: davisCount,
+            archive: openMeteoCount
+        )
+
+        return RainfallHistoryResult(
+            dailyMm: daily,
+            sources: sourceMap,
+            configuredProvider: effective,
+            effectiveProvider: effective,
+            providerLabel: label,
+            stationName: resolvedStationName,
+            isMeasured: davisCount > 0 || manualCount > 0,
+            fallbackUsed: false,
+            fallbackReason: fallbackReason,
+            coveredFrom: from,
+            coveredTo: to,
+            recordCount: total,
+            davisDaysCovered: davisCount,
+            wuDaysCovered: 0,
+            archiveDaysCovered: openMeteoCount,
+            coverageSummary: coverage,
+            rateLimited: false
+        )
+    }
+
+    private static func persistedCoverageSummary(manual: Int, davis: Int, archive: Int) -> String? {
+        var parts: [String] = []
+        if manual > 0 { parts.append("Manual: \(manual) day\(manual == 1 ? "" : "s")") }
+        if davis > 0 { parts.append("Davis: \(davis) day\(davis == 1 ? "" : "s")") }
+        if archive > 0 { parts.append("Open-Meteo: \(archive) day\(archive == 1 ? "" : "s")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     // MARK: - Helpers
 
     private static func coverageSummary(davis: Int, wu: Int, archive: Int) -> String? {

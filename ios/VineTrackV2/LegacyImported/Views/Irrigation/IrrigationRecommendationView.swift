@@ -278,14 +278,41 @@ struct IrrigationRecommendationView: View {
         return raw
     }
 
-    /// Short tag used inside the recommendation card sentence.
+    /// Short tag used inside the recommendation card sentence. Looks at
+    /// the per-day source map so persisted manual / Open-Meteo days are
+    /// surfaced honestly instead of always showing the configured
+    /// provider.
     private var actualRainShortSource: String {
         guard let r = recentRainResult else { return "Archive" }
-        switch r.effectiveProvider {
-        case .davis: return "Davis WeatherLink"
-        case .wunderground: return "Weather Underground"
-        case .automatic: return "Archive"
+        let counts = r.sources.values.reduce(into: [RainfallSource: Int]()) { $0[$1, default: 0] += 1 }
+        let present = counts.filter { $0.value > 0 }.keys
+        if present.count > 1 {
+            return "Mixed sources"
         }
+        switch present.first {
+        case .davis:
+            if let name = r.stationName, !name.isEmpty {
+                return "Davis WeatherLink — \(name)"
+            }
+            return "Davis WeatherLink"
+        case .wunderground: return "Weather Underground"
+        case .manual: return "Manual entries"
+        case .archive: return "Open-Meteo"
+        case .missing, .none:
+            switch r.effectiveProvider {
+            case .davis: return "Davis WeatherLink"
+            case .wunderground: return "Weather Underground"
+            case .automatic: return "Archive"
+            }
+        }
+    }
+
+    /// Days inside the requested window that have no recorded rainfall
+    /// in any source (persisted nor live). Surfaced as a footnote so
+    /// users can tell "0 mm recorded" apart from "no data".
+    private var recentRainNoDataDays: Int {
+        guard let r = recentRainResult else { return 0 }
+        return max(0, recentRainDays - r.dailyMm.count)
     }
 
     private var missingSetupSection: some View {
@@ -356,6 +383,16 @@ struct IrrigationRecommendationView: View {
                     Text(warn)
                         .font(.caption2)
                         .foregroundStyle(.orange)
+                } else if let warn = recentRainResult?.fallbackReason {
+                    Text(warn)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                if recentRainNoDataDays > 0 {
+                    Text("\(recentRainNoDataDays) day\(recentRainNoDataDays == 1 ? "" : "s") in this window have no recorded rainfall (treated as 0 mm in the deficit calculation).")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 Toggle(isOn: $includeRecentActualRain) {
@@ -837,7 +874,7 @@ struct IrrigationRecommendationView: View {
     private func loadRecentRainfall() async {
         guard let lat = latitude, let lon = longitude else { return }
         isLoadingRecentRain = true
-        let result = await RainfallHistoryService.fetchRecentRainfall(
+        let result = await RainfallHistoryService.fetchRecentRainfallPreferringPersisted(
             vineyardId: store.selectedVineyardId,
             latitude: lat,
             longitude: lon,
