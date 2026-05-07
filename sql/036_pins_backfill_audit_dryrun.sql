@@ -51,7 +51,7 @@ name_resolution as (
     vineyard_id,
     name_norm,
     count(distinct user_id) as match_count,
-    min(user_id)            as resolved_user_id
+    (array_agg(user_id order by user_id::text))[1] as resolved_user_id
   from member_names
   group by vineyard_id, name_norm
 ),
@@ -146,7 +146,7 @@ with member_names as (
 name_resolution as (
   select vineyard_id, name_norm,
          count(distinct user_id) as match_count,
-         min(user_id) as resolved_user_id
+         (array_agg(user_id order by user_id::text))[1] as resolved_user_id
   from member_names
   group by vineyard_id, name_norm
 ),
@@ -214,7 +214,7 @@ with member_names as (
 name_resolution as (
   select vineyard_id, name_norm,
          count(distinct user_id) as match_count,
-         min(user_id) as resolved_user_id
+         (array_agg(user_id order by user_id::text))[1] as resolved_user_id
   from member_names
   group by vineyard_id, name_norm
 )
