@@ -74,6 +74,14 @@ struct RainfallCalendarView: View {
         .onChange(of: year) { _, _ in
             Task { await reload() }
         }
+        // Reload after admin actions that mutate persisted rainfall
+        // (e.g. the Owner/Manager "Backfill Davis rainfall" button in
+        // Weather Data settings).
+        .onReceive(NotificationCenter.default.publisher(
+            for: .rainfallCalendarShouldReload
+        )) { _ in
+            Task { await reload() }
+        }
     }
 
     // MARK: - Year controls

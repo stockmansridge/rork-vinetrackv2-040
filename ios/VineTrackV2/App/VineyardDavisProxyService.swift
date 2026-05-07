@@ -36,6 +36,20 @@ nonisolated struct DavisProxyCurrentResult: Sendable {
     public let diagnostics: DavisProxyCurrentDiagnostics?
 }
 
+/// Result of a `backfill_rainfall` action: how many days were
+/// requested and processed, how many `rainfall_daily` rows were
+/// upserted, and a sanitized errors count. Mirrors the JSON contract
+/// returned by the davis-proxy edge function so the iOS UI can show
+/// an honest summary without depending on Edge Function logs.
+nonisolated struct DavisProxyBackfillResult: Sendable, Equatable {
+    public let success: Bool
+    public let daysRequested: Int
+    public let daysProcessed: Int
+    public let rowsUpserted: Int
+    public let errorsCount: Int
+    public let timezone: String?
+}
+
 /// Errors surfaced by the davis-proxy edge function.
 nonisolated enum VineyardDavisProxyError: LocalizedError, Sendable {
     case notAuthenticated
@@ -271,6 +285,42 @@ nonisolated enum VineyardDavisProxyService {
             recordCount: perRecord.count,
             coveredFrom: from,
             coveredTo: to
+        )
+    }
+
+    /// Backfills the past `days` of vineyard-local rainfall into
+    /// `rainfall_daily` via the davis-proxy edge function. Owner /
+    /// manager only — the proxy enforces the role check using the
+    /// caller's JWT. Davis credentials never leave the server.
+    static func backfillRainfall(
+        vineyardId: UUID,
+        stationId: String,
+        days: Int = 14
+    ) async throws -> DavisProxyBackfillResult {
+        guard !stationId.isEmpty else { throw VineyardDavisProxyError.notConfigured }
+        let clamped = max(1, min(60, days))
+        let json = try await invoke(
+            payload: [
+                "vineyardId": vineyardId.uuidString,
+                "action": "backfill_rainfall",
+                "stationId": stationId,
+                "days": clamped,
+            ]
+        )
+        let success = (json["success"] as? Bool) ?? false
+        func intVal(_ k: String) -> Int {
+            if let n = json[k] as? Int { return n }
+            if let n = json[k] as? NSNumber { return n.intValue }
+            if let n = json[k] as? Double { return Int(n) }
+            return 0
+        }
+        return DavisProxyBackfillResult(
+            success: success,
+            daysRequested: intVal("days_requested"),
+            daysProcessed: intVal("days_processed"),
+            rowsUpserted: intVal("rows_upserted"),
+            errorsCount: intVal("errors_count"),
+            timezone: json["timezone"] as? String
         )
     }
 

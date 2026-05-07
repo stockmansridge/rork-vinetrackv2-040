@@ -1,5 +1,13 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted when persisted vineyard rainfall has been changed by an
+    /// admin action (e.g. the Owner/Manager-only "Backfill Davis
+    /// rainfall" button) and the Rain Calendar should re-pull from
+    /// `get_daily_rainfall`.
+    static let rainfallCalendarShouldReload = Notification.Name("rainfallCalendarShouldReload")
+}
+
 /// Canonical UTC-anchored calendar-date key helpers used by the Rain Calendar.
 ///
 /// Postgres `date` columns are timezone-free calendar dates (e.g. "2026-05-07").

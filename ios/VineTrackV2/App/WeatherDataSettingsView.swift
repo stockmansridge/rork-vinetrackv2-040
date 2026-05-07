@@ -45,6 +45,14 @@ struct WeatherDataSettingsView: View {
     @State private var davisForceRefreshStatus: String?
     @State private var davisForceRefreshOk: Bool = false
     @State private var isForceRefreshingDavis: Bool = false
+    /// Status text for the Owner/Manager-only "Backfill Davis rainfall"
+    /// action. Posts `action: backfill_rainfall` to the davis-proxy edge
+    /// function which iterates closed days and upserts `rainfall_daily`
+    /// using the service-role key. Davis-source rows only — manual
+    /// rainfall corrections are preserved server-side.
+    @State private var davisBackfillStatus: String?
+    @State private var davisBackfillOk: Bool = false
+    @State private var isBackfillingDavis: Bool = false
 
     private let integrationRepository: any VineyardWeatherIntegrationRepositoryProtocol
         = SupabaseVineyardWeatherIntegrationRepository()
@@ -1000,6 +1008,40 @@ struct WeatherDataSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // Owner/Manager-only: backfill recent Davis rainfall into
+            // rainfall_daily so the Rain Calendar has useful history
+            // instead of only today's row. Safe and non-destructive —
+            // updates Davis-source rows only and never overwrites
+            // manual rainfall corrections (the server-side
+            // `upsert_davis_rainfall_daily` RPC enforces this).
+            if canEdit {
+                Button {
+                    Task { await backfillDavisRainfall() }
+                } label: {
+                    if isBackfillingDavis {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Backfilling Davis rainfall…")
+                        }
+                    } else {
+                        Label("Backfill Davis rainfall", systemImage: "calendar.badge.clock")
+                    }
+                }
+                .disabled(isBackfillingDavis
+                          || (config.davisStationId?.isEmpty ?? true)
+                          || (vineyardId == nil)
+                          || (!config.davisVineyardHasServerCredentials && !config.davisHasCredentials))
+                if let msg = davisBackfillStatus, !msg.isEmpty {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundStyle(davisBackfillOk ? .green : .red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Imports the last 14 days of Davis rainfall into vineyard history. Safe to re-run — manual rainfall corrections are preserved.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             Button {
                 Task { await refreshDavisParserDiagnostics() }
             } label: {
@@ -1197,6 +1239,63 @@ struct WeatherDataSettingsView: View {
             davisForceRefreshOk = false
             davisForceRefreshStatus = "Davis refresh failed — \(error.localizedDescription)"
             print("[DavisProxy] forceRefresh failed vineyardId=\(vid) reason=\(error.localizedDescription)")
+        }
+    }
+
+    /// Owner/Manager-only "Backfill Davis rainfall" action. Calls the
+    /// davis-proxy edge function which uses the vineyard's stored
+    /// WeatherLink credentials server-side to fetch closed-day archive
+    /// rainfall and upsert `rainfall_daily` rows. Defaults to 14 days.
+    /// Posts `Notification.Name.rainfallCalendarShouldReload` on success
+    /// so the Rain Calendar refreshes the next time it appears.
+    private func backfillDavisRainfall() async {
+        guard canEdit else {
+            davisBackfillStatus = "Owner or manager role required."
+            davisBackfillOk = false
+            return
+        }
+        guard let vid = vineyardId else {
+            davisBackfillStatus = "No vineyard selected."
+            davisBackfillOk = false
+            return
+        }
+        guard let sid = config.davisStationId, !sid.isEmpty else {
+            davisBackfillStatus = "No Davis station selected for this vineyard."
+            davisBackfillOk = false
+            return
+        }
+        isBackfillingDavis = true
+        davisBackfillStatus = nil
+        defer { isBackfillingDavis = false }
+        print("[DavisProxy] backfill requested vineyardId=\(vid) stationId=\(sid) days=14")
+        do {
+            let result = try await VineyardDavisProxyService.backfillRainfall(
+                vineyardId: vid, stationId: sid, days: 14
+            )
+            var lines: [String] = []
+            let headline = result.success
+                ? "Davis rainfall backfill complete."
+                : "Davis rainfall backfill finished with errors."
+            lines.append(headline)
+            lines.append("Days requested: \(result.daysRequested). Processed: \(result.daysProcessed). Rows upserted: \(result.rowsUpserted). Errors: \(result.errorsCount).")
+            if let tz = result.timezone, !tz.isEmpty {
+                lines.append("Timezone: \(tz).")
+            }
+            davisBackfillStatus = lines.joined(separator: " ")
+            davisBackfillOk = result.success
+            if result.rowsUpserted > 0 {
+                NotificationCenter.default.post(
+                    name: .rainfallCalendarShouldReload, object: nil
+                )
+            }
+        } catch let error as VineyardDavisProxyError {
+            davisBackfillOk = false
+            davisBackfillStatus = "Davis backfill failed — \(error.errorDescription ?? "unknown error")"
+            print("[DavisProxy] backfill failed vineyardId=\(vid) reason=\(error.errorDescription ?? "-")")
+        } catch {
+            davisBackfillOk = false
+            davisBackfillStatus = "Davis backfill failed — \(error.localizedDescription)"
+            print("[DavisProxy] backfill failed vineyardId=\(vid) reason=\(error.localizedDescription)")
         }
     }
 
