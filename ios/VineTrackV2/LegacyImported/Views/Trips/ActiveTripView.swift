@@ -381,27 +381,13 @@ struct ActiveTripView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Section("Row correction") {
+                    Section("Fix what the app thinks") {
                         Button {
                             tracking.snapPlannedSequenceToCurrentLivePath()
                         } label: {
-                            Label("I'm on this row", systemImage: "location.viewfinder")
+                            Label("I'm actually on this row", systemImage: "location.viewfinder")
                         }
                         .disabled(trip.rowSequence.isEmpty || liveDetectedPath == nil)
-
-                        Button {
-                            tracking.markCurrentPlannedPathComplete()
-                        } label: {
-                            Label("Mark current path complete", systemImage: "checkmark.circle")
-                        }
-                        .disabled(trip.rowSequence.isEmpty)
-
-                        Button {
-                            tracking.skipCurrentPlannedPath()
-                        } label: {
-                            Label("Skip current path", systemImage: "forward.end")
-                        }
-                        .disabled(trip.rowSequence.isEmpty)
 
                         if let live = liveDetectedPath {
                             Button {
@@ -410,6 +396,21 @@ struct ActiveTripView: View {
                                 Label("Confirm I'm on path \(formatPath(live))", systemImage: "hand.thumbsup")
                             }
                         }
+                    }
+                    Section("Move through the plan") {
+                        Button {
+                            tracking.markCurrentPlannedPathComplete()
+                        } label: {
+                            Label("Mark this path done & move on", systemImage: "checkmark.circle")
+                        }
+                        .disabled(trip.rowSequence.isEmpty)
+
+                        Button(role: .destructive) {
+                            tracking.skipCurrentPlannedPath()
+                        } label: {
+                            Label("Skip this path (won't count)", systemImage: "forward.end")
+                        }
+                        .disabled(trip.rowSequence.isEmpty)
                     }
                     Divider()
                     Button {
@@ -423,40 +424,24 @@ struct ActiveTripView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 8) {
-                    HStack(spacing: 3) {
+                HStack(spacing: 10) {
+                    HStack(spacing: 4) {
                         Image(systemName: "speedometer")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("NOW")
-                                .font(.system(size: 7, weight: .heavy))
-                                .foregroundStyle(.secondary)
-                            Text(speedDisplayText)
-                                .font(.system(.caption, design: .rounded, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .contentTransition(.numericText())
-                                .animation(.snappy, value: displayedSpeedKmh)
-                                .monospacedDigit()
-                        }
-                        if averageValidSpeedKmh > 0 {
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text("AVG")
-                                    .font(.system(size: 7, weight: .heavy))
-                                    .foregroundStyle(.secondary)
-                                Text(String(format: "%.1f", averageValidSpeedKmh))
-                                    .font(.system(.caption, design: .rounded, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                    .monospacedDigit()
-                            }
-                        }
+                        Text(speedDisplayText)
+                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: displayedSpeedKmh)
+                            .monospacedDigit()
                     }
-                    HStack(spacing: 3) {
+                    HStack(spacing: 4) {
                         Image(systemName: "clock.fill")
                             .font(.caption2)
                             .foregroundStyle(.orange)
                         Text(timeLeftText)
-                            .font(.system(.caption, design: .rounded, weight: .semibold))
+                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
                             .foregroundStyle(.orange)
                             .contentTransition(.numericText())
                             .animation(.snappy, value: timeLeftText)
@@ -464,7 +449,7 @@ struct ActiveTripView: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
             }
         }
@@ -1095,10 +1080,10 @@ struct ActiveTripView: View {
                 }
             }
             Text(value)
-                .font(.system(.title, design: .rounded, weight: .bold))
+                .font(.system(.largeTitle, design: .rounded, weight: .heavy))
                 .foregroundStyle(tint)
                 .contentTransition(.numericText())
-                .minimumScaleFactor(0.6)
+                .minimumScaleFactor(0.5)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
@@ -1517,22 +1502,20 @@ struct ActiveTripView: View {
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.subheadline.weight(.semibold))
-                            .frame(width: 36, height: 32)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(.bordered)
-                    .controlSize(.small)
                     .disabled(trip.sequenceIndex <= 0)
 
                     Button {
                         advanceRow(by: 1)
                     } label: {
                         Label("Next Path", systemImage: "chevron.right")
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .frame(height: 32)
+                            .font(.subheadline.weight(.bold))
+                            .padding(.horizontal, 14)
+                            .frame(height: 44)
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
                     .clipShape(Capsule())
                     .disabled(trip.sequenceIndex >= trip.rowSequence.count - 1)
                 }

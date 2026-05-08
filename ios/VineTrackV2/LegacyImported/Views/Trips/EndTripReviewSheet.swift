@@ -57,11 +57,24 @@ struct EndTripReviewSheet: View {
         NavigationStack {
             List {
                 Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Review rows before saving")
+                            .font(.headline)
+                        Text("Tick any rows you completed in the field that GPS did not detect. Manual changes will be included in the trip report.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section {
                     HStack(spacing: 0) {
+                        statCell(value: "\(rows.count)", label: "Planned", tint: .primary)
+                        Divider().frame(height: 36)
                         statCell(value: "\(completedCount)", label: "Complete", tint: .green)
-                        Divider().frame(height: 32)
+                        Divider().frame(height: 36)
                         statCell(value: "\(partialCount)", label: "Partial", tint: .orange)
-                        Divider().frame(height: 32)
+                        Divider().frame(height: 36)
                         statCell(value: "\(missedCount)", label: "Missed", tint: .red)
                     }
                     .padding(.vertical, 4)
@@ -74,12 +87,6 @@ struct EndTripReviewSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    Section("Planned rows") {
-                        ForEach(rows) { row in
-                            rowItem(row)
-                        }
-                    }
-
                     if missedCount > 0 {
                         Section {
                             Button {
@@ -92,16 +99,23 @@ struct EndTripReviewSheet: View {
                                     }
                                 }
                             } label: {
-                                Label("Mark all missed as complete", systemImage: "checkmark.circle.fill")
+                                Label("Tick all \(missedCount) missed rows as complete", systemImage: "checkmark.circle.fill")
+                                    .font(.subheadline.weight(.semibold))
                             }
                         } footer: {
-                            Text("Useful when the GPS missed the final row but you finished the work in person.")
+                            Text("Use this if GPS missed rows you actually drove. The trip won't be marked failed — your manual ticks are saved in the report.")
+                        }
+                    }
+
+                    Section("Planned rows") {
+                        ForEach(rows) { row in
+                            rowItem(row)
                         }
                     }
                 }
 
                 Section {
-                    Text("Reviewing the path log before saving keeps the work record accurate. Manual completions are recorded in the trip's diagnostics audit.")
+                    Text("Manual completions are recorded in the trip's audit log so the report shows exactly what was driven vs. ticked off after the fact.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -131,16 +145,17 @@ struct EndTripReviewSheet: View {
 
         HStack(spacing: 12) {
             Image(systemName: iconName(for: row.status))
-                .font(.title3)
+                .font(.title2)
                 .foregroundStyle(tint(for: row.status))
-                .frame(width: 28)
+                .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Path \(formatPath(row.path))")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 Text(label(for: row.status, manuallyCompleted: isManualCompleted))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(row.status == .missed && !isManualCompleted ? .red : .secondary)
+                    .fontWeight(row.status == .missed && !isManualCompleted ? .semibold : .regular)
             }
 
             Spacer()
@@ -159,6 +174,12 @@ struct EndTripReviewSheet: View {
                 .labelsHidden()
             }
         }
+        .padding(.vertical, 4)
+        .listRowBackground(
+            row.status == .missed && !isManualCompleted
+                ? Color.red.opacity(0.06)
+                : Color(.secondarySystemGroupedBackground)
+        )
     }
 
     private func statCell(value: String, label: String, tint: Color) -> some View {
@@ -190,11 +211,11 @@ struct EndTripReviewSheet: View {
     }
 
     private func label(for status: Status, manuallyCompleted: Bool) -> String {
-        if manuallyCompleted { return "Manual completion pending" }
+        if manuallyCompleted { return "Will be ticked complete on save" }
         switch status {
         case .complete: return "Complete"
-        case .partial: return "Partial / current"
-        case .missed: return "Missed — not completed"
+        case .partial: return "Partial / current row"
+        case .missed: return "Missed — not detected by GPS"
         }
     }
 
