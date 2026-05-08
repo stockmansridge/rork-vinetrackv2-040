@@ -145,6 +145,23 @@ struct TripDetailView: View {
                 seedingDetailsSection(details)
             }
 
+            if !trip.manualCorrectionEvents.isEmpty {
+                Section("Manual Corrections") {
+                    ForEach(Array(trip.manualCorrectionEvents.enumerated()), id: \.offset) { _, event in
+                        let line = TripPDFService.formatCorrectionEvent(event, timeZone: tz)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(line.description)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                            Text(line.time)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
             if !pinsForTrip.isEmpty {
                 Section("Pins") {
                     ForEach(pinsForTrip) { pin in

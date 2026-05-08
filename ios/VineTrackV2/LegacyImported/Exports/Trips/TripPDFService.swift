@@ -413,7 +413,7 @@ struct TripPDFService {
         return paths
     }
 
-    private struct CorrectionLine {
+    struct CorrectionLine {
         let time: String
         let description: String
     }
@@ -424,7 +424,7 @@ struct TripPDFService {
         return f
     }()
 
-    private static func formatCorrectionEvent(_ event: String, timeZone: TimeZone) -> CorrectionLine {
+    static func formatCorrectionEvent(_ event: String, timeZone: TimeZone) -> CorrectionLine {
         // Expected shape: "<ISO8601> <note>"
         let parts = event.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
         var timeStr = ""
@@ -433,10 +433,10 @@ struct TripPDFService {
             timeStr = date.formattedTZ(date: .omitted, time: .shortened, in: timeZone)
             note = String(parts[1])
         }
-        return CorrectionLine(time: timeStr.isEmpty ? "—" : timeStr, description: humanise(note))
+        return CorrectionLine(time: timeStr.isEmpty ? "—" : timeStr, description: humaniseCorrectionNote(note))
     }
 
-    private static func humanise(_ note: String) -> String {
+    static func humaniseCorrectionNote(_ note: String) -> String {
         if note == "manual_next_path" { return "Operator advanced to next row" }
         if note.hasPrefix("manual_back_path: ") {
             let v = String(note.dropFirst("manual_back_path: ".count))

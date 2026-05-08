@@ -37,6 +37,9 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
     let tripFunction: String?
     let tripTitle: String?
     let seedingDetails: SeedingDetails?
+    /// Optional audit trail of manual Live-Trip corrections. Each entry is
+    /// `"<ISO8601 timestamp> <note>"` (see sql/039_trips_manual_correction_events.sql).
+    let manualCorrectionEvents: [String]?
 
     let createdBy: UUID?
     let updatedBy: UUID?
@@ -78,6 +81,7 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
+        case manualCorrectionEvents = "manual_correction_events"
         case createdBy = "created_by"
         case updatedBy = "updated_by"
         case createdAt = "created_at"
@@ -126,6 +130,10 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
     /// the server. PostgREST upsert only updates columns present in the JSON
     /// payload, so omitting this key preserves the stored value.
     let seedingDetails: SeedingDetails?
+    /// Optional audit trail of manual Live-Trip corrections. Encoded only when
+    /// non-nil so older clients re-upserting a trip do not clobber existing
+    /// values on the server.
+    let manualCorrectionEvents: [String]?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -161,6 +169,7 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
+        case manualCorrectionEvents = "manual_correction_events"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
     }
@@ -209,6 +218,7 @@ extension BackendTrip {
             tripFunction: trip.tripFunction,
             tripTitle: trip.tripTitle,
             seedingDetails: trip.seedingDetails,
+            manualCorrectionEvents: trip.manualCorrectionEvents.isEmpty ? nil : trip.manualCorrectionEvents,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -247,7 +257,8 @@ extension BackendTrip {
             fillingTankNumber: fillingTankNumber,
             tripFunction: tripFunction,
             tripTitle: tripTitle,
-            seedingDetails: seedingDetails
+            seedingDetails: seedingDetails,
+            manualCorrectionEvents: manualCorrectionEvents ?? []
         )
     }
 }
