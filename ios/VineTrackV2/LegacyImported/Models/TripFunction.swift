@@ -17,6 +17,7 @@ nonisolated enum TripFunction: String, CaseIterable, Codable, Sendable, Identifi
     case canopyWork
     case irrigationCheck
     case repairs
+    case seeding
     case other
 
     nonisolated var id: String { rawValue }
@@ -36,6 +37,7 @@ nonisolated enum TripFunction: String, CaseIterable, Codable, Sendable, Identifi
         case .canopyWork:         return "Canopy work"
         case .irrigationCheck:    return "Irrigation check"
         case .repairs:            return "Repairs"
+        case .seeding:            return "Seeding"
         case .other:              return "Other"
         }
     }
@@ -55,6 +57,7 @@ nonisolated enum TripFunction: String, CaseIterable, Codable, Sendable, Identifi
         case .canopyWork:         return "tree.fill"
         case .irrigationCheck:    return "drop.circle"
         case .repairs:            return "wrench.and.screwdriver.fill"
+        case .seeding:            return "leaf.circle.fill"
         case .other:              return "ellipsis.circle"
         }
     }

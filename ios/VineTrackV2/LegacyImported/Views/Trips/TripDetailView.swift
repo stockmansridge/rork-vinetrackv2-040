@@ -135,6 +135,10 @@ struct TripDetailView: View {
                 }
             }
 
+            if let details = trip.seedingDetails, details.hasAnyValue {
+                seedingDetailsSection(details)
+            }
+
             if !pinsForTrip.isEmpty {
                 Section("Pins") {
                     ForEach(pinsForTrip) { pin in
@@ -294,6 +298,88 @@ struct TripDetailView: View {
             midrowText = String(format: "%.1f", startMidrow)
         }
         return "Between rows \(lowerRow)–\(upperRow) — midrow \(midrowText)"
+    }
+
+    @ViewBuilder
+    private func seedingDetailsSection(_ details: SeedingDetails) -> some View {
+        Section("Seeding Details") {
+            if let depth = details.sowingDepthCm {
+                statRow("Sowing depth", value: "\(formatNumber(depth)) cm", icon: "ruler")
+            }
+            if let front = details.frontBox, front.hasAnyValue {
+                seedingBoxRows(title: "Front Box", box: front)
+            }
+            if let back = details.backBox, back.hasAnyValue {
+                seedingBoxRows(title: "Back Box", box: back)
+            }
+            if let lines = details.mixLines, !lines.isEmpty {
+                ForEach(Array(lines.enumerated()), id: \.element.id) { idx, line in
+                    seedingMixLineRow(index: idx, line: line)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func seedingBoxRows(title: String, box: SeedingBox) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            if let mix = box.mixName, !mix.isEmpty {
+                statRow("Mix", value: mix, icon: "text.alignleft")
+            }
+            if let rate = box.ratePerHa {
+                statRow("Rate/ha", value: "\(formatNumber(rate)) kg/ha", icon: "speedometer")
+            }
+            if let s = box.shutterSlide, !s.isEmpty {
+                statRow("Shutter", value: s, icon: "slider.horizontal.3")
+            }
+            if let f = box.bottomFlap, !f.isEmpty {
+                statRow("Bottom flap", value: f, icon: "rectangle.bottomthird.inset.filled")
+            }
+            if let w = box.meteringWheel, !w.isEmpty {
+                statRow("Metering wheel", value: w, icon: "gearshape")
+            }
+            if let v = box.seedVolumeKg {
+                statRow("Seed volume", value: "\(formatNumber(v)) kg", icon: "shippingbox")
+            }
+            if let g = box.gearboxSetting {
+                statRow("Gearbox", value: formatNumber(g), icon: "gearshape.2")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func seedingMixLineRow(index: Int, line: SeedingMixLine) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Mix line \(index + 1)\(line.name.flatMap { $0.isEmpty ? nil : " — \($0)" } ?? "")")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            if let pct = line.percentOfMix {
+                statRow("% of mix", value: "\(formatNumber(pct))%", icon: "percent")
+            }
+            if let box = line.seedBox, !box.isEmpty {
+                statRow("Seed box", value: box, icon: "shippingbox")
+            }
+            if let kg = line.kgPerHa {
+                statRow("Kg/ha", value: "\(formatNumber(kg)) kg/ha", icon: "scalemass")
+            }
+            if let supplier = line.supplierManufacturer, !supplier.isEmpty {
+                statRow("Supplier", value: supplier, icon: "building.2")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func formatNumber(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%g", value)
     }
 
     private func statRow(_ label: String, value: String, icon: String) -> some View {

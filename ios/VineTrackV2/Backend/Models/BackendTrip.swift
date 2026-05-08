@@ -36,6 +36,7 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
     let personName: String?
     let tripFunction: String?
     let tripTitle: String?
+    let seedingDetails: SeedingDetails?
 
     let createdBy: UUID?
     let updatedBy: UUID?
@@ -76,6 +77,7 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
         case personName = "person_name"
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
+        case seedingDetails = "seeding_details"
         case createdBy = "created_by"
         case updatedBy = "updated_by"
         case createdAt = "created_at"
@@ -119,6 +121,11 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
     let personName: String
     let tripFunction: String?
     let tripTitle: String?
+    /// Optional structured seeding payload. Encoded only when non-nil so older
+    /// clients re-upserting a trip do not clobber existing `seeding_details` on
+    /// the server. PostgREST upsert only updates columns present in the JSON
+    /// payload, so omitting this key preserves the stored value.
+    let seedingDetails: SeedingDetails?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -153,6 +160,7 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
         case personName = "person_name"
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
+        case seedingDetails = "seeding_details"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
     }
@@ -200,6 +208,7 @@ extension BackendTrip {
             personName: trip.personName,
             tripFunction: trip.tripFunction,
             tripTitle: trip.tripTitle,
+            seedingDetails: trip.seedingDetails,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -237,7 +246,8 @@ extension BackendTrip {
             isFillingTank: isFillingTank ?? false,
             fillingTankNumber: fillingTankNumber,
             tripFunction: tripFunction,
-            tripTitle: tripTitle
+            tripTitle: tripTitle,
+            seedingDetails: seedingDetails
         )
     }
 }

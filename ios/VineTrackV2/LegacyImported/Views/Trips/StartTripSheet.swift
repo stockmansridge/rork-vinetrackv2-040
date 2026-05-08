@@ -24,6 +24,25 @@ struct StartTripSheet: View {
     @State private var selectedFunction: TripFunction = .slashing
     @State private var customTitle: String = ""
 
+    // Seeding Details (only used when selectedFunction == .seeding).
+    @State private var seedingExpanded: Bool = false
+    @State private var seedFrontMix: String = ""
+    @State private var seedBackMix: String = ""
+    @State private var seedFrontRate: String = ""
+    @State private var seedBackRate: String = ""
+    @State private var sowingDepth: String = ""
+    @State private var seedFrontShutter: String = "3/4"
+    @State private var seedFrontFlap: String = "1"
+    @State private var seedFrontWheel: String = "N"
+    @State private var seedFrontVolume: String = ""
+    @State private var seedFrontGearbox: String = ""
+    @State private var seedBackShutter: String = "Full"
+    @State private var seedBackFlap: String = "3"
+    @State private var seedBackWheel: String = "F"
+    @State private var seedBackVolume: String = ""
+    @State private var seedBackGearbox: String = ""
+    @State private var mixLines: [SeedingMixLine] = []
+
     private var selectedPaddocks: [Paddock] {
         store.paddocks
             .filter { selectedPaddockIds.contains($0.id) }
@@ -155,6 +174,9 @@ struct StartTripSheet: View {
                         freeDriveInfoSection
                     }
                     functionSection
+                    if selectedFunction == .seeding {
+                        seedingDetailsSection
+                    }
                     operatorSection
                     if let error = tracking.errorMessage {
                         Text(error)
@@ -827,6 +849,13 @@ struct StartTripSheet: View {
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
+            if selectedFunction == .seeding {
+                let details = buildSeedingDetails()
+                if details.hasAnyValue {
+                    trip.seedingDetails = details
+                }
+            }
+
             if hasAnyRowGeometry, trackingPattern != .freeDrive {
                 let sequence = generatedSequence()
                 if let first = sequence.first {
@@ -847,6 +876,255 @@ struct StartTripSheet: View {
         if tracking.errorMessage == nil {
             dismiss()
         }
+    }
+
+    // MARK: Seeding Details
+
+    private var seedingDetailsSection: some View {
+        sectionContainer(title: "Seeding Details", icon: "leaf.circle.fill", tint: VineyardTheme.leafGreen) {
+            VStack(spacing: 0) {
+                DisclosureGroup(isExpanded: $seedingExpanded) {
+                    VStack(spacing: 14) {
+                        seedingMainFields
+                        seedingBoxCard(
+                            title: "Front Box",
+                            shutter: $seedFrontShutter,
+                            flap: $seedFrontFlap,
+                            wheel: $seedFrontWheel,
+                            volume: $seedFrontVolume,
+                            gearbox: $seedFrontGearbox
+                        )
+                        seedingBoxCard(
+                            title: "Back Box",
+                            shutter: $seedBackShutter,
+                            flap: $seedBackFlap,
+                            wheel: $seedBackWheel,
+                            volume: $seedBackVolume,
+                            gearbox: $seedBackGearbox
+                        )
+                        seedingMixLinesCard
+                    }
+                    .padding(.top, 12)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("Optional details")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Text("All fields optional")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tint(VineyardTheme.leafGreen)
+                .padding(14)
+            }
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(.rect(cornerRadius: 12))
+        }
+    }
+
+    private var seedingMainFields: some View {
+        VStack(spacing: 10) {
+            seedingTextField(label: "Seed/Fert mix — Front Box", text: $seedFrontMix, placeholder: "e.g. Ryecorn + Vetch")
+            seedingTextField(label: "Seed/Fert mix — Back Box", text: $seedBackMix, placeholder: "e.g. Tic Beans")
+            seedingNumericField(label: "Rate/ha — Front Box", text: $seedFrontRate, suffix: "kg/ha")
+            seedingNumericField(label: "Rate/ha — Back Box", text: $seedBackRate, suffix: "kg/ha")
+            seedingNumericField(label: "Sowing depth", text: $sowingDepth, suffix: "cm")
+        }
+    }
+
+    @ViewBuilder
+    private func seedingBoxCard(
+        title: String,
+        shutter: Binding<String>,
+        flap: Binding<String>,
+        wheel: Binding<String>,
+        volume: Binding<String>,
+        gearbox: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+            seedingPicker(label: "Shutter Slide", selection: shutter, options: ["3/4", "Full"])
+            seedingPicker(label: "Bottom Flap", selection: flap, options: ["1", "3"])
+            seedingPicker(label: "Metering Wheel", selection: wheel, options: ["N", "F"])
+            seedingNumericField(label: "Volume of Seed", text: volume, suffix: "kg")
+            seedingNumericField(label: "Seed Rate Gearbox", text: gearbox, suffix: nil)
+        }
+        .padding(12)
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private var seedingMixLinesCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Seed Mix Breakdown")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                Spacer()
+                Button {
+                    mixLines.append(SeedingMixLine(seedBox: "Front"))
+                } label: {
+                    Label("Add line", systemImage: "plus.circle.fill")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(VineyardTheme.leafGreen)
+            }
+
+            if mixLines.isEmpty {
+                Text("Optional. Tap Add line to record seed components.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(mixLines.enumerated()), id: \.element.id) { idx, _ in
+                    seedingMixLineRow(index: idx)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func seedingMixLineRow(index: Int) -> some View {
+        let bindingName = Binding<String>(
+            get: { mixLines[index].name ?? "" },
+            set: { mixLines[index].name = $0.isEmpty ? nil : $0 }
+        )
+        let bindingPercent = Binding<String>(
+            get: { mixLines[index].percentOfMix.map { trimNumber($0) } ?? "" },
+            set: { mixLines[index].percentOfMix = Double($0) }
+        )
+        let bindingBox = Binding<String>(
+            get: { mixLines[index].seedBox ?? "Front" },
+            set: { mixLines[index].seedBox = $0 }
+        )
+        let bindingKgHa = Binding<String>(
+            get: { mixLines[index].kgPerHa.map { trimNumber($0) } ?? "" },
+            set: { mixLines[index].kgPerHa = Double($0) }
+        )
+        let bindingSupplier = Binding<String>(
+            get: { mixLines[index].supplierManufacturer ?? "" },
+            set: { mixLines[index].supplierManufacturer = $0.isEmpty ? nil : $0 }
+        )
+
+        VStack(spacing: 8) {
+            HStack {
+                Text("Line \(index + 1)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(role: .destructive) {
+                    mixLines.remove(at: index)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+            }
+            seedingTextField(label: "Name", text: bindingName, placeholder: "e.g. Ryecorn")
+            seedingNumericField(label: "% of Mix", text: bindingPercent, suffix: "%")
+            seedingPicker(label: "Seed Box", selection: bindingBox, options: ["Front", "Back"])
+            seedingNumericField(label: "Kg/ha", text: bindingKgHa, suffix: "kg/ha")
+            seedingTextField(label: "Supplier", text: bindingSupplier, placeholder: "Manufacturer")
+        }
+        .padding(10)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func seedingTextField(label: String, text: Binding<String>, placeholder: String) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 130, alignment: .leading)
+            TextField(placeholder, text: text)
+                .textInputAutocapitalization(.sentences)
+                .submitLabel(.done)
+                .font(.subheadline)
+        }
+    }
+
+    @ViewBuilder
+    private func seedingNumericField(label: String, text: Binding<String>, suffix: String?) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 130, alignment: .leading)
+            TextField("0", text: text)
+                .keyboardType(.decimalPad)
+                .font(.subheadline)
+            if let suffix {
+                Text(suffix)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func seedingPicker(label: String, selection: Binding<String>, options: [String]) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 130, alignment: .leading)
+            Picker(label, selection: selection) {
+                ForEach(options, id: \.self) { option in
+                    Text(option).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func trimNumber(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(value)
+    }
+
+    private func buildSeedingDetails() -> SeedingDetails {
+        func trimmed(_ s: String) -> String? {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        let front = SeedingBox(
+            mixName: trimmed(seedFrontMix),
+            ratePerHa: Double(seedFrontRate),
+            shutterSlide: trimmed(seedFrontShutter),
+            bottomFlap: trimmed(seedFrontFlap),
+            meteringWheel: trimmed(seedFrontWheel),
+            seedVolumeKg: Double(seedFrontVolume),
+            gearboxSetting: Double(seedFrontGearbox)
+        )
+        let back = SeedingBox(
+            mixName: trimmed(seedBackMix),
+            ratePerHa: Double(seedBackRate),
+            shutterSlide: trimmed(seedBackShutter),
+            bottomFlap: trimmed(seedBackFlap),
+            meteringWheel: trimmed(seedBackWheel),
+            seedVolumeKg: Double(seedBackVolume),
+            gearboxSetting: Double(seedBackGearbox)
+        )
+        let lines = mixLines.filter { $0.hasAnyValue }
+        return SeedingDetails(
+            frontBox: front.hasAnyValue ? front : nil,
+            backBox: back.hasAnyValue ? back : nil,
+            sowingDepthCm: Double(sowingDepth),
+            mixLines: lines.isEmpty ? nil : lines
+        )
     }
 }
 

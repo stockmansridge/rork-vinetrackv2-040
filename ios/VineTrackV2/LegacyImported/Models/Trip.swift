@@ -89,6 +89,10 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
     /// Optional free-text title / notes (used when `tripFunction == .other`
     /// or when the operator wants to add a custom label).
     var tripTitle: String?
+    /// Optional structured Seeding Details (only normally populated when
+    /// `tripFunction == "seeding"`). Persisted to Supabase as JSONB at
+    /// `trips.seeding_details`. Encoded with snake_case nested keys.
+    var seedingDetails: SeedingDetails?
 
     /// Convenience: returns a short label suitable for the active trip header.
     /// Prefers an explicit title, then the picked function, then "Trip".
@@ -148,7 +152,8 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         isFillingTank: Bool = false,
         fillingTankNumber: Int? = nil,
         tripFunction: String? = nil,
-        tripTitle: String? = nil
+        tripTitle: String? = nil,
+        seedingDetails: SeedingDetails? = nil
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -180,6 +185,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         self.fillingTankNumber = fillingTankNumber
         self.tripFunction = tripFunction
         self.tripTitle = tripTitle
+        self.seedingDetails = seedingDetails
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -192,6 +198,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         case pauseTimestamps, resumeTimestamps, isPaused
         case isFillingTank, fillingTankNumber
         case tripFunction, tripTitle
+        case seedingDetails
     }
 
     init(from decoder: Decoder) throws {
@@ -223,6 +230,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         fillingTankNumber = try container.decodeIfPresent(Int.self, forKey: .fillingTankNumber)
         tripFunction = try container.decodeIfPresent(String.self, forKey: .tripFunction)
         tripTitle = try container.decodeIfPresent(String.self, forKey: .tripTitle)
+        seedingDetails = try container.decodeIfPresent(SeedingDetails.self, forKey: .seedingDetails)
 
         if let doubleRow = try? container.decode(Double.self, forKey: .currentRowNumber) {
             currentRowNumber = doubleRow
