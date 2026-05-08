@@ -682,7 +682,18 @@ private struct NewHomeTabView: View {
 
             VineyardCard {
                 VStack(spacing: 10) {
-                    summaryRow("Pins", value: store.pins.count, icon: "mappin.circle.fill", tint: .red)
+                    NavigationLink {
+                        PinsView(initialViewMode: .summary)
+                    } label: {
+                        HStack(spacing: 12) {
+                            summaryRow("Pins", value: store.pins.count, icon: "mappin.circle.fill", tint: .red)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                     Divider()
                     summaryRow("Trips", value: store.trips.count, icon: "map.fill", tint: .blue)
                     Divider()
