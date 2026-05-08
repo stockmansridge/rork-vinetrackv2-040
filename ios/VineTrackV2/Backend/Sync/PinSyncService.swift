@@ -161,6 +161,7 @@ final class PinSyncService {
                 let _authUserId = currentUserId?.uuidString ?? "nil"
                 print("[PinSync] push pin id=\(pin.id) createdByText=\(_createdByText) createdByUserId=\(_createdByUserId) payload.created_by=\(_payloadCreatedBy) authUserId=\(_authUserId)")
                 #endif
+                PinSyncDiagnostics.shared.recordPush(pin: pin, payload: payload, authUserId: currentUserId)
                 payloads.append(payload)
                 pushedIds.append(pinId)
             }
@@ -174,8 +175,14 @@ final class PinSyncService {
                     print("[PinSync] upsert payload JSON: \(str)")
                 }
                 #endif
-                try await repository.upsertPins(payloads)
-                metadata.clearDirty(pushedIds)
+                do {
+                    try await repository.upsertPins(payloads)
+                    metadata.clearDirty(pushedIds)
+                    PinSyncDiagnostics.shared.recordBatchResult(count: payloads.count, success: true, errorMessage: nil)
+                } catch {
+                    PinSyncDiagnostics.shared.recordBatchResult(count: payloads.count, success: false, errorMessage: error.localizedDescription)
+                    throw error
+                }
             }
             if !photoUploadFailures.isEmpty {
                 errorMessage = "Some pin photos failed to upload: \(photoUploadFailures.first ?? "unknown")"

@@ -2,6 +2,7 @@
 import Foundation
 import SwiftUI
 import Supabase
+import UIKit
 
 struct BackendDiagnosticView: View {
     private let provider: SupabaseClientProvider = .shared
@@ -50,6 +51,7 @@ struct BackendDiagnosticView: View {
             teamSection
             disclaimerSection
             auditSection
+            pinSyncDiagnosticsSection
             outputSection
         }
         .navigationTitle("Backend Diagnostic")
@@ -267,6 +269,38 @@ struct BackendDiagnosticView: View {
             }
         }
         .disabled(isRunning)
+    }
+
+    private var pinSyncDiagnosticsSection: some View {
+        Section("Pin Sync Diagnostics") {
+            let diag = PinSyncDiagnostics.shared
+            if let snap = diag.last {
+                LabeledContent("Pin ID", value: snap.pinId.uuidString)
+                LabeledContent("Title", value: snap.title ?? "nil")
+                LabeledContent("createdBy text", value: snap.createdByText ?? "nil")
+                LabeledContent("createdByUserId", value: snap.createdByUserId?.uuidString ?? "nil")
+                LabeledContent("auth.userId", value: snap.authUserId?.uuidString ?? "nil")
+                LabeledContent("payload.created_by", value: snap.payloadCreatedBy?.uuidString ?? "nil")
+                LabeledContent("completed_by_user_id", value: snap.completedByUserId?.uuidString ?? "nil")
+                LabeledContent("Pushed at", value: snap.pushedAt.formatted(.dateTime.hour().minute().second()))
+                LabeledContent("Result", value: snap.success ? "success" : "failed")
+                if let err = snap.errorMessage, !err.isEmpty {
+                    Text(err)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                }
+            } else {
+                Text("No pin push recorded in this session yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Button("Copy Last Pin Sync Diagnostics", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = PinSyncDiagnostics.shared.formattedReport
+                appendLog("INFO Copied last pin sync diagnostics to clipboard")
+            }
+            .disabled(diag.last == nil)
+        }
     }
 
     private var outputSection: some View {
