@@ -367,6 +367,7 @@ private struct NewHomeTabView: View {
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             plainSectionHeader("Today")
+            HomeRainSummaryCard()
             HomeAlertsCard()
             NavigationLink {
                 PinsView(initialViewMode: .list)

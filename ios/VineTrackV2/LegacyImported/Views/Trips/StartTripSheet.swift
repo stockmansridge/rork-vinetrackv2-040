@@ -53,6 +53,13 @@ struct StartTripSheet: View {
     @State private var seedBackVolume: String = ""
     @State private var seedBackGearbox: String = ""
     @State private var mixLines: [SeedingMixLine] = []
+    /// Short note shown after the operator copies setup from a previous
+    /// seeding job, e.g. "Copied setup from Seeding — Block A — 6 May 2026".
+    /// Cleared when the operator manually edits the form.
+    @State private var copiedFromNote: String?
+    /// Set to true when the operator taps Copy and no previous seeding job
+    /// with details was found, so we can show a friendly inline message.
+    @State private var copyMissing: Bool = false
 
     private var selectedPaddocks: [Paddock] {
         store.paddocks
@@ -1059,6 +1066,7 @@ struct StartTripSheet: View {
             VStack(spacing: 0) {
                 DisclosureGroup(isExpanded: $seedingExpanded) {
                     VStack(spacing: 14) {
+                        copyFromPreviousRow
                         boxToggleRow(title: "Use Front Box", isOn: $useFrontBox)
                         boxToggleRow(title: "Use Rear Box", isOn: $useBackBox)
                         if !useFrontBox && !useBackBox {
@@ -1108,6 +1116,132 @@ struct StartTripSheet: View {
             .background(Color(.secondarySystemGroupedBackground))
             .clipShape(.rect(cornerRadius: 12))
         }
+    }
+
+    // MARK: Copy-from-previous
+
+    private var copyFromPreviousRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                applyPreviousSeedingSetup()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "doc.on.doc.fill")
+                        .foregroundStyle(VineyardTheme.leafGreen)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Copy from previous seeding job")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text("Reuse boxes, rates, depth and mix lines")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(VineyardTheme.leafGreen)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemGroupedBackground))
+                .clipShape(.rect(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+
+            if let note = copiedFromNote {
+                Label(note, systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VineyardTheme.leafGreen)
+            } else if copyMissing {
+                Label("No previous seeding setup found.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Find the most recent seeding trip for the active vineyard that has
+    /// non-empty `seedingDetails`, then copy its box toggles, box settings,
+    /// sowing depth and mix lines into the form. Trip-specific fields
+    /// (paddock, operator, start time, tracking pattern, coverage) are NOT
+    /// copied. Works fully offline against locally persisted trips.
+    private func applyPreviousSeedingSetup() {
+        guard let trip = mostRecentSeedingTripWithDetails(),
+              let details = trip.seedingDetails else {
+            copyMissing = true
+            copiedFromNote = nil
+            return
+        }
+        copyMissing = false
+
+        if let f = details.frontBox {
+            useFrontBox = true
+            seedFrontMix = f.mixName ?? ""
+            seedFrontRate = f.ratePerHa.map { trimNumber($0) } ?? ""
+            if let s = f.shutterSlide, !s.isEmpty { seedFrontShutter = s }
+            if let b = f.bottomFlap, !b.isEmpty { seedFrontFlap = b }
+            if let w = f.meteringWheel, !w.isEmpty { seedFrontWheel = w }
+            seedFrontVolume = f.seedVolumeKg.map { trimNumber($0) } ?? ""
+            seedFrontGearbox = f.gearboxSetting.map { trimNumber($0) } ?? ""
+        } else {
+            useFrontBox = false
+        }
+
+        if let b = details.backBox {
+            useBackBox = true
+            seedBackMix = b.mixName ?? ""
+            seedBackRate = b.ratePerHa.map { trimNumber($0) } ?? ""
+            if let s = b.shutterSlide, !s.isEmpty { seedBackShutter = s }
+            if let f = b.bottomFlap, !f.isEmpty { seedBackFlap = f }
+            if let w = b.meteringWheel, !w.isEmpty { seedBackWheel = w }
+            seedBackVolume = b.seedVolumeKg.map { trimNumber($0) } ?? ""
+            seedBackGearbox = b.gearboxSetting.map { trimNumber($0) } ?? ""
+        } else {
+            useBackBox = false
+        }
+
+        sowingDepth = details.sowingDepthCm.map { trimNumber($0) } ?? ""
+        // Re-id copied mix lines so SwiftUI ForEach identity stays stable
+        // and edits don't bleed into the source trip.
+        mixLines = (details.mixLines ?? []).map { line in
+            SeedingMixLine(
+                id: UUID(),
+                name: line.name,
+                percentOfMix: line.percentOfMix,
+                seedBox: line.seedBox,
+                kgPerHa: line.kgPerHa,
+                supplierManufacturer: line.supplierManufacturer
+            )
+        }
+
+        copiedFromNote = describeCopiedTrip(trip)
+        seedingExpanded = true
+    }
+
+    private func mostRecentSeedingTripWithDetails() -> Trip? {
+        let vineyardId = store.selectedVineyardId
+        return store.trips
+            .filter { trip in
+                guard let raw = trip.tripFunction,
+                      raw == TripFunction.seeding.rawValue else { return false }
+                guard trip.seedingDetails?.hasAnyValue == true else { return false }
+                if let vid = vineyardId, trip.vineyardId != vid { return false }
+                return true
+            }
+            .sorted { ($0.endTime ?? $0.startTime) > ($1.endTime ?? $1.startTime) }
+            .first
+    }
+
+    private func describeCopiedTrip(_ trip: Trip) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        let date = f.string(from: trip.endTime ?? trip.startTime)
+        let block = trip.paddockName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if block.isEmpty {
+            return "Copied setup from Seeding — \(date)"
+        }
+        return "Copied setup from Seeding — \(block) — \(date)"
     }
 
     private var seedingMainFields: some View {
