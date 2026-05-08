@@ -1032,7 +1032,12 @@ struct StartTripSheet: View {
 
             if isSeedingSelected {
                 let details = buildSeedingDetails()
-                if details.hasAnyValue {
+                // Always persist seeding details when the function is Seeding
+                // (even if empty) so the operator's box toggle state is
+                // available to "Copy from previous seeding job" on the next
+                // trip. SeedingDetails.hasAnyValue still correctly gates the
+                // Trip Detail display section.
+                if details.frontBox != nil || details.backBox != nil || details.hasAnyValue {
                     trip.seedingDetails = details
                 }
             }
@@ -1166,14 +1171,20 @@ struct StartTripSheet: View {
     /// (paddock, operator, start time, tracking pattern, coverage) are NOT
     /// copied. Works fully offline against locally persisted trips.
     private func applyPreviousSeedingSetup() {
-        guard let trip = mostRecentSeedingTripWithDetails(),
-              let details = trip.seedingDetails else {
+        guard let trip = mostRecentSeedingTripWithDetails() else {
             copyMissing = true
             copiedFromNote = nil
+            #if DEBUG
+            print("[StartTrip] copy-from-previous: no previous seeding trip found in store.trips (count=\(store.trips.count), vineyard=\(String(describing: store.selectedVineyardId)))")
+            #endif
             return
         }
+        let details = trip.seedingDetails ?? SeedingDetails()
         copyMissing = false
 
+        // Front box: a non-nil box (even if all fields are empty) means the
+        // operator had Use Front Box enabled on the previous trip, so honour
+        // that toggle state when copying.
         if let f = details.frontBox {
             useFrontBox = true
             seedFrontMix = f.mixName ?? ""
@@ -1200,6 +1211,13 @@ struct StartTripSheet: View {
             useBackBox = false
         }
 
+        // If neither box is recorded on the previous trip (e.g. very early
+        // seeding records before this feature shipped), default to Front Box
+        // enabled so the form is still usable after copy.
+        if details.frontBox == nil && details.backBox == nil {
+            useFrontBox = true
+        }
+
         sowingDepth = details.sowingDepthCm.map { trimNumber($0) } ?? ""
         // Re-id copied mix lines so SwiftUI ForEach identity stays stable
         // and edits don't bleed into the source trip.
@@ -1218,18 +1236,36 @@ struct StartTripSheet: View {
         seedingExpanded = true
     }
 
+    /// Find the most recent seeding trip we can copy from. Preference order:
+    /// 1) trips with populated `seedingDetails.hasAnyValue == true`
+    /// 2) trips that were Seeding but have no/empty details (still gives the
+    ///    operator the box toggles + a clear note, much better than silent
+    ///    failure in the field).
+    /// We also exclude any active/paused trip and the current draft trip so
+    /// the operator can't "copy from themselves".
     private func mostRecentSeedingTripWithDetails() -> Trip? {
         let vineyardId = store.selectedVineyardId
-        return store.trips
-            .filter { trip in
-                guard let raw = trip.tripFunction,
-                      raw == TripFunction.seeding.rawValue else { return false }
-                guard trip.seedingDetails?.hasAnyValue == true else { return false }
-                if let vid = vineyardId, trip.vineyardId != vid { return false }
-                return true
-            }
-            .sorted { ($0.endTime ?? $0.startTime) > ($1.endTime ?? $1.startTime) }
-            .first
+        let candidates = store.trips.filter { trip in
+            guard let raw = trip.tripFunction else { return false }
+            // Accept built-in seeding plus any custom trip function whose slug
+            // mentions "seed" (e.g. custom:cover-seeding) so vineyards using
+            // custom seeding functions still get useful copy behaviour.
+            let isSeeding = (raw == TripFunction.seeding.rawValue) || raw.lowercased().contains("seed")
+            guard isSeeding else { return false }
+            // store.trips is already scoped to selectedVineyardId, but keep
+            // this guard for safety in case of repair/migration races.
+            if let vid = vineyardId, trip.vineyardId != vid { return false }
+            // Skip the current/active/paused trip itself.
+            if trip.isActive || trip.isPaused { return false }
+            return true
+        }
+        let sorted = candidates.sorted {
+            ($0.endTime ?? $0.startTime) > ($1.endTime ?? $1.startTime)
+        }
+        if let withDetails = sorted.first(where: { $0.seedingDetails?.hasAnyValue == true }) {
+            return withDetails
+        }
+        return sorted.first
     }
 
     private func describeCopiedTrip(_ trip: Trip) -> String {
@@ -1440,7 +1476,8 @@ struct StartTripSheet: View {
         }
         // Only persist box settings for boxes the operator actually used.
         // Disabled boxes are saved as nil so unused defaults don't pollute
-        // the trip record.
+        // the trip record. Enabled boxes are always saved (even if empty)
+        // so the toggle state survives for "Copy from previous seeding job".
         let front: SeedingBox? = useFrontBox ? SeedingBox(
             mixName: trimmed(seedFrontMix),
             ratePerHa: Double(seedFrontRate),
@@ -1461,8 +1498,8 @@ struct StartTripSheet: View {
         ) : nil
         let lines = mixLines.filter { $0.hasAnyValue }
         return SeedingDetails(
-            frontBox: (front?.hasAnyValue == true) ? front : nil,
-            backBox: (back?.hasAnyValue == true) ? back : nil,
+            frontBox: front,
+            backBox: back,
             sowingDepthCm: Double(sowingDepth),
             mixLines: lines.isEmpty ? nil : lines
         )
