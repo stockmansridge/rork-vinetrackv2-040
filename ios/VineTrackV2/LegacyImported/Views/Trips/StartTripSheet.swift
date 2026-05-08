@@ -60,6 +60,9 @@ struct StartTripSheet: View {
     /// Set to true when the operator taps Copy and no previous seeding job
     /// with details was found, so we can show a friendly inline message.
     @State private var copyMissing: Bool = false
+    /// True when a previous seeding trip exists but has no genuinely useful
+    /// operator-entered values (only default shutter/flap/wheel etc.).
+    @State private var copyFoundButEmpty: Bool = false
     /// Multi-line, human-readable diagnostic explaining the last copy attempt.
     /// Populated every time the operator taps "Copy from previous seeding
     /// job" so we can debug lookup failures in the field.
@@ -1163,6 +1166,10 @@ struct StartTripSheet: View {
                 Label(note, systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(VineyardTheme.leafGreen)
+            } else if copyFoundButEmpty {
+                Label("Previous seeding job found, but it has no useful saved setup.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             } else if copyMissing {
                 Label("No previous seeding setup found.", systemImage: "info.circle")
                     .font(.caption)
@@ -1200,6 +1207,7 @@ struct StartTripSheet: View {
         copyDiagnostics = lookup.diagnostics
         guard let trip = lookup.trip else {
             copyMissing = true
+            copyFoundButEmpty = false
             copiedFromNote = nil
             showCopyDiagnostics = true
             #if DEBUG
@@ -1209,6 +1217,19 @@ struct StartTripSheet: View {
         }
         let details = trip.seedingDetails ?? SeedingDetails()
         copyMissing = false
+
+        // If the previous trip has no genuinely useful saved setup, surface a
+        // friendlier message and skip the "Copied setup from…" note. We still
+        // copy whatever values exist (toggles, defaults) so the form reflects
+        // the lookup result, and we expand the diagnostics block so the
+        // operator can see why nothing useful was copied.
+        let isUseful = details.hasMeaningfulValue
+        if !isUseful {
+            copyFoundButEmpty = true
+            showCopyDiagnostics = true
+        } else {
+            copyFoundButEmpty = false
+        }
 
         // Front box: a non-nil box (even if all fields are empty) means the
         // operator had Use Front Box enabled on the previous trip, so honour
@@ -1260,7 +1281,7 @@ struct StartTripSheet: View {
             )
         }
 
-        copiedFromNote = describeCopiedTrip(trip)
+        copiedFromNote = isUseful ? describeCopiedTrip(trip) : nil
         seedingExpanded = true
     }
 
@@ -1320,14 +1341,20 @@ struct StartTripSheet: View {
         let withMeaningful = withDetails.filter { $0.seedingDetails?.hasAnyValue == true }
         lines.append("with seedingDetails.hasAnyValue = \(withMeaningful.count)")
 
+        let withUseful = withDetails.filter { $0.seedingDetails?.hasMeaningfulValue == true }
+        lines.append("with seedingDetails.hasMeaningfulValue = \(withUseful.count)")
+
         let sorted = inactive.sorted {
             ($0.endTime ?? $0.startTime) > ($1.endTime ?? $1.startTime)
         }
 
         let chosen: Trip?
-        if let first = sorted.first(where: { $0.seedingDetails?.hasAnyValue == true }) {
+        if let first = sorted.first(where: { $0.seedingDetails?.hasMeaningfulValue == true }) {
             chosen = first
-            lines.append("selected = \(first.id.uuidString) (with details)")
+            lines.append("selected = \(first.id.uuidString) (meaningful values)")
+        } else if let first = sorted.first(where: { $0.seedingDetails?.hasAnyValue == true }) {
+            chosen = first
+            lines.append("selected = \(first.id.uuidString) (defaults only — no useful setup)")
         } else if let first = sorted.first {
             chosen = first
             lines.append("selected = \(first.id.uuidString) (fallback, no/empty details)")
@@ -1351,15 +1378,52 @@ struct StartTripSheet: View {
             lines.append("selected.paddock = \(chosen.paddockName.isEmpty ? "<none>" : chosen.paddockName)")
             lines.append("selected.tripFunction = \(chosen.tripFunction ?? "<nil>")")
             if let d = chosen.seedingDetails {
-                lines.append("selected.front = \(d.frontBox == nil ? "nil" : "present")")
-                lines.append("selected.back = \(d.backBox == nil ? "nil" : "present")")
-                lines.append("selected.mixLines = \(d.mixLines?.count ?? 0)")
+                lines.append("selected.hasMeaningfulValue = \(d.hasMeaningfulValue)")
+                lines.append("selected.sowing_depth_cm = \(d.sowingDepthCm.map { String($0) } ?? "nil")")
+                if let f = d.frontBox {
+                    lines.append("selected.front.mix_name = \(quoteOrNil(f.mixName))")
+                    lines.append("selected.front.rate_per_ha = \(f.ratePerHa.map { String($0) } ?? "nil")")
+                    lines.append("selected.front.shutter_slide = \(quoteOrNil(f.shutterSlide))")
+                    lines.append("selected.front.bottom_flap = \(quoteOrNil(f.bottomFlap))")
+                    lines.append("selected.front.metering_wheel = \(quoteOrNil(f.meteringWheel))")
+                    lines.append("selected.front.seed_volume_kg = \(f.seedVolumeKg.map { String($0) } ?? "nil")")
+                    lines.append("selected.front.gearbox_setting = \(f.gearboxSetting.map { String($0) } ?? "nil")")
+                    lines.append("selected.front.hasMeaningfulValue = \(f.hasMeaningfulValue)")
+                } else {
+                    lines.append("selected.front = nil")
+                }
+                if let b = d.backBox {
+                    lines.append("selected.back.mix_name = \(quoteOrNil(b.mixName))")
+                    lines.append("selected.back.rate_per_ha = \(b.ratePerHa.map { String($0) } ?? "nil")")
+                    lines.append("selected.back.shutter_slide = \(quoteOrNil(b.shutterSlide))")
+                    lines.append("selected.back.bottom_flap = \(quoteOrNil(b.bottomFlap))")
+                    lines.append("selected.back.metering_wheel = \(quoteOrNil(b.meteringWheel))")
+                    lines.append("selected.back.seed_volume_kg = \(b.seedVolumeKg.map { String($0) } ?? "nil")")
+                    lines.append("selected.back.gearbox_setting = \(b.gearboxSetting.map { String($0) } ?? "nil")")
+                    lines.append("selected.back.hasMeaningfulValue = \(b.hasMeaningfulValue)")
+                } else {
+                    lines.append("selected.back = nil")
+                }
+                let lineCount = d.mixLines?.count ?? 0
+                lines.append("selected.mix_lines = \(lineCount)")
+                if let ml = d.mixLines, !ml.isEmpty {
+                    for (i, line) in ml.enumerated() {
+                        let n = quoteOrNil(line.name)
+                        let kg = line.kgPerHa.map { String($0) } ?? "nil"
+                        lines.append("  mix_lines[\(i)] name=\(n) kg/ha=\(kg)")
+                    }
+                }
             } else {
                 lines.append("selected.seedingDetails = nil")
             }
         }
 
         return (chosen, lines.joined(separator: "\n"))
+    }
+
+    private func quoteOrNil(_ s: String?) -> String {
+        guard let s, !s.isEmpty else { return "nil" }
+        return "\"\(s)\""
     }
 
     private func describeCopiedTrip(_ trip: Trip) -> String {

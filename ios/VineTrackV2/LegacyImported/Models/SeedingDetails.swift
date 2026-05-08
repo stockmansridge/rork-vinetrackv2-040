@@ -52,6 +52,19 @@ nonisolated struct SeedingBox: Codable, Sendable, Hashable {
         if gearboxSetting != nil { return true }
         return false
     }
+
+    /// Stricter than `hasAnyValue` — ignores default shutter/flap/wheel
+    /// settings so that an empty box (no mix name, no rate, no volume,
+    /// no gearbox) is not treated as a useful previous setup just because
+    /// shutter="3/4" / flap="1" / wheel="N" defaults were persisted.
+    var hasMeaningfulValue: Bool {
+        let trimmedMix = mixName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedMix.isEmpty { return true }
+        if let r = ratePerHa, r > 0 { return true }
+        if let v = seedVolumeKg, v > 0 { return true }
+        if let g = gearboxSetting, g > 0 { return true }
+        return false
+    }
 }
 
 nonisolated struct SeedingMixLine: Codable, Sendable, Hashable, Identifiable {
@@ -137,6 +150,17 @@ nonisolated struct SeedingDetails: Codable, Sendable, Hashable {
         if frontBox?.hasAnyValue == true { return true }
         if backBox?.hasAnyValue == true { return true }
         if sowingDepthCm != nil { return true }
+        if let lines = mixLines, lines.contains(where: { $0.hasAnyValue }) { return true }
+        return false
+    }
+
+    /// Stricter than `hasAnyValue` — true only when at least one
+    /// genuinely useful, operator-entered value exists. Default-only
+    /// box settings (shutter/flap/wheel) do NOT count.
+    var hasMeaningfulValue: Bool {
+        if frontBox?.hasMeaningfulValue == true { return true }
+        if backBox?.hasMeaningfulValue == true { return true }
+        if let d = sowingDepthCm, d > 0 { return true }
         if let lines = mixLines, lines.contains(where: { $0.hasAnyValue }) { return true }
         return false
     }
