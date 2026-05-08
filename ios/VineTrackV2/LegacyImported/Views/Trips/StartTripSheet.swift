@@ -1283,6 +1283,34 @@ struct StartTripSheet: View {
 
         copiedFromNote = isUseful ? describeCopiedTrip(trip) : nil
         seedingExpanded = true
+
+        // Append a clear "applied to form" trace so the operator can
+        // verify exactly which @State values landed in the visible form.
+        // This makes it obvious when a field is blank because the source
+        // trip didn't have it (e.g. seed_volume_kg = nil) versus a copy
+        // bug. Surfaced inside the existing Copy Diagnostics block.
+        var applied: [String] = []
+        applied.append("")
+        applied.append("--- applied to form ---")
+        applied.append("useFrontBox = \(useFrontBox)")
+        applied.append("useBackBox = \(useBackBox)")
+        applied.append("seedFrontMix = \"\(seedFrontMix)\"")
+        applied.append("seedFrontRate = \"\(seedFrontRate)\"")
+        applied.append("seedFrontShutter = \"\(seedFrontShutter)\"")
+        applied.append("seedFrontFlap = \"\(seedFrontFlap)\"")
+        applied.append("seedFrontWheel = \"\(seedFrontWheel)\"")
+        applied.append("seedFrontVolume = \"\(seedFrontVolume)\"")
+        applied.append("seedFrontGearbox = \"\(seedFrontGearbox)\"")
+        applied.append("seedBackMix = \"\(seedBackMix)\"")
+        applied.append("seedBackRate = \"\(seedBackRate)\"")
+        applied.append("seedBackShutter = \"\(seedBackShutter)\"")
+        applied.append("seedBackFlap = \"\(seedBackFlap)\"")
+        applied.append("seedBackWheel = \"\(seedBackWheel)\"")
+        applied.append("seedBackVolume = \"\(seedBackVolume)\"")
+        applied.append("seedBackGearbox = \"\(seedBackGearbox)\"")
+        applied.append("sowingDepth = \"\(sowingDepth)\"")
+        applied.append("mixLines.count = \(mixLines.count)")
+        copyDiagnostics = (copyDiagnostics ?? "") + "\n" + applied.joined(separator: "\n")
     }
 
     /// Find the most recent seeding trip we can copy from. Preference order:
@@ -1632,33 +1660,49 @@ struct StartTripSheet: View {
             let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
         }
+        // Robust numeric parser: trims whitespace, strips common unit
+        // suffixes (kg, kg/ha, cm) and stray non-numeric characters so
+        // values like "20 kg" or "20kg/ha" still persist correctly.
+        // Without this, `Double("20 kg")` returns nil and the operator's
+        // entered Volume of Seed / Seed Rate Gearbox values are silently
+        // dropped on save, which is why "Copy from previous" then shows
+        // those fields blank on the next trip.
+        func parseNumber(_ s: String) -> Double? {
+            let trimmedRaw = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedRaw.isEmpty else { return nil }
+            if let direct = Double(trimmedRaw) { return direct }
+            let cleaned = trimmedRaw
+                .replacingOccurrences(of: ",", with: ".")
+                .filter { $0.isNumber || $0 == "." || $0 == "-" }
+            return Double(cleaned)
+        }
         // Only persist box settings for boxes the operator actually used.
         // Disabled boxes are saved as nil so unused defaults don't pollute
         // the trip record. Enabled boxes are always saved (even if empty)
         // so the toggle state survives for "Copy from previous seeding job".
         let front: SeedingBox? = useFrontBox ? SeedingBox(
             mixName: trimmed(seedFrontMix),
-            ratePerHa: Double(seedFrontRate),
+            ratePerHa: parseNumber(seedFrontRate),
             shutterSlide: trimmed(seedFrontShutter),
             bottomFlap: trimmed(seedFrontFlap),
             meteringWheel: trimmed(seedFrontWheel),
-            seedVolumeKg: Double(seedFrontVolume),
-            gearboxSetting: Double(seedFrontGearbox)
+            seedVolumeKg: parseNumber(seedFrontVolume),
+            gearboxSetting: parseNumber(seedFrontGearbox)
         ) : nil
         let back: SeedingBox? = useBackBox ? SeedingBox(
             mixName: trimmed(seedBackMix),
-            ratePerHa: Double(seedBackRate),
+            ratePerHa: parseNumber(seedBackRate),
             shutterSlide: trimmed(seedBackShutter),
             bottomFlap: trimmed(seedBackFlap),
             meteringWheel: trimmed(seedBackWheel),
-            seedVolumeKg: Double(seedBackVolume),
-            gearboxSetting: Double(seedBackGearbox)
+            seedVolumeKg: parseNumber(seedBackVolume),
+            gearboxSetting: parseNumber(seedBackGearbox)
         ) : nil
         let lines = mixLines.filter { $0.hasAnyValue }
         return SeedingDetails(
             frontBox: front,
             backBox: back,
-            sowingDepthCm: Double(sowingDepth),
+            sowingDepthCm: parseNumber(sowingDepth),
             mixLines: lines.isEmpty ? nil : lines
         )
     }
