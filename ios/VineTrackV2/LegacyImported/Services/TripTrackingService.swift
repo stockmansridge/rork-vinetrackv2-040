@@ -40,6 +40,17 @@ final class TripTrackingService {
     var diagDuplicateCheckResult: String?
     var diagDuplicateRadiusMeters: Double?
 
+    // Free-drive diagnostics (only populated when the active trip is in
+    // Free Drive mode). These mirror the live detection logic so the
+    // operator can field-test row labels and coverage.
+    var diagFreeDriveActive: Bool = false
+    var diagFreeDriveCandidatePath: Double?
+    var diagFreeDriveStablePath: Double?
+    var diagFreeDriveWindowSamples: Int = 0
+    var diagFreeDriveWindowSeconds: Double = 0
+    var diagFreeDriveDwellSamples: Int = 0
+    var diagFreeDriveCompletedCount: Int = 0
+
     /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
     /// and otherwise from the recent point window. Use this instead of
     /// `locationService.location?.speed` to avoid the half-speed dropout that
@@ -78,6 +89,25 @@ final class TripTrackingService {
     // briefly drifted outside corridor tolerance, so the live indicator
     // doesn't flicker back to nil.
     private var lastLivePathInCorridor: Double?
+
+    // MARK: - Free-drive stability
+    // Rolling window of recent live-detected paths used to pick the
+    // "stable" detected path in Free Drive mode. GPS can hop between
+    // adjacent rows for a sample or two; we only switch the displayed
+    // path after the candidate has dwelled in the window long enough.
+    private struct FreeDrivePathSample {
+        let date: Date
+        let path: Double
+        let inCorridor: Bool
+    }
+    private var freeDriveSamples: [FreeDrivePathSample] = []
+    private var freeDriveStablePath: Double?
+    /// Window length used to pick the majority detected path.
+    private let freeDriveWindow: TimeInterval = 6.0
+    /// Minimum consecutive recent in-corridor samples on a new candidate
+    /// before the stable path switches. Tied to the GPS sample interval
+    /// (~1Hz) so this is roughly the dwell time in seconds.
+    private let freeDriveMinSwitchSamples: Int = 3
 
     // MARK: - Diagnostics (DEBUG only)
     #if DEBUG
@@ -192,6 +222,15 @@ final class TripTrackingService {
         lastAutoCompletePath = nil
         lastAutoCompleteAt = nil
         lastLivePathInCorridor = nil
+        freeDriveSamples.removeAll()
+        freeDriveStablePath = nil
+        diagFreeDriveActive = false
+        diagFreeDriveCandidatePath = nil
+        diagFreeDriveStablePath = nil
+        diagFreeDriveWindowSamples = 0
+        diagFreeDriveWindowSeconds = 0
+        diagFreeDriveDwellSamples = 0
+        diagFreeDriveCompletedCount = 0
         breadcrumb("endTrip")
     }
 
@@ -658,48 +697,97 @@ final class TripTrackingService {
         diagPathMatch = pathMatch
         diagPlannedPathLengthMeters = currentSequencePath.flatMap { rowLength(forPath: $0, paddock: paddock) }
         diagAccumulatedMeters = currentSequencePath.map { pathDistanceMap[$0, default: 0] } ?? 0
-        if inCorridor {
-            lastLivePathInCorridor = livePath
-            currentRowNumber = livePath
-        } else if let held = lastLivePathInCorridor {
-            currentRowNumber = held
-        } else if let target = currentSequencePath {
-            currentRowNumber = target
-        } else {
-            currentRowNumber = livePath
-        }
-        if let target = currentSequencePath {
-            trip.currentRowNumber = target
-        } else {
-            trip.currentRowNumber = currentRowNumber ?? livePath
-        }
 
-        // Only accumulate distance along the *current planned* path, and
-        // only when the live GPS is actually on that path AND inside the
-        // corridor. Driving an off-cycle path or skirting the corridor edge
-        // contributes zero progress to the planned path.
-        if pathMatch, inCorridor, let target = currentSequencePath {
-            accumulateDistanceAlong(path: target, location: locationService?.location)
+        let isFreeDrive = trip.trackingPattern == .freeDrive
 
-            // Auto-complete only when we are physically near the planned
-            // row centreline and have covered enough of its length.
-            let proximity = max(0.5, paddock.rowWidth / 2.0)
-            if match.distance <= proximity {
-                let didComplete = finalizeIfThresholdMet(
-                    path: target,
-                    trip: &trip,
-                    paddock: paddock,
-                    rowWidth: paddock.rowWidth,
-                    location: locationService?.location
-                )
-                if didComplete {
-                    advanceSequenceAfterCompletion(trip: &trip)
-                }
+        if isFreeDrive {
+            // Free Drive: no planned sequence. Use a rolling-window
+            // majority + dwell rule to pick the stable detected path,
+            // then accumulate coverage on that path directly.
+            updateFreeDriveStability(livePath: livePath, inCorridor: inCorridor)
+            let stable = freeDriveStablePath
+            diagFreeDriveActive = true
+            diagFreeDriveCandidatePath = livePath
+            diagFreeDriveStablePath = stable
+
+            if inCorridor {
+                lastLivePathInCorridor = livePath
+                currentRowNumber = stable ?? livePath
+            } else if let stable {
+                currentRowNumber = stable
+            } else if let held = lastLivePathInCorridor {
+                currentRowNumber = held
+            } else {
+                currentRowNumber = livePath
             }
+            trip.currentRowNumber = currentRowNumber ?? livePath
+
+            if inCorridor, let stable, abs(stable - livePath) < 0.01 {
+                accumulateDistanceAlong(path: stable, location: locationService?.location)
+                let proximity = max(0.5, paddock.rowWidth / 2.0)
+                if match.distance <= proximity {
+                    _ = finalizeIfThresholdMet(
+                        path: stable,
+                        trip: &trip,
+                        paddock: paddock,
+                        rowWidth: paddock.rowWidth,
+                        location: locationService?.location
+                    )
+                    // Free Drive never advances a sequence — there is no
+                    // planned ordering to advance through.
+                }
+            } else {
+                // Off-corridor or candidate not yet stable: reset segment
+                // anchor so the next valid on-path tick doesn't accumulate
+                // the gap distance.
+                lastTrackingLocation = locationService?.location
+            }
+            diagFreeDriveCompletedCount = trip.completedPaths.count
         } else {
-            // Off-cycle: reset last tracking location so the next valid
-            // on-path tick doesn't accumulate the off-path distance.
-            lastTrackingLocation = locationService?.location
+            diagFreeDriveActive = false
+            if inCorridor {
+                lastLivePathInCorridor = livePath
+                currentRowNumber = livePath
+            } else if let held = lastLivePathInCorridor {
+                currentRowNumber = held
+            } else if let target = currentSequencePath {
+                currentRowNumber = target
+            } else {
+                currentRowNumber = livePath
+            }
+            if let target = currentSequencePath {
+                trip.currentRowNumber = target
+            } else {
+                trip.currentRowNumber = currentRowNumber ?? livePath
+            }
+
+            // Only accumulate distance along the *current planned* path, and
+            // only when the live GPS is actually on that path AND inside the
+            // corridor. Driving an off-cycle path or skirting the corridor edge
+            // contributes zero progress to the planned path.
+            if pathMatch, inCorridor, let target = currentSequencePath {
+                accumulateDistanceAlong(path: target, location: locationService?.location)
+
+                // Auto-complete only when we are physically near the planned
+                // row centreline and have covered enough of its length.
+                let proximity = max(0.5, paddock.rowWidth / 2.0)
+                if match.distance <= proximity {
+                    let didComplete = finalizeIfThresholdMet(
+                        path: target,
+                        trip: &trip,
+                        paddock: paddock,
+                        rowWidth: paddock.rowWidth,
+                        location: locationService?.location
+                    )
+                    if didComplete {
+                        advanceSequenceAfterCompletion(trip: &trip)
+                    }
+                }
+            } else {
+                // Off-cycle: reset last tracking location so the next valid
+                // on-path tick doesn't accumulate the off-path distance.
+                lastTrackingLocation = locationService?.location
+            }
         }
 
         #if DEBUG
@@ -726,6 +814,60 @@ final class TripTrackingService {
             )
         }
         #endif
+    }
+
+    /// Maintain the rolling-window stability state used by Free Drive mode.
+    /// `livePath` is the snapped live-detected path for this GPS tick (in
+    /// the X.5 grid). `inCorridor` is whether the tractor is physically
+    /// inside the row corridor for that path. Out-of-corridor samples are
+    /// still tracked (as nil candidates) so brief drift to the headland
+    /// doesn't immediately flip the stable path.
+    private func updateFreeDriveStability(livePath: Double, inCorridor: Bool) {
+        let now = Date()
+        freeDriveSamples.append(.init(date: now, path: livePath, inCorridor: inCorridor))
+        freeDriveSamples.removeAll { now.timeIntervalSince($0.date) > freeDriveWindow }
+        let window = freeDriveSamples
+        diagFreeDriveWindowSamples = window.count
+        if let first = window.first {
+            diagFreeDriveWindowSeconds = now.timeIntervalSince(first.date)
+        } else {
+            diagFreeDriveWindowSeconds = 0
+        }
+
+        // Majority candidate among in-corridor samples only — we don't want
+        // out-of-corridor noise to dominate the vote.
+        let inCorridorSamples = window.filter { $0.inCorridor }
+        var counts: [Double: Int] = [:]
+        for s in inCorridorSamples { counts[s.path, default: 0] += 1 }
+        let candidate = counts.max(by: { $0.value < $1.value })?.key
+
+        guard let cand = candidate else {
+            // No in-corridor samples yet — hold previous stable path.
+            diagFreeDriveDwellSamples = 0
+            return
+        }
+
+        // Consecutive recent in-corridor samples on `cand`, counted from
+        // the tail of the window. This is the "dwell" used to switch.
+        var dwell = 0
+        for s in window.reversed() {
+            guard s.inCorridor else { break }
+            if abs(s.path - cand) < 0.01 { dwell += 1 } else { break }
+        }
+        diagFreeDriveDwellSamples = dwell
+
+        if freeDriveStablePath == nil {
+            // First lock — require at least 2 in-corridor samples on the
+            // candidate so a single GPS tick can't claim a row.
+            if (counts[cand] ?? 0) >= 2 {
+                freeDriveStablePath = cand
+            }
+        } else if abs((freeDriveStablePath ?? cand) - cand) > 0.01 {
+            // Switching paths — require dwell.
+            if dwell >= freeDriveMinSwitchSamples {
+                freeDriveStablePath = cand
+            }
+        }
     }
 
     private func rowIndex(for candidates: [Paddock]) -> GlobalRowIndex {

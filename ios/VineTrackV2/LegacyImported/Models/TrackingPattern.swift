@@ -7,6 +7,10 @@ nonisolated enum TrackingPattern: String, Codable, Sendable, CaseIterable, Ident
     case upAndBack = "upAndBack"
     case twoRowUpBack = "twoRowUpBack"
     case custom = "custom"
+    /// Free Drive — operator is not following a planned row sequence.
+    /// No sequence generated; rows are detected and ticked off live based
+    /// on the tractor's actual GPS position relative to row geometry.
+    case freeDrive = "freeDrive"
 
     var id: String { rawValue }
 
@@ -18,6 +22,7 @@ nonisolated enum TrackingPattern: String, Codable, Sendable, CaseIterable, Ident
         case .upAndBack: return "Up and Back"
         case .twoRowUpBack: return "2 Row Up & Back"
         case .custom: return "Custom"
+        case .freeDrive: return "Free Drive"
         }
     }
 
@@ -29,6 +34,7 @@ nonisolated enum TrackingPattern: String, Codable, Sendable, CaseIterable, Ident
         case .upAndBack: return "0.5, 0.5, 1.5, 1.5 ... each path twice"
         case .twoRowUpBack: return "Spray 2, Skip 2 up then back"
         case .custom: return "Save & reuse your own sequences"
+        case .freeDrive: return "No planned path — detect rows live"
         }
     }
 
@@ -40,10 +46,13 @@ nonisolated enum TrackingPattern: String, Codable, Sendable, CaseIterable, Ident
         case .upAndBack: return "arrow.up.arrow.down"
         case .twoRowUpBack: return "arrow.up.and.down.text.horizontal"
         case .custom: return "slider.horizontal.3"
+        case .freeDrive: return "scribble.variable"
         }
     }
 
     func generateSequence(startRow: Int, totalRows: Int, reversed: Bool = false) -> [Double] {
+        // Free Drive intentionally has no planned sequence.
+        if self == .freeDrive { return [] }
         guard totalRows > 0 else { return [] }
 
         let firstPath = Double(startRow) - 0.5
@@ -91,6 +100,9 @@ nonisolated enum TrackingPattern: String, Codable, Sendable, CaseIterable, Ident
 
         case .custom:
             result = (0..<totalPaths).map { firstPath + Double($0) }
+
+        case .freeDrive:
+            result = []
         }
 
         if reversed {

@@ -119,8 +119,15 @@ struct ActiveTripView: View {
         return nil
     }
 
+    /// True when this trip is using the Free Drive (no planned path) mode.
+    private var isFreeDrive: Bool {
+        (tracking.activeTrip ?? trip).trackingPattern == .freeDrive
+    }
+
     /// The path the operator is meant to be driving (sequence target).
+    /// Always nil in Free Drive mode — there is no planned ordering.
     private var plannedPath: Double? {
+        if isFreeDrive { return nil }
         let live = tracking.activeTrip ?? trip
         if live.rowSequence.indices.contains(live.sequenceIndex) {
             return live.rowSequence[live.sequenceIndex]
@@ -138,8 +145,11 @@ struct ActiveTripView: View {
 
     /// True when the GPS-detected live path differs from the planned path
     /// while the tractor is in corridor — the operator is driving the
-    /// wrong row and labels/warning should reflect the live path.
+    /// wrong row and labels/warning should reflect the live path. Always
+    /// false in Free Drive mode (there is no planned path to be wrong
+    /// against).
     private var isOffPlannedPath: Bool {
+        if isFreeDrive { return false }
         guard let planned = plannedPath, let live = liveDetectedPath else { return false }
         return abs(planned - live) > 0.01
     }
@@ -700,6 +710,10 @@ struct ActiveTripView: View {
         let upper = lower + 1
 
         let warning: String = {
+            if isFreeDrive {
+                if !inCorridor, livePath != nil { return "Detecting row…" }
+                return "—"
+            }
             if !live.rowSequence.isEmpty {
                 let remaining = live.rowSequence.dropFirst(live.sequenceIndex).filter {
                     !live.completedPaths.contains($0)
@@ -727,6 +741,7 @@ struct ActiveTripView: View {
         lines.append("Time: \(isoFormatter.string(from: now))")
         lines.append("Trip ID: \(live.id.uuidString)")
         lines.append("Trip: \(functionLabel)")
+        lines.append("Mode: \(live.trackingPattern.rawValue)\(isFreeDrive ? " (Free Drive / No Planned Path)" : "")")
         lines.append("Paddocks: \(paddockNames.isEmpty ? "—" : paddockNames)")
         lines.append("")
         lines.append("Planned path: \(plannedPath.map { String($0) } ?? "nil")")
@@ -785,6 +800,23 @@ struct ActiveTripView: View {
         lines.append("  last check: \(tracking.diagDuplicateCheckResult ?? "—")")
         lines.append("  radius: \(fmt(tracking.diagDuplicateRadiusMeters, 2, suffix: " m"))")
         lines.append("")
+        if isFreeDrive {
+            lines.append("")
+            lines.append("Free Drive:")
+            lines.append("  active: \(tracking.diagFreeDriveActive)")
+            lines.append("  candidate path: \(tracking.diagFreeDriveCandidatePath.map { String($0) } ?? "nil")")
+            lines.append("  stable detected path: \(tracking.diagFreeDriveStablePath.map { String($0) } ?? "nil")")
+            lines.append("  rolling window samples: \(tracking.diagFreeDriveWindowSamples)")
+            lines.append("  rolling window seconds: \(fmt(tracking.diagFreeDriveWindowSeconds, 1, suffix: " s"))")
+            lines.append("  dwell samples on candidate: \(tracking.diagFreeDriveDwellSamples)")
+            lines.append("  paths completed: \(tracking.diagFreeDriveCompletedCount)")
+            lines.append("  paths skipped: \(live.skippedPaths.count) (skipped not used in Free Drive)")
+            lines.append("  travel direction (locked): \(fmt(movement, 1, suffix: "°"))")
+            lines.append("  row heading: \(fmt(rowDir, 1, suffix: "°"))")
+            lines.append("  sameDirection: \(sameDir)")
+            lines.append("  left row label: \(leftRowLabel)")
+            lines.append("  right row label: \(rightRowLabel)")
+        }
         lines.append("Warning: \(warning)")
         return lines.joined(separator: "\n")
     }
@@ -842,10 +874,24 @@ struct ActiveTripView: View {
 
                 Divider().frame(height: 40)
 
-                statColumn(label: "NEXT PATH",
-                           value: formatPath(nextPath),
-                           tint: .primary,
-                           liveIndicator: false)
+                if isFreeDrive {
+                    VStack(spacing: 4) {
+                        Text("MODE")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                        Text("Free Drive")
+                            .font(.system(.headline, design: .rounded, weight: .bold))
+                            .foregroundStyle(.teal)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    statColumn(label: "NEXT PATH",
+                               value: formatPath(nextPath),
+                               tint: .primary,
+                               liveIndicator: false)
+                }
 
                 Divider().frame(height: 40)
 

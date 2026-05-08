@@ -144,12 +144,15 @@ struct StartTripSheet: View {
                 VStack(spacing: 20) {
                     heroHeader
                     blockSection
-                    if hasAnyRowGeometry {
+                    if hasAnyRowGeometry, trackingPattern != .freeDrive {
                         directionSection
                     }
                     patternSection
                     if trackingPattern == .everySecondRow, hasAnyRowGeometry {
                         midrowSection
+                    }
+                    if trackingPattern == .freeDrive {
+                        freeDriveInfoSection
                     }
                     functionSection
                     operatorSection
@@ -594,6 +597,28 @@ struct StartTripSheet: View {
         }
     }
 
+    // MARK: Free Drive info
+
+    private var freeDriveInfoSection: some View {
+        sectionContainer(title: "Free Drive", icon: "scribble.variable", tint: .teal) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(.teal)
+                    Text("No planned row sequence")
+                        .font(.subheadline.weight(.semibold))
+                }
+                Text("Drive freely — the app detects the row/path you are in from GPS, ticks it off when covered, and keeps recording distance, pins and trip history. No wrong-row warnings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(.rect(cornerRadius: 12))
+        }
+    }
+
     // MARK: Pattern
 
     private var patternSection: some View {
@@ -802,7 +827,7 @@ struct StartTripSheet: View {
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
-            if hasAnyRowGeometry {
+            if hasAnyRowGeometry, trackingPattern != .freeDrive {
                 let sequence = generatedSequence()
                 if let first = sequence.first {
                     trip.rowSequence = sequence
@@ -810,6 +835,11 @@ struct StartTripSheet: View {
                     trip.currentRowNumber = first
                     trip.nextRowNumber = sequence.dropFirst().first ?? first
                 }
+            } else if trackingPattern == .freeDrive {
+                // Free Drive: explicitly clear any planned sequence so
+                // active-trip UI hides planned-only chrome.
+                trip.rowSequence = []
+                trip.sequenceIndex = 0
             }
             store.updateTrip(trip)
         }
