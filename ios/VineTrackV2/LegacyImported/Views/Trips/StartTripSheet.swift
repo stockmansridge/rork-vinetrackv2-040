@@ -1024,18 +1024,13 @@ struct StartTripSheet: View {
             paddockName = primary?.name ?? ""
         }
 
+        // `tripTitle` is reserved for optional user-entered extra details.
+        // It must remain nil when the operator hasn't typed anything — display
+        // code resolves the friendly label from `tripFunction` (built-in or
+        // `custom:<slug>`) instead. Never default the title to the function
+        // name/label/code.
         let trimmedTitle = customTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        // For custom functions, default the trip title to the custom label
-        // when the user didn't override it, so historical reports / list rows
-        // display the custom name without an extra lookup.
-        let resolvedTitle: String?
-        if !trimmedTitle.isEmpty {
-            resolvedTitle = trimmedTitle
-        } else if let custom = selectedCustomFunction {
-            resolvedTitle = custom.label
-        } else {
-            resolvedTitle = nil
-        }
+        let resolvedTitle: String? = trimmedTitle.isEmpty ? nil : trimmedTitle
 
         tracking.startTrip(
             type: .maintenance,

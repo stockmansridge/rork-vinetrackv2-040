@@ -102,15 +102,24 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
     var manualCorrectionEvents: [String]
 
     /// Convenience: returns a short label suitable for the active trip header.
-    /// Prefers an explicit title, then the picked function, then "Trip".
+    /// Prefers an explicit user-entered title, then the friendly label for the
+    /// selected `tripFunction` (built-in or `custom:<slug>`), then "Trip".
     var displayFunctionLabel: String {
         if let title = tripTitle, !title.trimmingCharacters(in: .whitespaces).isEmpty {
             return title
         }
-        if let raw = tripFunction, let function = TripFunction(rawValue: raw) {
-            return function.displayName
+        if let raw = tripFunction, !raw.isEmpty {
+            if let function = TripFunction(rawValue: raw) {
+                return function.displayName
+            }
+            if raw.hasPrefix("custom:") {
+                let slug = String(raw.dropFirst("custom:".count))
+                if !slug.isEmpty {
+                    return slug.replacingOccurrences(of: "-", with: " ").capitalized
+                }
+            }
         }
-        return ""
+        return "Trip"
     }
 
     var activeDuration: TimeInterval {

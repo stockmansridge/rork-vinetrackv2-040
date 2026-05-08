@@ -395,6 +395,9 @@ struct TripHistoryRow: View {
             return title
         }
         if let function = resolvedFunction { return function.displayName }
+        if let custom = customFunctionLabel, !custom.isEmpty {
+            return custom
+        }
         if let name = sprayReferenceName, !name.isEmpty {
             return name
         }
