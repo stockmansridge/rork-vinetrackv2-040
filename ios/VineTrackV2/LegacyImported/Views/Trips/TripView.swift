@@ -20,6 +20,8 @@ struct TripView: View {
     @State private var tripSortOption: TripSortOption = .date
     @State private var tripTypeFilter: TripTypeFilter = .all
     @State private var tripFunctionFilter: TripFunction? = nil
+    @State private var tripMonthFilter: Int? = nil // 1...12, nil = all
+    @State private var tripYearFilter: Int? = nil  // nil = all
     @State private var tripSearchText: String = ""
     @State private var tripToDelete: Trip?
     @State private var showDeleteConfirmation: Bool = false
@@ -56,6 +58,26 @@ struct TripView: View {
                                 ForEach(TripFunction.allCases) { function in
                                     Label(function.displayName, systemImage: function.icon)
                                         .tag(TripFunction?.some(function))
+                                }
+                            }
+                            Picker("Month", selection: $tripMonthFilter) {
+                                Label("All months", systemImage: "calendar").tag(Int?.none)
+                                ForEach(1...12, id: \.self) { m in
+                                    Text(monthName(m)).tag(Int?.some(m))
+                                }
+                            }
+                            Picker("Year", selection: $tripYearFilter) {
+                                Label("All years", systemImage: "calendar.badge.clock").tag(Int?.none)
+                                ForEach(availableYears, id: \.self) { y in
+                                    Text(String(y)).tag(Int?.some(y))
+                                }
+                            }
+                            if hasActiveFilters {
+                                Divider()
+                                Button(role: .destructive) {
+                                    clearFilters()
+                                } label: {
+                                    Label("Clear filters", systemImage: "xmark.circle")
                                 }
                             }
                         } label: {
@@ -160,6 +182,16 @@ struct TripView: View {
             trips = trips.filter { $0.tripFunction == function.rawValue }
         }
 
+        if tripMonthFilter != nil || tripYearFilter != nil {
+            let cal = Calendar.current
+            trips = trips.filter { trip in
+                let comps = cal.dateComponents([.month, .year], from: trip.startTime)
+                if let m = tripMonthFilter, comps.month != m { return false }
+                if let y = tripYearFilter, comps.year != y { return false }
+                return true
+            }
+        }
+
         if !tripSearchText.isEmpty {
             trips = trips.filter { trip in
                 let combined = "\(tripDisplayName(trip)) \(trip.paddockName) \(trip.personName)"
@@ -225,6 +257,30 @@ struct TripView: View {
             .contentMargins(.horizontal, 16)
             .padding(.vertical, 8)
 
+            if tripFunctionFilter != nil || tripMonthFilter != nil || tripYearFilter != nil {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if let function = tripFunctionFilter {
+                            activeChip(text: function.displayName, systemImage: function.icon) {
+                                tripFunctionFilter = nil
+                            }
+                        }
+                        if let m = tripMonthFilter {
+                            activeChip(text: monthName(m), systemImage: "calendar") {
+                                tripMonthFilter = nil
+                            }
+                        }
+                        if let y = tripYearFilter {
+                            activeChip(text: String(y), systemImage: "calendar.badge.clock") {
+                                tripYearFilter = nil
+                            }
+                        }
+                    }
+                }
+                .contentMargins(.horizontal, 16)
+                .padding(.bottom, 8)
+            }
+
             List {
                 Section {
                     ForEach(filteredAndSortedTrips) { trip in
@@ -259,12 +315,55 @@ struct TripView: View {
         .searchable(text: $tripSearchText, prompt: "Search trips")
     }
 
+    private var availableYears: [Int] {
+        let cal = Calendar.current
+        let years = Set(pastTrips.map { cal.component(.year, from: $0.startTime) })
+        return years.sorted(by: >)
+    }
+
+    private var hasActiveFilters: Bool {
+        tripTypeFilter != .all || tripFunctionFilter != nil || tripMonthFilter != nil || tripYearFilter != nil
+    }
+
+    private func clearFilters() {
+        tripTypeFilter = .all
+        tripFunctionFilter = nil
+        tripMonthFilter = nil
+        tripYearFilter = nil
+    }
+
+    private func monthName(_ month: Int) -> String {
+        let df = DateFormatter()
+        return df.monthSymbols[month - 1]
+    }
+
     private func tripSortIconName(for option: TripSortOption) -> String {
         switch option {
         case .date: return "calendar"
         case .name: return "textformat"
         case .duration: return "clock"
         }
+    }
+
+    private func activeChip(text: String, systemImage: String, onRemove: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { onRemove() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.caption2)
+                Text(text)
+                    .font(.caption.weight(.medium))
+                Image(systemName: "xmark")
+                    .font(.caption2.weight(.bold))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.accentColor.opacity(0.15))
+            .foregroundStyle(Color.accentColor)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
