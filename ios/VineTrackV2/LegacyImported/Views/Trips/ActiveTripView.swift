@@ -23,6 +23,8 @@ struct ActiveTripView: View {
     @State private var showPinOverlay: Bool = false
     @State private var showManualCorrection: Bool = false
     @State private var showEndConfirmation: Bool = false
+    @State private var showEndReview: Bool = false
+    @State private var showAddBlocks: Bool = false
     @State private var showSummary: Bool = false
     @State private var showRepairs: Bool = false
     @State private var showGrowth: Bool = false
@@ -354,6 +356,10 @@ struct ActiveTripView: View {
                 if shouldShowWrongPathBanner {
                     wrongPathBanner
                 }
+
+                if tracking.autoRealignSuggestedPath != nil {
+                    autoRealignBanner
+                }
             }
 
             if store.settings.rowTrackingEnabled {
@@ -464,6 +470,16 @@ struct ActiveTripView: View {
         }
         .sheet(isPresented: $showSummary) {
             TripSummarySheet(trip: trip)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showEndReview) {
+            EndTripReviewSheet(trip: tracking.activeTrip ?? trip)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showAddBlocks) {
+            AddBlocksToTripSheet()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -834,6 +850,11 @@ struct ActiveTripView: View {
         if let reason = tracking.diagWrongRowSuppressedReason {
             lines.append("  suppression reason: \(reason)")
         }
+        if let suggested = tracking.autoRealignSuggestedPath {
+            lines.append("  auto-realign suggested: \(suggested)")
+        } else {
+            lines.append("  auto-realign suggested: none")
+        }
         lines.append("")
         lines.append("GPS service:")
         lines.append("  desiredAccuracy: best (high-accuracy active=\(locationService.isHighAccuracyEnabled))")
@@ -1160,6 +1181,66 @@ struct ActiveTripView: View {
         .sensoryFeedback(.warning, trigger: shouldShowWrongPathBanner)
     }
 
+    /// Auto-realign suggestion. Shown when the tracker is confidently
+    /// locked onto a row that differs from the planned target. Two
+    /// actions: “Realign” snaps the planned sequence to the locked
+    /// row; “Ignore” suppresses the prompt for that path.
+    private var autoRealignBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Realign trip?")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(.white)
+                if let p = tracking.autoRealignSuggestedPath {
+                    Text("Looks like you're on path \(formatPath(p)).")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+            }
+            Spacer(minLength: 8)
+            Button {
+                tracking.acceptAutoRealign()
+            } label: {
+                Text("Realign")
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white, in: Capsule())
+                    .foregroundStyle(.blue)
+            }
+            .buttonStyle(.plain)
+            Button {
+                tracking.dismissAutoRealign()
+            } label: {
+                Text("Ignore")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.15), in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            LinearGradient(
+                colors: [Color.blue, Color.blue.opacity(0.85)],
+                startPoint: .top, endPoint: .bottom
+            ),
+            in: RoundedRectangle(cornerRadius: 14)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .frame(maxWidth: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.top, 56)
+        .padding(.horizontal, 12)
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
     private var rowIndicatorOverlay: some View {
         HStack {
             rowChip(arrow: "arrow.left", label: leftRowLabel)
@@ -1452,6 +1533,18 @@ struct ActiveTripView: View {
                     Text("Trip Paused")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.orange)
+                    Spacer(minLength: 8)
+                    Button {
+                        showAddBlocks = true
+                    } label: {
+                        Label("Add block", systemImage: "plus.square")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .clipShape(Capsule())
                 }
                 .frame(maxWidth: .infinity)
             } else {
@@ -1483,7 +1576,11 @@ struct ActiveTripView: View {
             .sensoryFeedback(.impact, trigger: trip.isPaused)
 
             Button {
-                showEndConfirmation = true
+                if (tracking.activeTrip ?? trip).rowSequence.isEmpty {
+                    showEndConfirmation = true
+                } else {
+                    showEndReview = true
+                }
             } label: {
                 Image(systemName: "stop.fill")
                     .font(.headline)
@@ -1510,23 +1607,14 @@ struct ActiveTripView: View {
 
     private func advanceRow(by delta: Int) {
         guard !trip.rowSequence.isEmpty else { return }
-        let newIndex = trip.sequenceIndex + delta
-        guard newIndex >= 0 && newIndex < trip.rowSequence.count else { return }
-        var updated = trip
-        let oldPath = updated.currentRowNumber
-        if delta > 0,
-           !updated.completedPaths.contains(oldPath),
-           !updated.skippedPaths.contains(oldPath) {
-            updated.completedPaths.append(oldPath)
+        if delta > 0 {
+            // Mark the current planned path as completed and advance to the
+            // next pending one. Records a manual_next_path correction event
+            // so the saved trip reflects the override.
+            tracking.advanceToNextPlannedPath()
+        } else if delta < 0 {
+            tracking.goBackOnePlannedPath()
         }
-        updated.sequenceIndex = newIndex
-        updated.currentRowNumber = updated.rowSequence[newIndex]
-        if newIndex + 1 < updated.rowSequence.count {
-            updated.nextRowNumber = updated.rowSequence[newIndex + 1]
-        } else {
-            updated.nextRowNumber = updated.currentRowNumber
-        }
-        store.updateTrip(updated)
     }
 
     private func startTicker() {

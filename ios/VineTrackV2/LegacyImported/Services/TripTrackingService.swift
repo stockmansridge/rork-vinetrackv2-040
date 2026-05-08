@@ -75,6 +75,14 @@ final class TripTrackingService {
     /// Recent manual-correction events recorded during this trip.
     var diagManualCorrectionEvents: [String] = []
 
+    /// Path the tracker thinks the tractor is locked onto but which differs
+    /// from the planned sequence target. Surfaced to the UI so it can prompt
+    /// the operator to realign. Cleared on accept/dismiss/match.
+    var autoRealignSuggestedPath: Double?
+    /// Last path the operator dismissed for realignment — we won't re-prompt
+    /// for the same path until the lock changes.
+    private var lastDismissedRealignPath: Double?
+
     /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
     /// and otherwise from the recent point window. Use this instead of
     /// `locationService.location?.speed` to avoid the half-speed dropout that
@@ -283,6 +291,8 @@ final class TripTrackingService {
         diagPlannedCompletionPercent = 0
         diagWrongRowSuppressedReason = nil
         diagManualCorrectionEvents.removeAll()
+        autoRealignSuggestedPath = nil
+        lastDismissedRealignPath = nil
         diagFreeDriveActive = false
         diagFreeDriveCandidatePath = nil
         diagFreeDriveStablePath = nil
@@ -1184,6 +1194,7 @@ final class TripTrackingService {
             diagLockDwellSeconds = 0
             diagLockConfidence = 0
         }
+        recomputeAutoRealignSuggestion()
     }
 
     // MARK: - Manual correction
@@ -1277,6 +1288,130 @@ final class TripTrackingService {
         if diagManualCorrectionEvents.count > 30 {
             diagManualCorrectionEvents.removeFirst(diagManualCorrectionEvents.count - 30)
         }
+    }
+
+    /// Public hook so views (end-of-trip review, Next/Back, paddock add) can
+    /// log manual correction events into the trip diagnostics audit trail.
+    func recordManualCorrection(_ note: String) {
+        recordCorrection(note)
+    }
+
+    // MARK: - Next/Back planned path (with audit)
+
+    /// Manually advance to the next planned path, marking the current as
+    /// completed. Mirrors the live auto-advance logic so the saved trip
+    /// record stays consistent.
+    func advanceToNextPlannedPath() {
+        markCurrentPlannedPathComplete()
+        recordCorrection("manual_next_path")
+    }
+
+    /// Manually step back one planned path. Removes the most recent
+    /// completed/skipped entry on the new index so the operator can recover
+    /// from a premature advance.
+    func goBackOnePlannedPath() {
+        guard var trip = activeTrip, !trip.rowSequence.isEmpty else { return }
+        let newIndex = trip.sequenceIndex - 1
+        guard newIndex >= 0 else { return }
+        trip.sequenceIndex = newIndex
+        trip.currentRowNumber = trip.rowSequence[newIndex]
+        if newIndex + 1 < trip.rowSequence.count {
+            trip.nextRowNumber = trip.rowSequence[newIndex + 1]
+        }
+        let restored = trip.rowSequence[newIndex]
+        trip.completedPaths.removeAll { abs($0 - restored) < 0.01 }
+        trip.skippedPaths.removeAll { abs($0 - restored) < 0.01 }
+        store?.updateTrip(trip)
+        recordCorrection("manual_back_path: \(restored)")
+    }
+
+    // MARK: - Auto-realign
+
+    /// Accept the suggested realignment: snap the planned sequence index to
+    /// the locked live path. Records the override in diagnostics.
+    func acceptAutoRealign() {
+        guard let path = autoRealignSuggestedPath else { return }
+        if var trip = activeTrip,
+           let idx = trip.rowSequence.firstIndex(where: { abs($0 - path) < 0.01 }) {
+            trip.sequenceIndex = idx
+            trip.currentRowNumber = trip.rowSequence[idx]
+            if idx + 1 < trip.rowSequence.count {
+                trip.nextRowNumber = trip.rowSequence[idx + 1]
+            }
+            store?.updateTrip(trip)
+            recordCorrection("auto_realign_accepted: \(path)")
+        }
+        autoRealignSuggestedPath = nil
+    }
+
+    /// Operator dismissed the realignment prompt. Suppress for this same
+    /// path until the lock changes.
+    func dismissAutoRealign() {
+        if let p = autoRealignSuggestedPath {
+            recordCorrection("auto_realign_ignored: \(p)")
+            lastDismissedRealignPath = p
+        }
+        autoRealignSuggestedPath = nil
+    }
+
+    /// Re-evaluate whether to suggest a realignment. Called from the row-lock
+    /// updater whenever the locked path or trip state changes.
+    private func recomputeAutoRealignSuggestion() {
+        guard let trip = activeTrip,
+              !trip.rowSequence.isEmpty,
+              trip.rowSequence.indices.contains(trip.sequenceIndex),
+              let locked = lockedPath,
+              diagLockConfidence >= 0.4 else {
+            autoRealignSuggestedPath = nil
+            return
+        }
+        let planned = trip.rowSequence[trip.sequenceIndex]
+        if abs(planned - locked) < 0.01 {
+            autoRealignSuggestedPath = nil
+            return
+        }
+        // Only suggest if the locked path actually exists somewhere in the
+        // planned sequence (there is something to realign to).
+        guard trip.rowSequence.contains(where: { abs($0 - locked) < 0.01 }) else {
+            autoRealignSuggestedPath = nil
+            return
+        }
+        if let dismissed = lastDismissedRealignPath, abs(dismissed - locked) < 0.01 {
+            return
+        }
+        autoRealignSuggestedPath = locked
+    }
+
+    // MARK: - Paused trip: add paddocks
+
+    /// Add additional paddocks to the active trip without resetting existing
+    /// coverage. New paddocks' rows are appended to the planned sequence so
+    /// the operator can continue into them after resuming. Records an audit
+    /// event in diagnostics.
+    func addPaddocksToActiveTrip(_ ids: [UUID]) {
+        guard let store, var trip = activeTrip else { return }
+        let existing = Set(trip.paddockIds)
+        let newIds = ids.filter { !existing.contains($0) }
+        guard !newIds.isEmpty else { return }
+        trip.paddockIds.append(contentsOf: newIds)
+
+        if !trip.rowSequence.isEmpty {
+            for id in newIds {
+                guard let paddock = store.paddocks.first(where: { $0.id == id }) else { continue }
+                let nums = paddock.rows.map(\.number).sorted()
+                for n in nums {
+                    let path = Double(n) + 0.5
+                    if !trip.rowSequence.contains(where: { abs($0 - path) < 0.01 }) {
+                        trip.rowSequence.append(path)
+                    }
+                }
+            }
+        }
+        store.updateTrip(trip)
+        cachedRowIndex = nil
+        cachedRowIndexKey = []
+        let names = newIds.compactMap { id in store.paddocks.first(where: { $0.id == id })?.name }
+        recordCorrection("paddocks_added: \(names.joined(separator: ", "))")
     }
 
     private func rowLength(forPath path: Double, paddock: Paddock) -> Double? {

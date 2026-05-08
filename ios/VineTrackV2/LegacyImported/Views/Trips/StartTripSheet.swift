@@ -32,6 +32,11 @@ struct StartTripSheet: View {
 
     // Seeding Details (only used when selectedFunction == .seeding).
     @State private var seedingExpanded: Bool = false
+    /// Independent enable/disable toggles for each seed box. A box's settings
+    /// are only saved when its toggle is on. At least one box must be enabled
+    /// to start a Seeding trip.
+    @State private var useFrontBox: Bool = true
+    @State private var useBackBox: Bool = true
     @State private var seedFrontMix: String = ""
     @State private var seedBackMix: String = ""
     @State private var seedFrontRate: String = ""
@@ -977,6 +982,10 @@ struct StartTripSheet: View {
     }
 
     private func handleStart() {
+        if isSeedingSelected, !useFrontBox, !useBackBox {
+            tracking.errorMessage = "Enable at least one seed box for a Seeding trip."
+            return
+        }
         // Primary paddock = the only selected, or the first sorted when multiple.
         let primary: Paddock? = singleSelectedPaddock ?? selectedPaddocks.first
         let paddockName: String
@@ -1050,23 +1059,35 @@ struct StartTripSheet: View {
             VStack(spacing: 0) {
                 DisclosureGroup(isExpanded: $seedingExpanded) {
                     VStack(spacing: 14) {
+                        boxToggleRow(title: "Use Front Box", isOn: $useFrontBox)
+                        boxToggleRow(title: "Use Rear Box", isOn: $useBackBox)
+                        if !useFrontBox && !useBackBox {
+                            Label("Enable at least one seed box for a Seeding trip.", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         seedingMainFields
-                        seedingBoxCard(
-                            title: "Front Box",
-                            shutter: $seedFrontShutter,
-                            flap: $seedFrontFlap,
-                            wheel: $seedFrontWheel,
-                            volume: $seedFrontVolume,
-                            gearbox: $seedFrontGearbox
-                        )
-                        seedingBoxCard(
-                            title: "Back Box",
-                            shutter: $seedBackShutter,
-                            flap: $seedBackFlap,
-                            wheel: $seedBackWheel,
-                            volume: $seedBackVolume,
-                            gearbox: $seedBackGearbox
-                        )
+                        if useFrontBox {
+                            seedingBoxCard(
+                                title: "Front Box",
+                                shutter: $seedFrontShutter,
+                                flap: $seedFrontFlap,
+                                wheel: $seedFrontWheel,
+                                volume: $seedFrontVolume,
+                                gearbox: $seedFrontGearbox
+                            )
+                        }
+                        if useBackBox {
+                            seedingBoxCard(
+                                title: "Rear Box",
+                                shutter: $seedBackShutter,
+                                flap: $seedBackFlap,
+                                wheel: $seedBackWheel,
+                                volume: $seedBackVolume,
+                                gearbox: $seedBackGearbox
+                            )
+                        }
                         seedingMixLinesCard
                     }
                     .padding(.top, 12)
@@ -1091,12 +1112,30 @@ struct StartTripSheet: View {
 
     private var seedingMainFields: some View {
         VStack(spacing: 10) {
-            seedingTextField(label: "Seed/Fert mix — Front Box", text: $seedFrontMix, placeholder: "e.g. Ryecorn + Vetch")
-            seedingTextField(label: "Seed/Fert mix — Back Box", text: $seedBackMix, placeholder: "e.g. Tic Beans")
-            seedingNumericField(label: "Rate/ha — Front Box", text: $seedFrontRate, suffix: "kg/ha")
-            seedingNumericField(label: "Rate/ha — Back Box", text: $seedBackRate, suffix: "kg/ha")
+            if useFrontBox {
+                seedingTextField(label: "Seed/Fert mix — Front Box", text: $seedFrontMix, placeholder: "e.g. Ryecorn + Vetch")
+                seedingNumericField(label: "Rate/ha — Front Box", text: $seedFrontRate, suffix: "kg/ha")
+            }
+            if useBackBox {
+                seedingTextField(label: "Seed/Fert mix — Rear Box", text: $seedBackMix, placeholder: "e.g. Tic Beans")
+                seedingNumericField(label: "Rate/ha — Rear Box", text: $seedBackRate, suffix: "kg/ha")
+            }
             seedingNumericField(label: "Sowing depth", text: $sowingDepth, suffix: "cm")
         }
+    }
+
+    @ViewBuilder
+    private func boxToggleRow(title: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "shippingbox")
+                .foregroundStyle(VineyardTheme.leafGreen)
+            Toggle(title, isOn: isOn)
+                .tint(VineyardTheme.leafGreen)
+                .font(.subheadline.weight(.semibold))
+        }
+        .padding(12)
+        .background(Color(.tertiarySystemGroupedBackground))
+        .clipShape(.rect(cornerRadius: 10))
     }
 
     @ViewBuilder
@@ -1265,7 +1304,10 @@ struct StartTripSheet: View {
             let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
             return t.isEmpty ? nil : t
         }
-        let front = SeedingBox(
+        // Only persist box settings for boxes the operator actually used.
+        // Disabled boxes are saved as nil so unused defaults don't pollute
+        // the trip record.
+        let front: SeedingBox? = useFrontBox ? SeedingBox(
             mixName: trimmed(seedFrontMix),
             ratePerHa: Double(seedFrontRate),
             shutterSlide: trimmed(seedFrontShutter),
@@ -1273,8 +1315,8 @@ struct StartTripSheet: View {
             meteringWheel: trimmed(seedFrontWheel),
             seedVolumeKg: Double(seedFrontVolume),
             gearboxSetting: Double(seedFrontGearbox)
-        )
-        let back = SeedingBox(
+        ) : nil
+        let back: SeedingBox? = useBackBox ? SeedingBox(
             mixName: trimmed(seedBackMix),
             ratePerHa: Double(seedBackRate),
             shutterSlide: trimmed(seedBackShutter),
@@ -1282,11 +1324,11 @@ struct StartTripSheet: View {
             meteringWheel: trimmed(seedBackWheel),
             seedVolumeKg: Double(seedBackVolume),
             gearboxSetting: Double(seedBackGearbox)
-        )
+        ) : nil
         let lines = mixLines.filter { $0.hasAnyValue }
         return SeedingDetails(
-            frontBox: front.hasAnyValue ? front : nil,
-            backBox: back.hasAnyValue ? back : nil,
+            frontBox: (front?.hasAnyValue == true) ? front : nil,
+            backBox: (back?.hasAnyValue == true) ? back : nil,
             sowingDepthCm: Double(sowingDepth),
             mixLines: lines.isEmpty ? nil : lines
         )
