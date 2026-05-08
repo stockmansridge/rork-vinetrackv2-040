@@ -324,6 +324,71 @@ struct ActiveTripView: View {
         return String(format: "%.1f km/h", min(v, 99.9))
     }
 
+    // MARK: - GPS quality
+
+    /// Operator-friendly GPS quality verdict based on horizontal accuracy,
+    /// staleness of the last fix, and the rolling update interval. Kept
+    /// deliberately simple — the operator only needs to know whether row
+    /// accuracy is currently trustworthy.
+    private enum GpsQuality {
+        case good, fair, poor, unavailable
+
+        var label: String {
+            switch self {
+            case .good: return "GPS Good"
+            case .fair: return "GPS Fair"
+            case .poor: return "GPS Poor"
+            case .unavailable: return "GPS —"
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .good: return .green
+            case .fair: return .orange
+            case .poor: return .red
+            case .unavailable: return .secondary
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .good: return "dot.radiowaves.up.forward"
+            case .fair: return "dot.radiowaves.up.forward"
+            case .poor: return "exclamationmark.triangle.fill"
+            case .unavailable: return "questionmark.circle"
+            }
+        }
+    }
+
+    /// Most recent GPS update age in seconds (positive). nil if no fix.
+    private var gpsLastUpdateAge: TimeInterval? {
+        guard let ts = locationService.lastUpdateTimestamp else { return nil }
+        return max(0, -ts.timeIntervalSinceNow)
+    }
+
+    private var gpsQuality: GpsQuality {
+        guard let loc = locationService.location else { return .unavailable }
+        let acc = loc.horizontalAccuracy
+        // Negative accuracy from CoreLocation means invalid fix.
+        if acc < 0 { return .poor }
+        let age = gpsLastUpdateAge ?? .infinity
+        let interval = locationService.averageUpdateInterval
+
+        // Poor: very inaccurate, very stale, or updates have stalled.
+        if acc > 12 { return .poor }
+        if age > 5 { return .poor }
+        if interval > 0 && interval > 4 { return .poor }
+
+        // Good: tight accuracy, fresh fix, healthy ~1Hz updates.
+        if acc <= 5, age <= 2.5, (interval == 0 || interval <= 2) {
+            return .good
+        }
+
+        // Anything in between is Fair.
+        return .fair
+    }
+
     /// Capture a fresh speed reading from the live tracking service into the
     /// ETA window, filtering out impossible spikes. Called from the 1Hz ticker
     /// rather than every GPS update so the pill and ETA settle smoothly.
@@ -436,6 +501,7 @@ struct ActiveTripView: View {
                             .animation(.snappy, value: displayedSpeedKmh)
                             .monospacedDigit()
                     }
+                    gpsQualityPill
                     HStack(spacing: 4) {
                         Image(systemName: "clock.fill")
                             .font(.caption2)
@@ -564,6 +630,22 @@ struct ActiveTripView: View {
                 withAnimation(.snappy) { showPinOverlay.toggle() }
             }
         }
+    }
+
+    /// Compact GPS quality pill shown next to the speed/ETA chips. Operator
+    /// only sees a label + colour; raw accuracy/age stays in diagnostics.
+    private var gpsQualityPill: some View {
+        let q = gpsQuality
+        return HStack(spacing: 4) {
+            Image(systemName: q.symbol)
+                .font(.caption2)
+                .foregroundStyle(q.tint)
+            Text(q.label)
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(q.tint)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(q.label)
     }
 
     private func mapControlButton(systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -860,6 +942,13 @@ struct ActiveTripView: View {
             lines.append("  last update: \(isoFormatter.string(from: last))")
         }
         lines.append("  raw CLLocation.speed: \(fmt(loc?.speed, 2, suffix: " m/s"))")
+        lines.append("")
+        lines.append("GPS quality:")
+        lines.append("  label: \(gpsQuality.label)")
+        lines.append("  horizontal accuracy: \(fmt(acc2D, 2, suffix: " m"))")
+        lines.append("  last update age: \(fmt(gpsLastUpdateAge, 2, suffix: " s"))")
+        lines.append("  average update interval: \(fmt(locationService.averageUpdateInterval, 2, suffix: " s"))")
+        lines.append("  rolling speed sample count: \(tracking.speedWindowSampleCount)")
         lines.append("")
         lines.append("Map:")
         lines.append("  camera mode: \(mapMode == .free ? "free" : (mapMode == .zoomed ? "zoomed" : "navigation"))")
