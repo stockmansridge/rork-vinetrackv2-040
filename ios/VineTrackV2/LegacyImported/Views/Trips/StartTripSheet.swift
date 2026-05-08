@@ -60,6 +60,12 @@ struct StartTripSheet: View {
     /// Set to true when the operator taps Copy and no previous seeding job
     /// with details was found, so we can show a friendly inline message.
     @State private var copyMissing: Bool = false
+    /// Multi-line, human-readable diagnostic explaining the last copy attempt.
+    /// Populated every time the operator taps "Copy from previous seeding
+    /// job" so we can debug lookup failures in the field.
+    @State private var copyDiagnostics: String?
+    /// Toggle to expose the raw diagnostic block below the copy button.
+    @State private var showCopyDiagnostics: Bool = false
 
     private var selectedPaddocks: [Paddock] {
         store.paddocks
@@ -1162,6 +1168,25 @@ struct StartTripSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if let diag = copyDiagnostics {
+                DisclosureGroup(isExpanded: $showCopyDiagnostics) {
+                    Text(diag)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(Color(.tertiarySystemGroupedBackground))
+                        .clipShape(.rect(cornerRadius: 8))
+                        .textSelection(.enabled)
+                        .padding(.top, 4)
+                } label: {
+                    Label("Copy diagnostics", systemImage: "ladybug")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
+            }
         }
     }
 
@@ -1171,11 +1196,14 @@ struct StartTripSheet: View {
     /// (paddock, operator, start time, tracking pattern, coverage) are NOT
     /// copied. Works fully offline against locally persisted trips.
     private func applyPreviousSeedingSetup() {
-        guard let trip = mostRecentSeedingTripWithDetails() else {
+        let lookup = findPreviousSeedingTrip()
+        copyDiagnostics = lookup.diagnostics
+        guard let trip = lookup.trip else {
             copyMissing = true
             copiedFromNote = nil
+            showCopyDiagnostics = true
             #if DEBUG
-            print("[StartTrip] copy-from-previous: no previous seeding trip found in store.trips (count=\(store.trips.count), vineyard=\(String(describing: store.selectedVineyardId)))")
+            print("[StartTrip] copy-from-previous: no previous seeding trip found.\n\(lookup.diagnostics)")
             #endif
             return
         }
@@ -1243,29 +1271,95 @@ struct StartTripSheet: View {
     ///    failure in the field).
     /// We also exclude any active/paused trip and the current draft trip so
     /// the operator can't "copy from themselves".
-    private func mostRecentSeedingTripWithDetails() -> Trip? {
+    /// Diagnostic-bearing lookup. Returns the trip we'd copy from (if any)
+    /// plus a human-readable trace explaining the filter pipeline.
+    private func findPreviousSeedingTrip() -> (trip: Trip?, diagnostics: String) {
         let vineyardId = store.selectedVineyardId
-        let candidates = store.trips.filter { trip in
-            guard let raw = trip.tripFunction else { return false }
-            // Accept built-in seeding plus any custom trip function whose slug
-            // mentions "seed" (e.g. custom:cover-seeding) so vineyards using
-            // custom seeding functions still get useful copy behaviour.
-            let isSeeding = (raw == TripFunction.seeding.rawValue) || raw.lowercased().contains("seed")
-            guard isSeeding else { return false }
-            // store.trips is already scoped to selectedVineyardId, but keep
-            // this guard for safety in case of repair/migration races.
-            if let vid = vineyardId, trip.vineyardId != vid { return false }
-            // Skip the current/active/paused trip itself.
-            if trip.isActive || trip.isPaused { return false }
-            return true
+        let allTrips = store.trips
+        var lines: [String] = []
+        lines.append("vineyard = \(vineyardId?.uuidString ?? "nil")")
+        lines.append("store.trips.count = \(allTrips.count)")
+
+        let sameVineyard: [Trip]
+        if let vid = vineyardId {
+            sameVineyard = allTrips.filter { $0.vineyardId == vid }
+        } else {
+            sameVineyard = allTrips
         }
-        let sorted = candidates.sorted {
+        lines.append("same-vineyard = \(sameVineyard.count)")
+
+        // Surface the raw tripFunction distribution so we can confirm the
+        // saved value matches what the filter expects.
+        var fnCounts: [String: Int] = [:]
+        for t in sameVineyard {
+            let key = t.tripFunction ?? "<nil>"
+            fnCounts[key, default: 0] += 1
+        }
+        if fnCounts.isEmpty {
+            lines.append("trip-function distribution = (none)")
+        } else {
+            let pairs = fnCounts
+                .sorted { $0.value > $1.value }
+                .map { "\"\($0.key)\": \($0.value)" }
+                .joined(separator: ", ")
+            lines.append("trip-function distribution = { \(pairs) }")
+        }
+
+        let seedingTrips = sameVineyard.filter { trip in
+            guard let raw = trip.tripFunction else { return false }
+            return (raw == TripFunction.seeding.rawValue) || raw.lowercased().contains("seed")
+        }
+        lines.append("trip-function == seeding = \(seedingTrips.count)")
+
+        let inactive = seedingTrips.filter { !$0.isActive && !$0.isPaused }
+        lines.append("non-active seeding = \(inactive.count)")
+
+        let withDetails = inactive.filter { $0.seedingDetails != nil }
+        lines.append("with seedingDetails != nil = \(withDetails.count)")
+
+        let withMeaningful = withDetails.filter { $0.seedingDetails?.hasAnyValue == true }
+        lines.append("with seedingDetails.hasAnyValue = \(withMeaningful.count)")
+
+        let sorted = inactive.sorted {
             ($0.endTime ?? $0.startTime) > ($1.endTime ?? $1.startTime)
         }
-        if let withDetails = sorted.first(where: { $0.seedingDetails?.hasAnyValue == true }) {
-            return withDetails
+
+        let chosen: Trip?
+        if let first = sorted.first(where: { $0.seedingDetails?.hasAnyValue == true }) {
+            chosen = first
+            lines.append("selected = \(first.id.uuidString) (with details)")
+        } else if let first = sorted.first {
+            chosen = first
+            lines.append("selected = \(first.id.uuidString) (fallback, no/empty details)")
+        } else {
+            chosen = nil
+            if seedingTrips.isEmpty {
+                lines.append("reason = no seeding trips found for this vineyard")
+            } else if inactive.isEmpty {
+                lines.append("reason = all seeding trips are still active/paused")
+            } else {
+                lines.append("reason = no eligible candidates after filters")
+            }
         }
-        return sorted.first
+
+        if let chosen {
+            let f = DateFormatter()
+            f.dateStyle = .medium
+            f.timeStyle = .short
+            let date = f.string(from: chosen.endTime ?? chosen.startTime)
+            lines.append("selected.date = \(date)")
+            lines.append("selected.paddock = \(chosen.paddockName.isEmpty ? "<none>" : chosen.paddockName)")
+            lines.append("selected.tripFunction = \(chosen.tripFunction ?? "<nil>")")
+            if let d = chosen.seedingDetails {
+                lines.append("selected.front = \(d.frontBox == nil ? "nil" : "present")")
+                lines.append("selected.back = \(d.backBox == nil ? "nil" : "present")")
+                lines.append("selected.mixLines = \(d.mixLines?.count ?? 0)")
+            } else {
+                lines.append("selected.seedingDetails = nil")
+            }
+        }
+
+        return (chosen, lines.joined(separator: "\n"))
     }
 
     private func describeCopiedTrip(_ trip: Trip) -> String {
