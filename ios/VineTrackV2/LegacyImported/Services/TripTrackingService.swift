@@ -83,12 +83,46 @@ final class TripTrackingService {
     /// for the same path until the lock changes.
     private var lastDismissedRealignPath: Double?
 
-    /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
-    /// and otherwise from the recent point window. Use this instead of
-    /// `locationService.location?.speed` to avoid the half-speed dropout that
-    /// CoreLocation's automotive smoothing applied at slow tractor speeds.
+    /// Smoothed ground speed in m/s. Derived from a rolling-window
+    /// distance/time calculation across recent GPS samples — *not* from
+    /// CLLocation.speed, which iOS halves at slow tractor speeds after
+    /// the location stream has been running for a while. Used by the
+    /// speedometer, ETA and any operational calculation that needs speed.
     var smoothedSpeed: Double = 0
+
+    // MARK: - Speed diagnostics (exposed for in-app diagnostics dump)
+    /// Last raw CLLocation.speed value (m/s). Diagnostics only — never
+    /// shown to the operator and never used for ETA/job calculations.
+    var rawCLLocationSpeed: Double = 0
+    /// Distance/time speed across the rolling sample window (m/s).
+    /// This is the primary speed source.
+    var calculatedGroundSpeed: Double = 0
+    /// EMA-smoothed version of `calculatedGroundSpeed` (m/s). Mirrors
+    /// `smoothedSpeed` and is the value the UI actually displays.
+    var smoothedGroundSpeed: Double = 0
+    /// Number of valid GPS samples currently in the rolling window.
+    var speedWindowSampleCount: Int = 0
+    /// Seconds spanned by the rolling window's first → last sample.
+    var speedWindowSeconds: Double = 0
+    /// `"calculated"` when the displayed speed came from the rolling
+    /// distance/time window, `"core-location"` if we briefly fell back
+    /// to CLLocation.speed because the window didn't have enough valid
+    /// samples yet, or `"none"` when no speed could be derived.
+    var speedDisplaySource: String = "none"
+
     private var recentSpeedSamples: [(date: Date, location: CLLocation)] = []
+
+    /// Maximum horizontal accuracy (m) we trust for speed calculation.
+    /// Above this the sample is dropped from the rolling window.
+    private let speedMaxAcceptableAccuracy: Double = 25.0
+    /// Length of the rolling window in seconds.
+    private let speedWindowDuration: TimeInterval = 8.0
+    /// Below this calculated speed (m/s) we clamp to 0 — at standstill
+    /// GPS jitter alone can produce 0.1–0.3 m/s.
+    private let speedJitterFloor: Double = 0.4
+    /// Reject impossible inter-sample velocities (m/s). Tractors do not
+    /// teleport; anything above this is GPS error.
+    private let speedMaxInstantaneous: Double = 50.0
 
     // MARK: - Dependencies
 
@@ -268,6 +302,12 @@ final class TripTrackingService {
         rowsCoveredCount = 0
         rowGuidanceAvailable = false
         smoothedSpeed = 0
+        smoothedGroundSpeed = 0
+        calculatedGroundSpeed = 0
+        rawCLLocationSpeed = 0
+        speedWindowSampleCount = 0
+        speedWindowSeconds = 0
+        speedDisplaySource = "none"
         recentSpeedSamples.removeAll()
         pathDistanceMap.removeAll()
         lastTrackingLocation = nil
@@ -640,39 +680,105 @@ final class TripTrackingService {
         updateSmoothedSpeed(from: location)
         currentSpeed = smoothedSpeed > 0 ? smoothedSpeed : nil
         lastObservedLocation = location
+        rawCLLocationSpeed = max(0, location.speed)
     }
 
+    /// Compute ground speed from distance/time across a rolling window of
+    /// recent GPS samples instead of trusting `CLLocation.speed`. iOS
+    /// applies an opaque smoothing/filter to the reported speed that, on
+    /// long-running location streams at slow tractor speeds, drifts to
+    /// roughly half the real ground speed and only recovers after the
+    /// location stream is restarted. Distance/time over a short window is
+    /// noisier per-tick but stays accurate for the duration of a trip.
     private func updateSmoothedSpeed(from location: CLLocation) {
         let now = Date()
-        recentSpeedSamples.append((now, location))
-        // Keep ~5s of recent samples, with a hard cap as a safety net.
-        recentSpeedSamples.removeAll { now.timeIntervalSince($0.date) > 5 }
+
+        // Validate the new sample before adding it to the window.
+        let acc = location.horizontalAccuracy
+        let accOK = acc > 0 && acc <= speedMaxAcceptableAccuracy
+        let timestampOK = location.timestamp.timeIntervalSinceNow > -5
+
+        if accOK && timestampOK {
+            // Reject impossible jumps relative to the previous accepted sample.
+            if let prev = recentSpeedSamples.last {
+                let dt = now.timeIntervalSince(prev.date)
+                if dt > 0 {
+                    let dist = location.distance(from: prev.location)
+                    let inst = dist / dt
+                    if inst <= speedMaxInstantaneous {
+                        recentSpeedSamples.append((now, location))
+                    }
+                    // else: drop the bad sample, keep window stable
+                }
+                // dt <= 0 → duplicate timestamp, ignore
+            } else {
+                recentSpeedSamples.append((now, location))
+            }
+        }
+
+        // Trim the window to the configured duration and hard cap.
+        recentSpeedSamples.removeAll { now.timeIntervalSince($0.date) > speedWindowDuration }
         if recentSpeedSamples.count > maxRecentSpeedSamples {
             recentSpeedSamples.removeFirst(recentSpeedSamples.count - maxRecentSpeedSamples)
         }
 
-        // Prefer a fresh, valid CLLocation.speed (m/s) when available.
-        if location.speed >= 0, location.timestamp.timeIntervalSinceNow > -2 {
-            // Light blend with previous reading to avoid jitter without
-            // averaging over the full trip.
-            if smoothedSpeed > 0 {
-                smoothedSpeed = smoothedSpeed * 0.4 + location.speed * 0.6
-            } else {
-                smoothedSpeed = location.speed
+        speedWindowSampleCount = recentSpeedSamples.count
+        if let first = recentSpeedSamples.first, let last = recentSpeedSamples.last {
+            speedWindowSeconds = last.date.timeIntervalSince(first.date)
+        } else {
+            speedWindowSeconds = 0
+        }
+
+        // Calculate ground speed: total distance from first → last across
+        // the window divided by the elapsed time. Requires ≥2 samples and
+        // ≥1 second so we don't divide by tiny dt.
+        var calcSpeed: Double = 0
+        if recentSpeedSamples.count >= 2,
+           let first = recentSpeedSamples.first,
+           let last = recentSpeedSamples.last {
+            let dt = last.date.timeIntervalSince(first.date)
+            if dt >= 1.0 {
+                // Sum chained segment distances rather than first→last
+                // straight-line, so a curved path is measured correctly.
+                var distance: Double = 0
+                for i in 1..<recentSpeedSamples.count {
+                    distance += recentSpeedSamples[i].location.distance(
+                        from: recentSpeedSamples[i - 1].location
+                    )
+                }
+                calcSpeed = distance / dt
             }
+        }
+
+        if calcSpeed < speedJitterFloor { calcSpeed = 0 }
+        calculatedGroundSpeed = calcSpeed
+
+        // EMA smooth the calculated speed for the speedometer/ETA.
+        if calcSpeed > 0 {
+            if smoothedGroundSpeed > 0 {
+                smoothedGroundSpeed = smoothedGroundSpeed * 0.5 + calcSpeed * 0.5
+            } else {
+                smoothedGroundSpeed = calcSpeed
+            }
+            smoothedSpeed = smoothedGroundSpeed
+            speedDisplaySource = "calculated"
             return
         }
 
-        // Fallback: derive from the recent sample window.
-        if let first = recentSpeedSamples.first {
-            let dt = now.timeIntervalSince(first.date)
-            let dist = location.distance(from: first.location)
-            if dt > 0.5, dist > 0 {
-                smoothedSpeed = dist / dt
-                return
-            }
+        // Window not yet usable (e.g. just started, or all samples were
+        // rejected). Fall back to CLLocation.speed only when it's fresh
+        // and positive — purely so the UI shows *something* while the
+        // window is filling. Diagnostics make this fallback visible.
+        if location.speed > 0, timestampOK {
+            smoothedGroundSpeed = location.speed
+            smoothedSpeed = location.speed
+            speedDisplaySource = "core-location"
+            return
         }
+
+        smoothedGroundSpeed = 0
         smoothedSpeed = 0
+        speedDisplaySource = "none"
     }
 
     // MARK: - Row guidance / coverage

@@ -746,6 +746,9 @@ struct ActiveTripView: View {
         let rawSpeedKmh = currentSpeedKmh
         let smoothedKmh = (tracking.currentSpeed ?? 0) * 3.6
         let avgKmh = averageValidSpeedKmh
+        let rawCLKmh = tracking.rawCLLocationSpeed * 3.6
+        let calcKmh = tracking.calculatedGroundSpeed * 3.6
+        let smoothedCalcKmh = tracking.smoothedGroundSpeed * 3.6
 
         let loc = locationService.location
         let lat = loc?.coordinate.latitude
@@ -815,6 +818,13 @@ struct ActiveTripView: View {
         }
         lines.append("")
         lines.append("Speed: raw \(fmt(rawSpeedKmh, 1)) km/h, smoothed \(fmt(smoothedKmh, 1)) km/h, avg \(fmt(avgKmh, 1)) km/h")
+        lines.append("Speed sources:")
+        lines.append("  CLLocation.speed: \(fmt(rawCLKmh, 1, suffix: " km/h"))")
+        lines.append("  calculated (distance/time): \(fmt(calcKmh, 1, suffix: " km/h"))")
+        lines.append("  smoothed calculated: \(fmt(smoothedCalcKmh, 1, suffix: " km/h"))")
+        lines.append("  display source: \(tracking.speedDisplaySource)")
+        lines.append("  window samples: \(tracking.speedWindowSampleCount)")
+        lines.append("  window seconds: \(fmt(tracking.speedWindowSeconds, 1, suffix: " s"))")
         if let lat, let lon {
             lines.append("GPS: \(String(format: "%.6f", lat)), \(String(format: "%.6f", lon)), accuracy \(fmt(acc2D, 1, suffix: " m"))")
         } else {
