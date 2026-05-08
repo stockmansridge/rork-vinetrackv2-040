@@ -167,8 +167,8 @@ struct StartTripSheet: View {
                         directionSection
                     }
                     patternSection
-                    if trackingPattern == .everySecondRow, hasAnyRowGeometry {
-                        midrowSection
+                    if hasAnyRowGeometry, trackingPattern != .freeDrive {
+                        sequencePreviewSection
                     }
                     if trackingPattern == .freeDrive {
                         freeDriveInfoSection
@@ -470,8 +470,8 @@ struct StartTripSheet: View {
                     Text("Sequence direction")
                         .font(.subheadline.weight(.semibold))
                     Picker("Sequence direction", selection: $directionHigherFirst) {
-                        Text("Count down first").tag(false)
-                        Text("Count up first").tag(true)
+                        Text("Higher to lower").tag(false)
+                        Text("Lower to higher").tag(true)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -526,29 +526,46 @@ struct StartTripSheet: View {
         }
     }
 
-    // MARK: Every Second Row preview
+    // MARK: Proposed sequence preview (all planned patterns)
 
-    private var midrowSection: some View {
+    private var sequencePreviewSection: some View {
         sectionContainer(
-            title: "Every Second Row Preview",
-            icon: "arrow.left.and.right",
+            title: "Proposed Row Sequence",
+            icon: "list.number",
             tint: .purple
         ) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Every Second Row advances by +2 in the chosen direction, then wraps to cover the remaining same-parity paths.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let note = patternPreviewNote {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-                if !midrowPreview.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
+                let sequence = generatedSequence()
+                if sequence.isEmpty {
+                    Text("No sequence available for the current selection.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(.rect(cornerRadius: 12))
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "sparkles")
+                                .font(.caption2)
+                                .foregroundStyle(.purple)
+                            Text(sequencePreviewText(sequence))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.primary)
+                                .lineLimit(3)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 0)
+                        }
+                        Text("\(sequence.count) path\(sequence.count == 1 ? "" : "s") planned")
                             .font(.caption2)
-                            .foregroundStyle(.purple)
-                        Text("Sequence: \(midrowPreview)")
-                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -559,10 +576,30 @@ struct StartTripSheet: View {
         }
     }
 
-    private var midrowPreview: String {
-        let sequence = generatedSequence()
-        let preview = sequence.prefix(5).map { formatPath($0) }
-        return preview.joined(separator: " → ") + (sequence.count > 5 ? " → …" : "")
+    private var patternPreviewNote: String? {
+        switch trackingPattern {
+        case .sequential:
+            return "Sequential: walks every path one-by-one in the chosen direction."
+        case .everySecondRow:
+            return "Every Second Row: advances by +2 in the chosen direction, then wraps to cover the remaining same-parity paths."
+        case .fiveThree:
+            return "5/3 pattern: skips ahead 5, back 3, repeating from the chosen start."
+        case .upAndBack:
+            return "Up and Back: traverses then reverses, covering each path once."
+        case .twoRowUpBack:
+            return "Two Row Up & Back: pairs of rows, advancing then returning."
+        case .custom:
+            return "Custom pattern: generated from the chosen start and direction."
+        case .freeDrive:
+            return nil
+        }
+    }
+
+    private func sequencePreviewText(_ sequence: [Double]) -> String {
+        let maxItems = 10
+        let preview = sequence.prefix(maxItems).map { formatPath($0) }
+        let joined = preview.joined(separator: " → ")
+        return sequence.count > maxItems ? joined + " → …" : joined
     }
 
     /// Generate the full traversal sequence for the current pattern, start path,
