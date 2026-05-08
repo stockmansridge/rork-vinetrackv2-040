@@ -125,6 +125,9 @@ struct TripView: View {
         if let raw = trip.tripFunction, let function = TripFunction(rawValue: raw) {
             return function.displayName
         }
+        if let raw = trip.tripFunction, raw.hasPrefix("custom:") {
+            return String(raw.dropFirst("custom:".count)).replacingOccurrences(of: "-", with: " ").capitalized
+        }
         if let record = store.sprayRecords.first(where: { $0.tripId == trip.id }),
            !record.sprayReference.isEmpty {
             return record.sprayReference
@@ -279,6 +282,14 @@ struct TripHistoryRow: View {
         return TripFunction(rawValue: raw)
     }
 
+    private var customFunctionLabel: String? {
+        guard let raw = trip.tripFunction, raw.hasPrefix("custom:") else { return nil }
+        if let title = trip.tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return String(raw.dropFirst("custom:".count)).replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
     private var displayName: String {
         if let displayTitle, !displayTitle.isEmpty { return displayTitle }
         if let title = trip.tripTitle, !title.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -302,6 +313,11 @@ struct TripHistoryRow: View {
                 if let function = resolvedFunction,
                    trip.tripTitle?.trimmingCharacters(in: .whitespaces).isEmpty == false {
                     Label(function.displayName, systemImage: function.icon)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                } else if let custom = customFunctionLabel,
+                          trip.tripTitle?.trimmingCharacters(in: .whitespaces).isEmpty == false {
+                    Label(custom, systemImage: "wrench.and.screwdriver")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                 }

@@ -316,6 +316,16 @@ struct BackendSettingsView: View {
                 )
             }
             NavigationLink {
+                TripFunctionsSettingsView()
+            } label: {
+                SettingsRow(
+                    title: "Trip Functions",
+                    subtitle: "Built-ins and custom vineyard trip functions",
+                    symbol: "wrench.and.screwdriver.fill",
+                    color: VineyardTheme.earthBrown
+                )
+            }
+            NavigationLink {
                 OperationPreferencesView()
             } label: {
                 SettingsRow(

@@ -9,6 +9,8 @@ struct StartTripSheet: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(TripTrackingService.self) private var tracking
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(VineyardTripFunctionService.self) private var tripFunctionService
+    @Environment(BackendAccessControl.self) private var accessControl
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedPaddockIds: Set<UUID> = []
@@ -21,8 +23,12 @@ struct StartTripSheet: View {
     @State private var directionHigherFirst: Bool = true
     @State private var personName: String = ""
     @State private var showPaddockPicker: Bool = false
-    @State private var selectedFunction: TripFunction = .slashing
+    /// Stable selection key for the trip function:
+    ///   - Built-in: the `TripFunction` raw value (e.g. "seeding").
+    ///   - Custom:   "custom:<slug>" matching `vineyard_trip_functions.slug`.
+    @State private var selectedFunctionKey: String = TripFunction.slashing.rawValue
     @State private var customTitle: String = ""
+    @State private var showAddCustomFunction: Bool = false
 
     // Seeding Details (only used when selectedFunction == .seeding).
     @State private var seedingExpanded: Bool = false
@@ -163,19 +169,17 @@ struct StartTripSheet: View {
                 VStack(spacing: 20) {
                     heroHeader
                     blockSection
-                    if hasAnyRowGeometry, trackingPattern != .freeDrive {
-                        directionSection
+                    functionSection
+                    if isSeedingSelected {
+                        seedingDetailsSection
                     }
                     patternSection
                     if hasAnyRowGeometry, trackingPattern != .freeDrive {
+                        directionSection
                         sequencePreviewSection
                     }
                     if trackingPattern == .freeDrive {
                         freeDriveInfoSection
-                    }
-                    functionSection
-                    if selectedFunction == .seeding {
-                        seedingDetailsSection
                     }
                     operatorSection
                     if let error = tracking.errorMessage {
@@ -207,12 +211,21 @@ struct StartTripSheet: View {
                     selectedPaddockIds = [first]
                 }
                 clampStartPath()
+                if let vineyardId = store.selectedVineyardId,
+                   tripFunctionService.loadedVineyardId != vineyardId {
+                    Task { await tripFunctionService.refresh(vineyardId: vineyardId) }
+                }
             }
             .onChange(of: selectedPaddockIds) { _, _ in
                 clampStartPath()
             }
             .sheet(isPresented: $showPaddockPicker) {
                 MultiPaddockPickerSheet(selectedIds: $selectedPaddockIds)
+            }
+            .sheet(isPresented: $showAddCustomFunction) {
+                AddCustomTripFunctionSheet { newFn in
+                    selectedFunctionKey = "custom:\(newFn.slug)"
+                }
             }
         }
         .presentationDetents([.large])
@@ -733,54 +746,143 @@ struct StartTripSheet: View {
 
     // MARK: Trip function
 
+    private struct TripFunctionOption: Identifiable {
+        let id: String
+        let label: String
+        let icon: String
+        let isCustom: Bool
+    }
+
+    private var selectedBuiltinFunction: TripFunction? {
+        TripFunction(rawValue: selectedFunctionKey)
+    }
+
+    private var selectedCustomFunction: VineyardTripFunction? {
+        guard selectedFunctionKey.hasPrefix("custom:") else { return nil }
+        let slug = String(selectedFunctionKey.dropFirst("custom:".count))
+        return tripFunctionService.functions.first { $0.slug == slug && $0.isActive && $0.deletedAt == nil }
+    }
+
+    private var selectedFunctionLabel: String {
+        if let b = selectedBuiltinFunction { return b.displayName }
+        if let c = selectedCustomFunction { return c.label }
+        return "Select function"
+    }
+
+    private var selectedFunctionIcon: String {
+        selectedBuiltinFunction?.icon ?? "wrench.and.screwdriver"
+    }
+
+    private var isSeedingSelected: Bool {
+        selectedBuiltinFunction == .seeding
+    }
+
+    private var isOtherSelected: Bool {
+        selectedBuiltinFunction == .other
+    }
+
+    /// Combined, alphabetically sorted list of built-in and active custom
+    /// trip functions for the current vineyard.
+    private var allFunctionOptions: [TripFunctionOption] {
+        var opts: [TripFunctionOption] = TripFunction.allCases.map {
+            TripFunctionOption(id: $0.rawValue, label: $0.displayName, icon: $0.icon, isCustom: false)
+        }
+        for fn in tripFunctionService.activeSortedByLabel {
+            opts.append(
+                TripFunctionOption(
+                    id: "custom:\(fn.slug)",
+                    label: fn.label,
+                    icon: "wrench.and.screwdriver",
+                    isCustom: true
+                )
+            )
+        }
+        return opts.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+
+    private var canManageTripFunctions: Bool {
+        accessControl.canChangeSettings
+    }
+
     private var functionSection: some View {
         sectionContainer(title: "Trip Function", icon: "wrench.and.screwdriver", tint: VineyardTheme.earthBrown) {
             VStack(spacing: 10) {
-                Menu {
-                    ForEach(TripFunction.allCases) { function in
-                        Button {
-                            selectedFunction = function
-                        } label: {
-                            HStack {
-                                Image(systemName: function.icon)
-                                Text(function.displayName)
-                                if function == selectedFunction {
-                                    Spacer()
-                                    Image(systemName: "checkmark")
+                HStack(spacing: 10) {
+                    Menu {
+                        let options = allFunctionOptions
+                        let builtins = options.filter { !$0.isCustom }
+                        let customs = options.filter { $0.isCustom }
+                        if !builtins.isEmpty {
+                            Section("Built-in") {
+                                ForEach(builtins) { option in
+                                    functionMenuButton(option)
                                 }
                             }
                         }
-                    }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: selectedFunction.icon)
-                            .foregroundStyle(VineyardTheme.earthBrown)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Function")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text(selectedFunction.displayName)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if !customs.isEmpty {
+                            Section("Custom") {
+                                ForEach(customs) { option in
+                                    functionMenuButton(option)
+                                }
+                            }
                         }
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: selectedFunctionIcon)
+                                .foregroundStyle(VineyardTheme.earthBrown)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Function")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                Text(selectedFunctionLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(14)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(.rect(cornerRadius: 12))
                     }
-                    .padding(14)
-                    .background(Color(.secondarySystemGroupedBackground))
-                    .clipShape(.rect(cornerRadius: 12))
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showAddCustomFunction = true
+                    } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                            Text("Add")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .foregroundStyle(canManageTripFunctions ? VineyardTheme.leafGreen : Color.secondary.opacity(0.5))
+                        .frame(width: 60, height: 56)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(.rect(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canManageTripFunctions)
+                    .accessibilityLabel("Add function")
                 }
-                .buttonStyle(.plain)
+
+                if !canManageTripFunctions {
+                    Text("Ask an Owner or Manager to add trip functions.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                }
 
                 HStack(spacing: 12) {
                     Image(systemName: "text.cursor")
                         .foregroundStyle(.secondary)
                         .frame(width: 24)
                     TextField(
-                        selectedFunction == .other ? "Trip title (required)" : "Trip title (optional)",
+                        isOtherSelected ? "Trip title (required)" : "Trip title (optional)",
                         text: $customTitle
                     )
                     .textInputAutocapitalization(.sentences)
@@ -789,6 +891,22 @@ struct StartTripSheet: View {
                 .padding(14)
                 .background(Color(.secondarySystemGroupedBackground))
                 .clipShape(.rect(cornerRadius: 12))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func functionMenuButton(_ option: TripFunctionOption) -> some View {
+        Button {
+            selectedFunctionKey = option.id
+        } label: {
+            HStack {
+                Image(systemName: option.icon)
+                Text(option.label)
+                if option.id == selectedFunctionKey {
+                    Spacer()
+                    Image(systemName: "checkmark")
+                }
             }
         }
     }
@@ -869,7 +987,17 @@ struct StartTripSheet: View {
         }
 
         let trimmedTitle = customTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let titleToStore: String? = trimmedTitle.isEmpty ? nil : trimmedTitle
+        // For custom functions, default the trip title to the custom label
+        // when the user didn't override it, so historical reports / list rows
+        // display the custom name without an extra lookup.
+        let resolvedTitle: String?
+        if !trimmedTitle.isEmpty {
+            resolvedTitle = trimmedTitle
+        } else if let custom = selectedCustomFunction {
+            resolvedTitle = custom.label
+        } else {
+            resolvedTitle = nil
+        }
 
         tracking.startTrip(
             type: .maintenance,
@@ -877,8 +1005,8 @@ struct StartTripSheet: View {
             paddockName: paddockName,
             trackingPattern: trackingPattern,
             personName: personName,
-            tripFunction: selectedFunction.rawValue,
-            tripTitle: titleToStore
+            tripFunction: selectedFunctionKey,
+            tripTitle: resolvedTitle
         )
 
         // Persist the full multi-block selection on the active trip and apply
@@ -886,7 +1014,7 @@ struct StartTripSheet: View {
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
-            if selectedFunction == .seeding {
+            if isSeedingSelected {
                 let details = buildSeedingDetails()
                 if details.hasAnyValue {
                     trip.seedingDetails = details

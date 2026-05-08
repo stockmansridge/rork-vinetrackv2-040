@@ -57,8 +57,14 @@ struct TripDetailView: View {
             }
 
             Section("Stats") {
-                if let raw = trip.tripFunction, let function = TripFunction(rawValue: raw) {
-                    statRow("Function", value: function.displayName, icon: function.icon)
+                if let raw = trip.tripFunction, !raw.isEmpty {
+                    if let function = TripFunction(rawValue: raw) {
+                        statRow("Function", value: function.displayName, icon: function.icon)
+                    } else if raw.hasPrefix("custom:") {
+                        let label = trip.tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let display = (label?.isEmpty == false) ? label! : String(raw.dropFirst("custom:".count))
+                        statRow("Function", value: display, icon: "wrench.and.screwdriver")
+                    }
                 }
                 if let title = trip.tripTitle, !title.isEmpty {
                     statRow("Title", value: title, icon: "text.cursor")
