@@ -286,7 +286,14 @@ final class TripTrackingService {
     // MARK: - End
 
     func endTrip() {
-        guard let trip = activeTrip else { return }
+        guard var trip = activeTrip else { return }
+        // Persist the manual-correction audit trail onto the trip so the
+        // saved record (and the Trip Report) reflects every override that
+        // happened during the live trip.
+        if !diagManualCorrectionEvents.isEmpty {
+            trip.manualCorrectionEvents = diagManualCorrectionEvents
+            store?.updateTrip(trip)
+        }
         store?.endTrip(trip.id)
         stopTrackingLoops(stopLocation: true)
         isTracking = false

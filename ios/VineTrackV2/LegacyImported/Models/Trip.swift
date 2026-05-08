@@ -94,6 +94,13 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
     /// `trips.seeding_details`. Encoded with snake_case nested keys.
     var seedingDetails: SeedingDetails?
 
+    /// Audit trail of manual corrections recorded during the trip
+    /// (e.g. `manual_next_path`, `end_review_completed: [...]`,
+    /// `paddocks_added: ...`). Persisted locally with the trip so the
+    /// final Trip Report can include the full corrections history.
+    /// Each entry is `"<ISO8601 timestamp> <note>"`.
+    var manualCorrectionEvents: [String]
+
     /// Convenience: returns a short label suitable for the active trip header.
     /// Prefers an explicit title, then the picked function, then "Trip".
     var displayFunctionLabel: String {
@@ -153,7 +160,8 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         fillingTankNumber: Int? = nil,
         tripFunction: String? = nil,
         tripTitle: String? = nil,
-        seedingDetails: SeedingDetails? = nil
+        seedingDetails: SeedingDetails? = nil,
+        manualCorrectionEvents: [String] = []
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -186,6 +194,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         self.tripFunction = tripFunction
         self.tripTitle = tripTitle
         self.seedingDetails = seedingDetails
+        self.manualCorrectionEvents = manualCorrectionEvents
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -199,6 +208,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         case isFillingTank, fillingTankNumber
         case tripFunction, tripTitle
         case seedingDetails
+        case manualCorrectionEvents
     }
 
     init(from decoder: Decoder) throws {
@@ -231,6 +241,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         tripFunction = try container.decodeIfPresent(String.self, forKey: .tripFunction)
         tripTitle = try container.decodeIfPresent(String.self, forKey: .tripTitle)
         seedingDetails = try container.decodeIfPresent(SeedingDetails.self, forKey: .seedingDetails)
+        manualCorrectionEvents = try container.decodeIfPresent([String].self, forKey: .manualCorrectionEvents) ?? []
 
         if let doubleRow = try? container.decode(Double.self, forKey: .currentRowNumber) {
             currentRowNumber = doubleRow

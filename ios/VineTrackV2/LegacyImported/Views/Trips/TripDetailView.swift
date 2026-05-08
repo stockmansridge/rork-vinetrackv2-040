@@ -418,6 +418,51 @@ struct TripDetailView: View {
         return String(format: "%.1fkm", meters / 1000)
     }
 
+    private func resolvedTripFunctionLabel() -> String? {
+        guard let raw = trip.tripFunction, !raw.isEmpty else { return nil }
+        if let f = TripFunction(rawValue: raw) { return f.displayName }
+        if raw.hasPrefix("custom:") {
+            let title = trip.tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !title.isEmpty { return title }
+            return String(raw.dropFirst("custom:".count))
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
+        return raw.capitalized
+    }
+
+    private func paddockGroupsForReport() -> [TripPDFService.PaddockCoverage] {
+        let ids: [UUID] = {
+            if !trip.paddockIds.isEmpty { return trip.paddockIds }
+            if let single = trip.paddockId { return [single] }
+            return []
+        }()
+        guard !ids.isEmpty, !trip.rowSequence.isEmpty else { return [] }
+        var groups: [TripPDFService.PaddockCoverage] = []
+        var assigned = Set<Double>()
+        for id in ids {
+            guard let p = store.paddocks.first(where: { $0.id == id }) else { continue }
+            let nums = p.rows.map(\.number)
+            guard let minN = nums.min(), let maxN = nums.max() else {
+                groups.append(TripPDFService.PaddockCoverage(name: p.name, plannedPaths: []))
+                continue
+            }
+            let lo = Double(minN) + 0.5
+            let hi = Double(maxN) - 0.5
+            let paths = trip.rowSequence.filter { $0 >= lo - 0.01 && $0 <= hi + 0.01 && !assigned.contains($0) }
+            paths.forEach { assigned.insert($0) }
+            groups.append(TripPDFService.PaddockCoverage(name: p.name, plannedPaths: paths))
+        }
+        // Any leftovers go to a fallback group so the operator still sees them.
+        let leftover = trip.rowSequence.filter { !assigned.contains($0) }
+        if !leftover.isEmpty {
+            groups.append(TripPDFService.PaddockCoverage(name: "Other", plannedPaths: leftover))
+        }
+        // Drop entirely empty groups when we have at least one populated group.
+        let populated = groups.filter { !$0.plannedPaths.isEmpty }
+        return populated.isEmpty ? groups : populated
+    }
+
     private func exportTrip() {
         guard !isExporting else { return }
         isExporting = true
@@ -427,7 +472,10 @@ struct TripDetailView: View {
         let pinCount = pinsForTrip.count
         let tripCopy = trip
         let exportTimeZone = tz
-        let fileName = "TripReport_\(vineyardName)_\(trip.startTime.formattedTZ(date: .numeric, time: .omitted, in: exportTimeZone))"
+        let functionLabel = resolvedTripFunctionLabel()
+        let paddockGroups = paddockGroupsForReport()
+        let fileNameSuffix = functionLabel.map { "_\($0)" } ?? ""
+        let fileName = "TripReport_\(vineyardName)\(fileNameSuffix)_\(trip.startTime.formattedTZ(date: .numeric, time: .omitted, in: exportTimeZone))"
 
         Task {
             let snapshot = await TripPDFService.captureMapSnapshot(trip: tripCopy)
@@ -438,7 +486,9 @@ struct TripDetailView: View {
                 pinCount: pinCount,
                 mapSnapshot: snapshot,
                 logoData: logoData,
-                timeZone: exportTimeZone
+                timeZone: exportTimeZone,
+                tripFunctionLabel: functionLabel,
+                paddockGroups: paddockGroups
             )
             let url = TripPDFService.savePDFToTemp(data: pdfData, fileName: fileName)
             isExporting = false

@@ -4,13 +4,48 @@ import MapKit
 import CoreLocation
 
 struct TripPDFService {
-    static func generatePDF(trip: Trip, vineyardName: String, paddockName: String, pinCount: Int, mapSnapshot: UIImage?, logoData: Data? = nil, fuelCost: Double = 0, chemicalCosts: [(String, Double)] = [], operatorCost: Double = 0, operatorCategoryName: String? = nil, includeCostings: Bool = true, timeZone: TimeZone = .current) -> Data {
+
+    /// A grouping of planned paths by paddock used for the Rows / Paths
+    /// Covered section of the report. Pass an empty array to render a
+    /// single un-grouped list using the trip's paddockName.
+    struct PaddockCoverage {
+        let name: String
+        /// Subset of `trip.rowSequence` that lives in this paddock.
+        let plannedPaths: [Double]
+    }
+
+    static func generatePDF(
+        trip: Trip,
+        vineyardName: String,
+        paddockName: String,
+        pinCount: Int,
+        mapSnapshot: UIImage?,
+        logoData: Data? = nil,
+        fuelCost: Double = 0,
+        chemicalCosts: [(String, Double)] = [],
+        operatorCost: Double = 0,
+        operatorCategoryName: String? = nil,
+        includeCostings: Bool = true,
+        timeZone: TimeZone = .current,
+        tripFunctionLabel: String? = nil,
+        paddockGroups: [PaddockCoverage] = []
+    ) -> Data {
         let pageWidth: CGFloat = 595.0
         let pageHeight: CGFloat = 842.0
         let margin: CGFloat = 40.0
         let contentWidth = pageWidth - margin * 2
 
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
+
+        let resolvedFunctionLabel = tripFunctionLabel ?? defaultFunctionLabel(for: trip)
+        let reportTitle: String = {
+            if let label = resolvedFunctionLabel, !label.isEmpty {
+                return "Trip Report — \(label)"
+            }
+            return "Trip Report"
+        }()
+
+        let manuallyMarkedComplete: [Double] = parseEndReviewCompleted(trip.manualCorrectionEvents)
 
         let data = renderer.pdfData { context in
             context.beginPage()
@@ -49,6 +84,34 @@ struct TripPDFService {
                 y += rowHeight
             }
 
+            func drawWrappedRow(label: String, value: String, indent: CGFloat = 0) {
+                let labelWidth: CGFloat = 180
+                let labelAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: UIColor.darkGray]
+                let valueAttrs: [NSAttributedString.Key: Any] = [.font: bodyBoldFont, .foregroundColor: UIColor.black]
+                let valueWidth = contentWidth - labelWidth - indent
+                let size = (value as NSString).boundingRect(
+                    with: CGSize(width: valueWidth, height: .greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                    attributes: valueAttrs,
+                    context: nil
+                )
+                let rowHeight = max(18, size.height + 2)
+                checkPageBreak(needed: rowHeight)
+                (label as NSString).draw(in: CGRect(x: margin + indent, y: y, width: labelWidth, height: 18), withAttributes: labelAttrs)
+                (value as NSString).draw(in: CGRect(x: margin + indent + labelWidth, y: y, width: valueWidth, height: rowHeight), withAttributes: valueAttrs)
+                y += rowHeight
+            }
+
+            func drawSubHeader(_ text: String, indent: CGFloat = 0) {
+                checkPageBreak(needed: 22)
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
+                    .foregroundColor: accentColor,
+                ]
+                (text as NSString).draw(in: CGRect(x: margin + indent, y: y, width: contentWidth - indent, height: 18), withAttributes: attrs)
+                y += 20
+            }
+
             func drawSectionHeader(_ text: String) {
                 y += 12
                 checkPageBreak(needed: 28)
@@ -63,52 +126,150 @@ struct TripPDFService {
             PDFHeaderHelper.drawHeader(
                 vineyardName: vineyardName,
                 logoData: logoData,
-                title: "Trip Report",
+                title: reportTitle,
                 accentColor: accentColor,
                 margin: margin,
                 contentWidth: contentWidth,
                 y: &y
             )
 
-            let dateStr = trip.startTime.formattedTZ(date: .abbreviated, time: .shortened, in: timeZone)
-            drawText(dateStr, font: captionFont, color: .darkGray)
-            y += 4
-
+            // ── Trip Details ─────────────────────────────────────────────
             drawSectionHeader("Trip Details")
-            if !paddockName.isEmpty {
-                drawRow(label: "Block", value: paddockName)
-            } else if !trip.paddockName.isEmpty {
-                drawRow(label: "Block", value: trip.paddockName)
-            }
+
             if !vineyardName.isEmpty {
                 drawRow(label: "Vineyard", value: vineyardName)
             }
-            if !trip.personName.isEmpty {
-                drawRow(label: "Logged By", value: trip.personName)
+
+            // Block(s)
+            let allPaddockNames: [String] = {
+                if !paddockGroups.isEmpty {
+                    return paddockGroups.map(\.name).filter { !$0.isEmpty }
+                }
+                if !paddockName.isEmpty { return [paddockName] }
+                if !trip.paddockName.isEmpty { return [trip.paddockName] }
+                return []
+            }()
+            if allPaddockNames.count > 1 {
+                drawWrappedRow(label: "Blocks", value: allPaddockNames.joined(separator: ", "))
+            } else if let only = allPaddockNames.first {
+                drawRow(label: "Block", value: only)
             }
-            drawRow(label: "Date", value: trip.startTime.formattedTZ(date: .abbreviated, time: .shortened, in: timeZone))
+
+            if let label = resolvedFunctionLabel, !label.isEmpty {
+                drawRow(label: "Trip type", value: label)
+            }
+            if let title = trip.tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !title.isEmpty,
+               title != resolvedFunctionLabel {
+                drawWrappedRow(label: "Trip details", value: title)
+            }
+            if !trip.personName.isEmpty {
+                drawRow(label: "Operator", value: trip.personName)
+            }
+
+            // Date / start time / finish time on separate lines (operator request).
+            drawRow(label: "Date", value: trip.startTime.formattedTZ(date: .long, time: .omitted, in: timeZone))
+            drawRow(label: "Start time", value: trip.startTime.formattedTZ(date: .omitted, time: .shortened, in: timeZone))
             if let endTime = trip.endTime {
-                drawRow(label: "End Time", value: endTime.formattedTZ(date: .omitted, time: .shortened, in: timeZone))
+                drawRow(label: "Finish time", value: endTime.formattedTZ(date: .omitted, time: .shortened, in: timeZone))
             }
             drawRow(label: "Duration", value: formatDuration(trip))
             drawRow(label: "Distance", value: formatDistance(trip.totalDistance))
-            drawRow(label: "Average Speed", value: formatAverageSpeed(trip))
+            drawRow(label: "Average speed", value: formatAverageSpeed(trip))
             drawRow(label: "Pattern", value: trip.trackingPattern.title)
-            drawRow(label: "Pins Logged", value: "\(pinCount)")
+            drawRow(label: "Pins logged", value: "\(pinCount)")
 
-            if !trip.rowSequence.isEmpty {
-                drawSectionHeader("Row Summary")
-                let completed = trip.rowSequence.filter { trip.completedPaths.contains($0) }.count
-                let skipped = trip.rowSequence.filter { trip.skippedPaths.contains($0) }.count
-                let pending = trip.rowSequence.count - completed - skipped
-                drawRow(label: "Total Paths", value: "\(trip.rowSequence.count)")
-                drawRow(label: "Completed", value: "\(completed)")
-                drawRow(label: "Skipped", value: "\(skipped)")
-                if pending > 0 {
-                    drawRow(label: "Pending", value: "\(pending)")
+            // ── Seeding Details ──────────────────────────────────────────
+            if (trip.tripFunction == "seeding"),
+               let details = trip.seedingDetails,
+               details.hasAnyValue {
+                drawSectionHeader("Seeding Details")
+                if let depth = details.sowingDepthCm {
+                    drawRow(label: "Sowing depth", value: "\(formatNumber(depth)) cm")
+                }
+                let frontUsed = details.frontBox?.hasAnyValue == true
+                let backUsed = details.backBox?.hasAnyValue == true
+                drawRow(label: "Front box used", value: frontUsed ? "Yes" : "No")
+                drawRow(label: "Rear box used", value: backUsed ? "Yes" : "No")
+
+                if frontUsed, let front = details.frontBox {
+                    y += 4
+                    drawSubHeader("Front Box")
+                    drawSeedingBox(front, drawRow: drawRow)
+                }
+                if backUsed, let back = details.backBox {
+                    y += 4
+                    drawSubHeader("Rear Box")
+                    drawSeedingBox(back, drawRow: drawRow)
+                }
+                if let lines = details.mixLines?.filter({ $0.hasAnyValue }), !lines.isEmpty {
+                    y += 4
+                    drawSubHeader("Mix Lines")
+                    for (idx, line) in lines.enumerated() {
+                        let title: String
+                        if let n = line.name?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty {
+                            title = "Line \(idx + 1) — \(n)"
+                        } else {
+                            title = "Line \(idx + 1)"
+                        }
+                        drawRow(label: title, value: "")
+                        if let pct = line.percentOfMix {
+                            drawRow(label: "  % of mix", value: "\(formatNumber(pct))%", indent: 12)
+                        }
+                        if let box = line.seedBox, !box.isEmpty {
+                            drawRow(label: "  Seed box", value: box, indent: 12)
+                        }
+                        if let kg = line.kgPerHa {
+                            drawRow(label: "  Kg/ha", value: "\(formatNumber(kg)) kg/ha", indent: 12)
+                        }
+                        if let supplier = line.supplierManufacturer?.trimmingCharacters(in: .whitespacesAndNewlines), !supplier.isEmpty {
+                            drawRow(label: "  Supplier", value: supplier, indent: 12)
+                        }
+                    }
                 }
             }
 
+            // ── Rows / Paths Covered ─────────────────────────────────────
+            if !trip.rowSequence.isEmpty {
+                drawSectionHeader("Rows / Paths Covered")
+
+                let completed = Set(trip.completedPaths)
+                let skipped = Set(trip.skippedPaths)
+                let manualSet = Set(manuallyMarkedComplete)
+
+                let groups: [PaddockCoverage] = {
+                    if !paddockGroups.isEmpty { return paddockGroups }
+                    return [PaddockCoverage(
+                        name: paddockName.isEmpty ? trip.paddockName : paddockName,
+                        plannedPaths: trip.rowSequence
+                    )]
+                }()
+
+                for (gIdx, group) in groups.enumerated() {
+                    if groups.count > 1 || !(group.name.isEmpty) {
+                        if gIdx > 0 { y += 4 }
+                        drawSubHeader(group.name.isEmpty ? "Block \(gIdx + 1)" : group.name)
+                    }
+                    let completedList = group.plannedPaths.filter { completed.contains($0) }.sorted()
+                    let missedList = group.plannedPaths.filter { !completed.contains($0) && !skipped.contains($0) }.sorted()
+                    let partialList = group.plannedPaths.filter { skipped.contains($0) }.sorted()
+                    let manualList = completedList.filter { manualSet.contains($0) }
+
+                    drawRow(label: "Total planned", value: "\(group.plannedPaths.count)", indent: 12)
+                    drawWrappedRow(label: "Completed", value: completedList.isEmpty ? "—" : pathListText(completedList), indent: 12)
+                    if !partialList.isEmpty {
+                        drawWrappedRow(label: "Partial", value: pathListText(partialList), indent: 12)
+                    }
+                    if !missedList.isEmpty {
+                        drawWrappedRow(label: "Missed", value: pathListText(missedList), indent: 12)
+                    }
+                    if !manualList.isEmpty {
+                        drawWrappedRow(label: "Manually marked complete", value: pathListText(manualList), indent: 12)
+                    }
+                }
+            }
+
+            // ── Tank Sessions (existing) ─────────────────────────────────
             if !trip.tankSessions.isEmpty {
                 drawSectionHeader("Tank Sessions")
                 for session in trip.tankSessions {
@@ -128,6 +289,16 @@ struct TripPDFService {
                 }
             }
 
+            // ── Manual Corrections ───────────────────────────────────────
+            if !trip.manualCorrectionEvents.isEmpty {
+                drawSectionHeader("Manual Corrections")
+                for event in trip.manualCorrectionEvents {
+                    let line = formatCorrectionEvent(event, timeZone: timeZone)
+                    drawWrappedRow(label: line.time, value: line.description)
+                }
+            }
+
+            // ── Costs ────────────────────────────────────────────────────
             let hasChemCosts = !chemicalCosts.isEmpty
             let hasCosts = hasChemCosts || fuelCost > 0 || operatorCost > 0
             if hasCosts && includeCostings {
@@ -151,6 +322,7 @@ struct TripPDFService {
                 drawRow(label: "Total Cost", value: String(format: "$%.2f", grandTotal))
             }
 
+            // ── Map ──────────────────────────────────────────────────────
             if let snapshot = mapSnapshot {
                 drawSectionHeader("Route Map")
 
@@ -183,6 +355,147 @@ struct TripPDFService {
         }
 
         return data
+    }
+
+    // MARK: - Helpers
+
+    private static func defaultFunctionLabel(for trip: Trip) -> String? {
+        if let raw = trip.tripFunction, !raw.isEmpty {
+            if let f = TripFunction(rawValue: raw) {
+                return f.displayName
+            }
+            if raw.hasPrefix("custom:") {
+                let title = trip.tripTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !title.isEmpty { return title }
+                return String(raw.dropFirst("custom:".count)).replacingOccurrences(of: "-", with: " ").capitalized
+            }
+            return raw.capitalized
+        }
+        return nil
+    }
+
+    private static func drawSeedingBox(_ box: SeedingBox, drawRow: (String, String, CGFloat) -> Void) {
+        if let mix = box.mixName, !mix.isEmpty {
+            drawRow("  Mix", mix, 12)
+        }
+        if let rate = box.ratePerHa {
+            drawRow("  Rate/ha", "\(formatNumber(rate)) kg/ha", 12)
+        }
+        if let s = box.shutterSlide, !s.isEmpty {
+            drawRow("  Shutter slide", s, 12)
+        }
+        if let f = box.bottomFlap, !f.isEmpty {
+            drawRow("  Bottom flap", f, 12)
+        }
+        if let w = box.meteringWheel, !w.isEmpty {
+            drawRow("  Metering wheel", w, 12)
+        }
+        if let v = box.seedVolumeKg {
+            drawRow("  Seed volume", "\(formatNumber(v)) kg", 12)
+        }
+        if let g = box.gearboxSetting {
+            drawRow("  Gearbox setting", formatNumber(g), 12)
+        }
+    }
+
+    private static func parseEndReviewCompleted(_ events: [String]) -> [Double] {
+        var paths: [Double] = []
+        let marker = "end_review_completed: ["
+        for event in events {
+            guard let range = event.range(of: marker),
+                  let endRange = event.range(of: "]", range: range.upperBound..<event.endIndex) else { continue }
+            let inner = event[range.upperBound..<endRange.lowerBound]
+            for piece in inner.split(separator: ",") {
+                let trimmed = piece.trimmingCharacters(in: .whitespaces)
+                if let v = Double(trimmed) { paths.append(v) }
+            }
+        }
+        return paths
+    }
+
+    private struct CorrectionLine {
+        let time: String
+        let description: String
+    }
+
+    private static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    private static func formatCorrectionEvent(_ event: String, timeZone: TimeZone) -> CorrectionLine {
+        // Expected shape: "<ISO8601> <note>"
+        let parts = event.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        var timeStr = ""
+        var note = event
+        if parts.count == 2, let date = isoParser.date(from: String(parts[0])) {
+            timeStr = date.formattedTZ(date: .omitted, time: .shortened, in: timeZone)
+            note = String(parts[1])
+        }
+        return CorrectionLine(time: timeStr.isEmpty ? "—" : timeStr, description: humanise(note))
+    }
+
+    private static func humanise(_ note: String) -> String {
+        if note == "manual_next_path" { return "Operator advanced to next row" }
+        if note.hasPrefix("manual_back_path: ") {
+            let v = String(note.dropFirst("manual_back_path: ".count))
+            return "Stepped back to row \(v)"
+        }
+        if note.hasPrefix("manual_complete: ") {
+            let v = String(note.dropFirst("manual_complete: ".count))
+            return "Row \(v) manually marked complete"
+        }
+        if note.hasPrefix("manual_skip: ") {
+            let v = String(note.dropFirst("manual_skip: ".count))
+            return "Row \(v) manually skipped"
+        }
+        if note.hasPrefix("confirm_locked_path: ") {
+            let v = String(note.dropFirst("confirm_locked_path: ".count))
+            return "Operator confirmed current row \(v)"
+        }
+        if note.hasPrefix("snap_to_live_path: ") {
+            let v = String(note.dropFirst("snap_to_live_path: ".count))
+            return "Snapped planned sequence to live row \(v)"
+        }
+        if note.hasPrefix("auto_realign_accepted: ") {
+            let v = String(note.dropFirst("auto_realign_accepted: ".count))
+            return "Auto-realign accepted for row \(v)"
+        }
+        if note.hasPrefix("auto_realign_ignored: ") {
+            let v = String(note.dropFirst("auto_realign_ignored: ".count))
+            return "Auto-realign ignored for row \(v)"
+        }
+        if note.hasPrefix("paddocks_added: ") {
+            let v = String(note.dropFirst("paddocks_added: ".count))
+            return "Added blocks: \(v)"
+        }
+        if note.hasPrefix("end_review_completed: ") {
+            let v = String(note.dropFirst("end_review_completed: ".count))
+            return "End-review manually marked complete: \(v)"
+        }
+        if note == "end_review_finalised" {
+            return "End-trip review finalised"
+        }
+        return note
+    }
+
+    private static func pathListText(_ paths: [Double]) -> String {
+        paths.map { formatPath($0) }.joined(separator: ", ")
+    }
+
+    private static func formatPath(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.1f", value)
+    }
+
+    private static func formatNumber(_ value: Double) -> String {
+        if value.truncatingRemainder(dividingBy: 1) == 0 {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%g", value)
     }
 
     static func captureMapSnapshot(trip: Trip) async -> UIImage? {
