@@ -485,11 +485,18 @@ struct ActiveTripView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .font(.headline)
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
                 }
+                .accessibilityLabel("Trip options")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 10) {
+                // Stacked status pill: speed prominent on top, GPS quality
+                // and ETA stacked below as secondary info. Keeps the
+                // three-dot menu visually isolated to the far right so the
+                // operator can tap it without hitting the status chip.
+                VStack(alignment: .trailing, spacing: 2) {
                     HStack(spacing: 4) {
                         Image(systemName: "speedometer")
                             .font(.caption2)
@@ -501,22 +508,25 @@ struct ActiveTripView: View {
                             .animation(.snappy, value: displayedSpeedKmh)
                             .monospacedDigit()
                     }
-                    gpsQualityPill
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                        Text(timeLeftText)
-                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                            .foregroundStyle(.orange)
-                            .contentTransition(.numericText())
-                            .animation(.snappy, value: timeLeftText)
-                            .monospacedDigit()
+                    HStack(spacing: 8) {
+                        gpsQualityPill
+                        HStack(spacing: 3) {
+                            Image(systemName: "clock.fill")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                            Text(timeLeftText)
+                                .font(.system(.caption, design: .rounded, weight: .semibold))
+                                .foregroundStyle(.orange)
+                                .contentTransition(.numericText())
+                                .animation(.snappy, value: timeLeftText)
+                                .monospacedDigit()
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: 14))
+                .padding(.trailing, 4)
             }
         }
         .sheet(isPresented: $showSummary) {

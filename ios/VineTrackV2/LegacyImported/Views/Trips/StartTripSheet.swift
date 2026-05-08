@@ -228,9 +228,9 @@ struct StartTripSheet: View {
                 if personName.isEmpty, let name = auth.userName {
                     personName = name
                 }
-                if selectedPaddockIds.isEmpty, let first = store.paddocks.first?.id {
-                    selectedPaddockIds = [first]
-                }
+                // Intentionally do NOT pre-select a block. Operators have
+                // accidentally started trips in the wrong block when one
+                // appears auto-selected. Force them to choose explicitly.
                 clampStartPath()
                 if let vineyardId = store.selectedVineyardId,
                    tripFunctionService.loadedVineyardId != vineyardId {
@@ -890,13 +890,13 @@ struct StartTripSheet: View {
                     .accessibilityLabel("Add function")
                 }
 
-                if !canManageTripFunctions {
-                    Text("Ask an Owner or Manager to add trip functions.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
-                }
+                Text(canManageTripFunctions
+                     ? "Need another job type? Add or edit trip functions in Settings."
+                     : "Ask an Owner or Manager to add trip functions in Settings.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
 
                 HStack(spacing: 12) {
                     Image(systemName: "text.cursor")
@@ -953,23 +953,36 @@ struct StartTripSheet: View {
 
     // MARK: Start button
 
+    private var canStartTrip: Bool {
+        !selectedPaddockIds.isEmpty
+    }
+
     private var startButton: some View {
-        Button {
-            handleStart()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "play.fill")
-                    .font(.headline)
-                Text("Start Trip")
-                    .font(.headline)
+        VStack(spacing: 6) {
+            Button {
+                handleStart()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "play.fill")
+                        .font(.headline)
+                    Text("Start Trip")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(canStartTrip ? Color.blue : Color.gray.opacity(0.4), in: .rect(cornerRadius: 14))
+                .foregroundStyle(.white)
+                .shadow(color: canStartTrip ? Color.blue.opacity(0.25) : .clear, radius: 6, y: 3)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Color.blue, in: .rect(cornerRadius: 14))
-            .foregroundStyle(.white)
-            .shadow(color: Color.blue.opacity(0.25), radius: 6, y: 3)
+            .buttonStyle(.plain)
+            .disabled(!canStartTrip)
+
+            if !canStartTrip {
+                Text("Select at least one block to start the trip.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .buttonStyle(.plain)
         .padding(.horizontal)
     }
 
