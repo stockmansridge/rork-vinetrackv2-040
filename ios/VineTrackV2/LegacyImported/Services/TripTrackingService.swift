@@ -51,6 +51,30 @@ final class TripTrackingService {
     var diagFreeDriveDwellSamples: Int = 0
     var diagFreeDriveCompletedCount: Int = 0
 
+    // Row-lock diagnostics (apply to BOTH planned and free-drive modes)
+    /// The path the tracker is *currently locked onto* — the row the
+    /// tractor is physically working in. Once locked we don't switch rows
+    /// because of brief GPS drift; only after sustained off-corridor
+    /// evidence on the locked row plus dwell on a new candidate.
+    var diagLockedPath: Double?
+    /// 0–1 confidence the locked path is correct, derived from how long
+    /// we have been continuously in-corridor on that row.
+    var diagLockConfidence: Double = 0
+    /// Seconds we have been continuously in-corridor on the locked path.
+    var diagLockDwellSeconds: Double = 0
+    /// True when the GPS is within `nearRowEndTolerance` metres of
+    /// either end of the planned/locked row (used to suppress
+    /// wrong-row warnings around row ends).
+    var diagNearRowEnd: Bool = false
+    /// Percentage of the planned path covered (0–100). Drives the
+    /// ">50% completion suppresses wrong-row warning" rule.
+    var diagPlannedCompletionPercent: Double = 0
+    /// Reason the wrong-row banner is suppressed, if any. Surfaced to the
+    /// in-app diagnostics dump so we can verify field behaviour.
+    var diagWrongRowSuppressedReason: String?
+    /// Recent manual-correction events recorded during this trip.
+    var diagManualCorrectionEvents: [String] = []
+
     /// Smoothed ground speed in m/s, derived from CLLocation.speed when valid
     /// and otherwise from the recent point window. Use this instead of
     /// `locationService.location?.speed` to avoid the half-speed dropout that
@@ -102,6 +126,28 @@ final class TripTrackingService {
     }
     private var freeDriveSamples: [FreeDrivePathSample] = []
     private var freeDriveStablePath: Double?
+
+    // MARK: - Row lock (applies to both planned and free-drive modes)
+    /// Currently locked path. Held across short out-of-corridor blips so
+    /// brief GPS drift, headland turns and row-end manoeuvres don't
+    /// flip the operator into a wrong-row warning.
+    private var lockedPath: Double?
+    private var lockedPathSince: Date?
+    /// Date of the last in-corridor sample on the locked path. Used to
+    /// detect sustained departure before unlocking.
+    private var lastInCorridorOnLockedAt: Date?
+    /// Candidate competing path — only takes over after dwell.
+    private var candidatePath: Double?
+    private var candidateInCorridorCount: Int = 0
+    private var candidateSince: Date?
+    /// Min seconds in-corridor on a new candidate before we switch lock.
+    private let lockSwitchDwellSeconds: TimeInterval = 4.0
+    /// Min seconds out-of-corridor on the locked row before we will even
+    /// consider switching. Vines physically prevent sideways movement.
+    private let lockReleaseGraceSeconds: TimeInterval = 3.0
+    /// Distance (metres) from row end that counts as "near" the headland.
+    /// Wrong-row warnings are suppressed within this radius.
+    private let nearRowEndTolerance: Double = 12.0
     /// Window length used to pick the majority detected path.
     private let freeDriveWindow: TimeInterval = 6.0
     /// Minimum consecutive recent in-corridor samples on a new candidate
@@ -224,6 +270,19 @@ final class TripTrackingService {
         lastLivePathInCorridor = nil
         freeDriveSamples.removeAll()
         freeDriveStablePath = nil
+        lockedPath = nil
+        lockedPathSince = nil
+        lastInCorridorOnLockedAt = nil
+        candidatePath = nil
+        candidateInCorridorCount = 0
+        candidateSince = nil
+        diagLockedPath = nil
+        diagLockConfidence = 0
+        diagLockDwellSeconds = 0
+        diagNearRowEnd = false
+        diagPlannedCompletionPercent = 0
+        diagWrongRowSuppressedReason = nil
+        diagManualCorrectionEvents.removeAll()
         diagFreeDriveActive = false
         diagFreeDriveCandidatePath = nil
         diagFreeDriveStablePath = nil
@@ -698,6 +757,25 @@ final class TripTrackingService {
         diagPlannedPathLengthMeters = currentSequencePath.flatMap { rowLength(forPath: $0, paddock: paddock) }
         diagAccumulatedMeters = currentSequencePath.map { pathDistanceMap[$0, default: 0] } ?? 0
 
+        // Update the path-lock state for both planned and free-drive
+        // modes. Once locked, the tractor is treated as remaining on
+        // that row until there is sustained evidence to the contrary.
+        updatePathLock(livePath: livePath, inCorridor: inCorridor)
+
+        // Near-row-end + completion percentage — used by the UI to
+        // suppress wrong-row warnings when we are likely just
+        // approaching/leaving the headland or have already covered most
+        // of the planned row.
+        let lockedOrPlanned = lockedPath ?? currentSequencePath
+        diagNearRowEnd = lockedOrPlanned.map {
+            isNearPathEnd(path: $0, paddock: paddock, location: locationService?.location, tolerance: nearRowEndTolerance)
+        } ?? false
+        if let len = diagPlannedPathLengthMeters, len > 0 {
+            diagPlannedCompletionPercent = min(100, diagAccumulatedMeters / len * 100)
+        } else {
+            diagPlannedCompletionPercent = 0
+        }
+
         let isFreeDrive = trip.trackingPattern == .freeDrive
 
         if isFreeDrive {
@@ -745,7 +823,13 @@ final class TripTrackingService {
             diagFreeDriveCompletedCount = trip.completedPaths.count
         } else {
             diagFreeDriveActive = false
-            if inCorridor {
+            // Prefer the LOCKED path for the live indicator. This keeps
+            // the displayed row stable when GPS briefly drifts out of
+            // corridor or near the row end. Falls back to live in-corridor
+            // path, then last seen, then planned target.
+            if let locked = lockedPath {
+                currentRowNumber = locked
+            } else if inCorridor {
                 lastLivePathInCorridor = livePath
                 currentRowNumber = livePath
             } else if let held = lastLivePathInCorridor {
@@ -1038,6 +1122,161 @@ final class TripTrackingService {
             if location.distance(from: end) <= tolerance { return true }
         }
         return false
+    }
+
+    // MARK: - Row lock
+
+    /// Update the locked path / candidate path state. Vines physically
+    /// prevent the tractor from changing rows mid-way, so we hold the
+    /// lock through brief out-of-corridor blips and only switch after
+    /// sustained evidence that the tractor is genuinely in another row.
+    private func updatePathLock(livePath: Double, inCorridor: Bool) {
+        let now = Date()
+
+        if lockedPath == nil {
+            // No lock yet — first solid in-corridor sample claims the lock.
+            if inCorridor {
+                lockedPath = livePath
+                lockedPathSince = now
+                lastInCorridorOnLockedAt = now
+                candidatePath = nil
+                candidateInCorridorCount = 0
+                candidateSince = nil
+            }
+        } else if let locked = lockedPath, abs(locked - livePath) < 0.01 {
+            // Still on the locked path. Refresh the in-corridor timestamp
+            // when GPS confirms we are inside the corridor.
+            if inCorridor { lastInCorridorOnLockedAt = now }
+            candidatePath = nil
+            candidateInCorridorCount = 0
+            candidateSince = nil
+        } else if inCorridor {
+            // GPS reports a different in-corridor path. Only switch the
+            // lock if we have been off the previously locked corridor for
+            // a sustained grace period AND dwelled on the new path.
+            let releasedAgo = lastInCorridorOnLockedAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+            if let cand = candidatePath, abs(cand - livePath) < 0.01 {
+                candidateInCorridorCount += 1
+            } else {
+                candidatePath = livePath
+                candidateInCorridorCount = 1
+                candidateSince = now
+            }
+            let dwell = candidateSince.map { now.timeIntervalSince($0) } ?? 0
+            if releasedAgo >= lockReleaseGraceSeconds && dwell >= lockSwitchDwellSeconds {
+                lockedPath = livePath
+                lockedPathSince = now
+                lastInCorridorOnLockedAt = now
+                candidatePath = nil
+                candidateInCorridorCount = 0
+                candidateSince = nil
+            }
+        }
+        // Else: out of corridor and not on locked row — hold lock.
+
+        diagLockedPath = lockedPath
+        if let since = lockedPathSince {
+            let dwell = now.timeIntervalSince(since)
+            diagLockDwellSeconds = dwell
+            // Saturate to 1.0 after ~10s of continuous lock.
+            diagLockConfidence = min(1.0, dwell / 10.0)
+        } else {
+            diagLockDwellSeconds = 0
+            diagLockConfidence = 0
+        }
+    }
+
+    // MARK: - Manual correction
+
+    /// Force the planned-sequence index to the row the tractor is
+    /// physically on right now. Records a diagnostic breadcrumb so we
+    /// can audit the override after the trip.
+    func snapPlannedSequenceToCurrentLivePath() {
+        guard var trip = activeTrip, !trip.rowSequence.isEmpty else { return }
+        guard let livePath = lockedPath ?? diagLiveDetectedPath else { return }
+        if let idx = trip.rowSequence.firstIndex(where: { abs($0 - livePath) < 0.01 }) {
+            trip.sequenceIndex = idx
+            trip.currentRowNumber = trip.rowSequence[idx]
+            if idx + 1 < trip.rowSequence.count {
+                trip.nextRowNumber = trip.rowSequence[idx + 1]
+            }
+            store?.updateTrip(trip)
+            recordCorrection("snap_to_live_path: \(livePath)")
+        }
+    }
+
+    /// Mark the current planned path as completed manually and advance.
+    func markCurrentPlannedPathComplete() {
+        guard var trip = activeTrip, !trip.rowSequence.isEmpty else { return }
+        let path = trip.rowSequence.indices.contains(trip.sequenceIndex)
+            ? trip.rowSequence[trip.sequenceIndex]
+            : trip.currentRowNumber
+        if !trip.completedPaths.contains(path),
+           !trip.skippedPaths.contains(path) {
+            trip.completedPaths.append(path)
+        }
+        // Advance to next pending path.
+        var next = trip.sequenceIndex + 1
+        while next < trip.rowSequence.count {
+            let p = trip.rowSequence[next]
+            if !trip.completedPaths.contains(p) && !trip.skippedPaths.contains(p) { break }
+            next += 1
+        }
+        let clamped = min(next, max(trip.rowSequence.count - 1, 0))
+        trip.sequenceIndex = clamped
+        if trip.rowSequence.indices.contains(clamped) {
+            trip.currentRowNumber = trip.rowSequence[clamped]
+        }
+        store?.updateTrip(trip)
+        recordCorrection("manual_complete: \(path)")
+    }
+
+    /// Skip the current planned path manually and advance.
+    func skipCurrentPlannedPath() {
+        guard var trip = activeTrip, !trip.rowSequence.isEmpty else { return }
+        let path = trip.rowSequence.indices.contains(trip.sequenceIndex)
+            ? trip.rowSequence[trip.sequenceIndex]
+            : trip.currentRowNumber
+        if !trip.skippedPaths.contains(path),
+           !trip.completedPaths.contains(path) {
+            trip.skippedPaths.append(path)
+        }
+        var next = trip.sequenceIndex + 1
+        while next < trip.rowSequence.count {
+            let p = trip.rowSequence[next]
+            if !trip.completedPaths.contains(p) && !trip.skippedPaths.contains(p) { break }
+            next += 1
+        }
+        let clamped = min(next, max(trip.rowSequence.count - 1, 0))
+        trip.sequenceIndex = clamped
+        if trip.rowSequence.indices.contains(clamped) {
+            trip.currentRowNumber = trip.rowSequence[clamped]
+        }
+        store?.updateTrip(trip)
+        recordCorrection("manual_skip: \(path)")
+    }
+
+    /// Operator-confirmed override of the locked row. Useful when the
+    /// detection has drifted and the operator knows which row they are
+    /// in. Sets the lock immediately with full confidence.
+    func confirmCurrentLockedPath(_ path: Double) {
+        lockedPath = path
+        lockedPathSince = Date().addingTimeInterval(-10) // full confidence
+        lastInCorridorOnLockedAt = Date()
+        candidatePath = nil
+        candidateInCorridorCount = 0
+        candidateSince = nil
+        diagLockedPath = path
+        diagLockConfidence = 1.0
+        recordCorrection("confirm_locked_path: \(path)")
+    }
+
+    private func recordCorrection(_ note: String) {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        diagManualCorrectionEvents.append("\(stamp) \(note)")
+        if diagManualCorrectionEvents.count > 30 {
+            diagManualCorrectionEvents.removeFirst(diagManualCorrectionEvents.count - 30)
+        }
     }
 
     private func rowLength(forPath path: Double, paddock: Paddock) -> Double? {

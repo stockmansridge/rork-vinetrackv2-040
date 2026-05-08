@@ -20,6 +20,8 @@ struct ActiveTripView: View {
     @State private var smoothedCourse: Double?
     @State private var noGpsToast: Bool = false
     @State private var showRowIndicator: Bool = true
+    @State private var showPinOverlay: Bool = false
+    @State private var showManualCorrection: Bool = false
     @State private var showEndConfirmation: Bool = false
     @State private var showSummary: Bool = false
     @State private var showRepairs: Bool = false
@@ -152,6 +154,20 @@ struct ActiveTripView: View {
         if isFreeDrive { return false }
         guard let planned = plannedPath, let live = liveDetectedPath else { return false }
         return abs(planned - live) > 0.01
+    }
+
+    /// True when the wrong-row warning should be ACTIVELY shown to the
+    /// operator. Suppressed near row ends (turning area) and when the
+    /// operator has already covered most of the planned row, since at
+    /// that point the right move is to finish/accept the row rather
+    /// than redirect the tractor.
+    private var shouldShowWrongPathBanner: Bool {
+        guard isOffPlannedPath else { return false }
+        if tracking.diagNearRowEnd { return false }
+        if tracking.diagPlannedCompletionPercent > 50 { return false }
+        // Require some lock confidence so brief GPS hops don't trigger.
+        if tracking.diagLockConfidence < 0.3 { return false }
+        return true
     }
 
     /// Path used to render the left/right side row labels. Live detected
@@ -335,7 +351,7 @@ struct ActiveTripView: View {
                     rowIndicatorOverlay
                 }
 
-                if isOffPlannedPath {
+                if shouldShowWrongPathBanner {
                     wrongPathBanner
                 }
             }
@@ -359,6 +375,37 @@ struct ActiveTripView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Section("Row correction") {
+                        Button {
+                            tracking.snapPlannedSequenceToCurrentLivePath()
+                        } label: {
+                            Label("I'm on this row", systemImage: "location.viewfinder")
+                        }
+                        .disabled(trip.rowSequence.isEmpty || liveDetectedPath == nil)
+
+                        Button {
+                            tracking.markCurrentPlannedPathComplete()
+                        } label: {
+                            Label("Mark current path complete", systemImage: "checkmark.circle")
+                        }
+                        .disabled(trip.rowSequence.isEmpty)
+
+                        Button {
+                            tracking.skipCurrentPlannedPath()
+                        } label: {
+                            Label("Skip current path", systemImage: "forward.end")
+                        }
+                        .disabled(trip.rowSequence.isEmpty)
+
+                        if let live = liveDetectedPath {
+                            Button {
+                                tracking.confirmCurrentLockedPath(live)
+                            } label: {
+                                Label("Confirm I'm on path \(formatPath(live))", systemImage: "hand.thumbsup")
+                            }
+                        }
+                    }
+                    Divider()
                     Button {
                         copyDiagnosticsToClipboard()
                     } label: {
@@ -489,23 +536,12 @@ struct ActiveTripView: View {
 
     // MARK: - Map controls
 
-    /// Stacked map control column. Three actions, all designed for one-tap
-    /// use in a bouncing tractor: recenter, zoom-to-tractor (close), and
-    /// heading-up navigation mode.
+    /// Stacked map control column. Each control has to be one-tap usable
+    /// in a bouncing tractor — we deliberately removed the redundant
+    /// "go-to-location" recentre button (the zoom button already centres
+    /// on the tractor) and the unreliable heading-up Navigation mode.
     private var mapControls: some View {
         VStack(spacing: 8) {
-            mapControlButton(
-                systemImage: isFollowingUser && mapMode == .free ? "location.fill" : "location",
-                tint: isFollowingUser && mapMode == .free ? Color.accentColor : .primary
-            ) {
-                guard ensureGpsAvailable() else { return }
-                isFollowingUser = true
-                mapMode = .free
-                withAnimation(.snappy) {
-                    position = .userLocation(fallback: .automatic)
-                }
-            }
-
             mapControlButton(
                 systemImage: "scope",
                 tint: mapMode == .zoomed ? Color.accentColor : .primary
@@ -514,17 +550,17 @@ struct ActiveTripView: View {
             }
 
             mapControlButton(
-                systemImage: mapMode == .navigation ? "location.north.line.fill" : "location.north.line",
-                tint: mapMode == .navigation ? Color.accentColor : .primary
-            ) {
-                mapMode = .navigation
-            }
-
-            mapControlButton(
                 systemImage: showRowIndicator ? "arrow.left.and.right.circle.fill" : "arrow.left.and.right.circle",
                 tint: .primary
             ) {
                 withAnimation(.snappy) { showRowIndicator.toggle() }
+            }
+
+            mapControlButton(
+                systemImage: showPinOverlay ? "mappin.circle.fill" : "mappin.circle",
+                tint: showPinOverlay ? Color.accentColor : .primary
+            ) {
+                withAnimation(.snappy) { showPinOverlay.toggle() }
             }
         }
     }
@@ -788,9 +824,39 @@ struct ActiveTripView: View {
         lines.append("  label upper row: \(upper)")
         lines.append("  left label: \(leftRowLabel)")
         lines.append("  right label: \(rightRowLabel)")
-        lines.append("  off-planned-path warning active: \(isOffPlannedPath)")
-        lines.append("  warningActive: \(isOffPlannedPath)")
+        lines.append("  off-planned-path: \(isOffPlannedPath)")
+        lines.append("  warning shown: \(shouldShowWrongPathBanner)")
+        lines.append("  near row end: \(tracking.diagNearRowEnd)")
+        lines.append("  planned completion: \(fmt(tracking.diagPlannedCompletionPercent, 0, suffix: "%"))")
+        lines.append("  locked path: \(tracking.diagLockedPath.map { String($0) } ?? "nil")")
+        lines.append("  lock confidence: \(fmt(tracking.diagLockConfidence, 2))")
+        lines.append("  lock dwell: \(fmt(tracking.diagLockDwellSeconds, 1, suffix: " s"))")
+        if let reason = tracking.diagWrongRowSuppressedReason {
+            lines.append("  suppression reason: \(reason)")
+        }
         lines.append("")
+        lines.append("GPS service:")
+        lines.append("  desiredAccuracy: best (high-accuracy active=\(locationService.isHighAccuracyEnabled))")
+        lines.append("  background updates: \(locationService.isBackgroundUpdatingEnabled)")
+        lines.append("  update interval (ema): \(fmt(locationService.averageUpdateInterval, 2, suffix: " s"))")
+        lines.append("  update count: \(locationService.locationUpdateCount)")
+        if let last = locationService.lastUpdateTimestamp {
+            lines.append("  last update: \(isoFormatter.string(from: last))")
+        }
+        lines.append("  raw CLLocation.speed: \(fmt(loc?.speed, 2, suffix: " m/s"))")
+        lines.append("")
+        lines.append("Map:")
+        lines.append("  camera mode: \(mapMode == .free ? "free" : (mapMode == .zoomed ? "zoomed" : "navigation"))")
+        lines.append("  pin overlay: \(showPinOverlay ? "on" : "off")")
+        lines.append("  visible pins: \(visibleMapPins.count)")
+        lines.append("")
+        if !tracking.diagManualCorrectionEvents.isEmpty {
+            lines.append("Manual corrections:")
+            for event in tracking.diagManualCorrectionEvents.suffix(10) {
+                lines.append("  \(event)")
+            }
+            lines.append("")
+        }
         lines.append("Map / trail:")
         lines.append("  full point count: \(live.pathPoints.count)")
         lines.append("  display point count: \(trailDiagDisplayCount)")
@@ -819,6 +885,40 @@ struct ActiveTripView: View {
         }
         lines.append("Warning: \(warning)")
         return lines.joined(separator: "\n")
+    }
+
+    /// Pins rendered on the live trip map. By default we show only pins
+    /// that belong to the current trip. With the pin-overlay toggle ON
+    /// the operator also sees existing pins in the same vineyard so they
+    /// can avoid dropping duplicates before the warning is triggered.
+    private var visibleMapPins: [VinePin] {
+        let tripPins = store.pins.filter { $0.tripId == trip.id }
+        guard showPinOverlay else { return tripPins }
+        let vineyardId = store.selectedVineyardId
+        let blockIds: Set<UUID> = {
+            var ids = Set<UUID>(trip.paddockIds)
+            if let id = trip.paddockId { ids.insert(id) }
+            if let id = tracking.currentPaddockId { ids.insert(id) }
+            return ids
+        }()
+        let overlay = store.pins.filter { pin in
+            if let v = vineyardId, pin.vineyardId != v { return false }
+            if !blockIds.isEmpty, let pid = pin.paddockId, !blockIds.contains(pid) {
+                // include pins outside selected blocks too if they share
+                // the vineyard — but cap to vineyard scope only.
+                return true
+            }
+            return true
+        }
+        // Keep performance reasonable by capping overlay pin count.
+        let combined = (tripPins + overlay).reduce(into: [UUID: VinePin]()) { acc, pin in
+            acc[pin.id] = pin
+        }
+        let unique = Array(combined.values)
+        if unique.count > 250 {
+            return Array(unique.prefix(250))
+        }
+        return unique
     }
 
     private var navTitle: String {
@@ -1004,7 +1104,7 @@ struct ActiveTripView: View {
                     .stroke(segment.color, lineWidth: 4)
             }
 
-            ForEach(store.pins.filter { $0.tripId == trip.id }) { pin in
+            ForEach(visibleMapPins) { pin in
                 Annotation(pin.buttonName, coordinate: pin.coordinate) {
                     Circle()
                         .fill(Color.fromString(pin.buttonColor))
@@ -1019,45 +1119,45 @@ struct ActiveTripView: View {
         .mapStyle(.hybrid)
     }
 
-    /// Prominent banner shown when the live detected path differs from the
-    /// planned path while the tractor is in corridor. Designed to be loud
-    /// enough to stop the operator before continuing down the wrong row.
+    /// Compact wrong-row pill rendered above the side row chips so the
+    /// row labels remain visible. Sits centred at the top of the map and
+    /// keeps within a fixed width so it never reaches the left/right
+    /// row labels.
     private var wrongPathBanner: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3.weight(.bold))
-                Text("Wrong row / path")
-                    .font(.headline.weight(.heavy))
-            }
-            if let live = liveDetectedPath, let planned = plannedPath {
-                Text("You are on path \(formatPath(live)). Planned path is \(formatPath(planned)).")
-                    .font(.subheadline.weight(.semibold))
-                    .multilineTextAlignment(.center)
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.bold))
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Wrong row")
+                    .font(.caption.weight(.heavy))
+                if let live = liveDetectedPath, let planned = plannedPath {
+                    Text("on \(formatPath(live)) · planned \(formatPath(planned))")
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                }
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .background(
             LinearGradient(
                 colors: [Color.red, Color.red.opacity(0.85)],
                 startPoint: .top,
                 endPoint: .bottom
             ),
-            in: .rect(cornerRadius: 14)
+            in: Capsule()
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(.white.opacity(0.3), lineWidth: 1)
+            Capsule().stroke(.white.opacity(0.3), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
-        .padding(.horizontal, 16)
+        .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+        .frame(maxWidth: 280)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.top, 64)
+        .padding(.top, 8)
         .allowsHitTesting(false)
         .transition(.move(edge: .top).combined(with: .opacity))
-        .sensoryFeedback(.warning, trigger: isOffPlannedPath)
+        .sensoryFeedback(.warning, trigger: shouldShowWrongPathBanner)
     }
 
     private var rowIndicatorOverlay: some View {
@@ -1068,6 +1168,9 @@ struct ActiveTripView: View {
             Spacer()
 
             rowChip(arrow: "arrow.right", label: rightRowLabel)
+                // Push the right chip down past the stacked map controls
+                // so it doesn't overlap with them.
+                .padding(.top, 180)
                 .padding(.trailing, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -1086,10 +1189,10 @@ struct ActiveTripView: View {
                 .font(.system(.caption, design: .rounded, weight: .bold))
                 .contentTransition(.numericText())
         }
-        .foregroundStyle(isOffPlannedPath ? Color.white : Color.primary)
+        .foregroundStyle(shouldShowWrongPathBanner ? Color.white : Color.primary)
         .frame(width: 78, height: 60)
         .background {
-            if isOffPlannedPath {
+            if shouldShowWrongPathBanner {
                 PulsingRedBackground()
             } else {
                 RoundedRectangle(cornerRadius: 10)
@@ -1098,9 +1201,9 @@ struct ActiveTripView: View {
         }
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isOffPlannedPath ? Color.white.opacity(0.6) : Color.clear, lineWidth: 1)
+                .stroke(shouldShowWrongPathBanner ? Color.white.opacity(0.6) : Color.clear, lineWidth: 1)
         )
-        .animation(.easeInOut(duration: 0.25), value: isOffPlannedPath)
+        .animation(.easeInOut(duration: 0.25), value: shouldShowWrongPathBanner)
     }
 
     // MARK: - Trail throttling
@@ -1236,24 +1339,25 @@ struct ActiveTripView: View {
     }
 
     private var currentRowBanner: some View {
-        HStack(spacing: 10) {
+        let warn = shouldShowWrongPathBanner
+        return HStack(spacing: 10) {
             Image(systemName: "location.fill")
                 .font(.subheadline)
-                .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
+                .foregroundStyle(warn ? Color.white : Color.accentColor)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(isOffPlannedPath ? "LIVE PATH (WRONG ROW)" : "CURRENT PATH")
+                Text(warn ? "LIVE PATH (WRONG ROW)" : "CURRENT PATH")
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(isOffPlannedPath ? Color.white.opacity(0.9) : .secondary)
+                    .foregroundStyle(warn ? Color.white.opacity(0.9) : .secondary)
                 HStack(spacing: 4) {
                     Text("Path \(formatPath(displayPath))")
                         .font(.system(.title3, design: .rounded, weight: .bold))
-                        .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
+                        .foregroundStyle(warn ? Color.white : Color.accentColor)
                         .contentTransition(.numericText())
                     if let blockName = currentPaddock?.name {
                         Text("• \(blockName)")
                             .font(.subheadline)
-                            .foregroundStyle(isOffPlannedPath ? Color.white.opacity(0.85) : .secondary)
+                            .foregroundStyle(warn ? Color.white.opacity(0.85) : .secondary)
                             .lineLimit(1)
                     }
                 }
@@ -1266,20 +1370,20 @@ struct ActiveTripView: View {
             } label: {
                 Image(systemName: "list.bullet.clipboard")
                     .font(.title3)
-                    .foregroundStyle(isOffPlannedPath ? Color.white : Color.accentColor)
+                    .foregroundStyle(warn ? Color.white : Color.accentColor)
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background {
-            if isOffPlannedPath {
+            if warn {
                 PulsingRedBackground(cornerRadius: 0)
             } else {
                 Color(.secondarySystemGroupedBackground)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: isOffPlannedPath)
+        .animation(.easeInOut(duration: 0.25), value: warn)
     }
 
     private func sprayBanner(record: SprayRecord) -> some View {

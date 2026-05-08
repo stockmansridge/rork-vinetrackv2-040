@@ -13,6 +13,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private(set) var isBackgroundUpdatingEnabled: Bool = false
     private(set) var isHighAccuracyEnabled: Bool = false
 
+    // MARK: - Diagnostics
+    /// Timestamp of the most recent CLLocation delivered to us. Public so
+    /// the active-trip diagnostics view can show GPS staleness.
+    var lastUpdateTimestamp: Date?
+    /// Smoothed (EMA) interval between successive CLLocation updates, in
+    /// seconds. ~1.0s when GPS is healthy. Spikes when GPS drops.
+    var averageUpdateInterval: TimeInterval = 0
+    /// Total CLLocation samples received since launch. Useful for
+    /// confirming GPS is actively delivering during a field test.
+    var locationUpdateCount: Int = 0
+
     /// Maximum age (seconds) before a cached GPS fix is considered stale
     /// for pin creation. Anything older than this should trigger a warning
     /// rather than silently saving a bad pin.
@@ -89,14 +100,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         isBackgroundUpdatingEnabled = false
     }
 
-    /// Switch to highest-practical GPS accuracy for active trips. Uses
-    /// `kCLLocationAccuracyBestForNavigation` so live row guidance and
-    /// pin placement get the freshest, most accurate fix the device can
-    /// provide. Restored to `kCLLocationAccuracyBest` once the trip ends
-    /// to preserve battery during normal app use.
+    /// Active-trip accuracy. We deliberately stay on
+    /// `kCLLocationAccuracyBest` instead of `BestForNavigation` — the
+    /// navigation accuracy mode applies aggressive iOS-side smoothing
+    /// that halves reported speed at slow tractor pace and also throttles
+    /// updates for *other* apps using location, which matched the field
+    /// report (third-party speedometer also halved while a VineTrack
+    /// trip was running).
     func enableHighAccuracyForActiveTrip() {
         guard !isHighAccuracyEnabled else { return }
-        manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+        manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.distanceFilter = kCLDistanceFilterNone
         isHighAccuracyEnabled = true
     }
@@ -157,6 +170,19 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         let last = locations.last
         Task { @MainActor in
             guard let last else { return }
+            let now = Date()
+            if let prev = self.lastUpdateTimestamp {
+                let dt = now.timeIntervalSince(prev)
+                if dt > 0, dt < 30 {
+                    if self.averageUpdateInterval > 0 {
+                        self.averageUpdateInterval = self.averageUpdateInterval * 0.7 + dt * 0.3
+                    } else {
+                        self.averageUpdateInterval = dt
+                    }
+                }
+            }
+            self.lastUpdateTimestamp = now
+            self.locationUpdateCount &+= 1
             self.location = last
             self.isUsingMockLocation = false
         }
