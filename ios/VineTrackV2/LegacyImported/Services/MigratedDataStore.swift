@@ -56,6 +56,14 @@ final class MigratedDataStore {
     /// Called when a pin is deleted locally.
     var onPinDeleted: ((UUID) -> Void)?
 
+    /// Provides the currently-authenticated user UUID, used to self-heal
+    /// `createdByUserId` on pins that were saved before auth was wired up
+    /// (or on creation paths that forgot to plumb auth in).
+    var currentUserIdProvider: (() -> UUID?)?
+    /// Provides the currently-authenticated user display name. Used as a
+    /// last-resort fallback for `createdBy` text when missing.
+    var currentUserNameProvider: (() -> String?)?
+
     /// Called when a paddock is added/updated locally. Sync services observe
     /// this to mark the paddock as dirty for upload.
     var onPaddockChanged: ((UUID) -> Void)?
@@ -583,6 +591,22 @@ final class MigratedDataStore {
         guard let vineyardId = selectedVineyardId else { return }
         var item = pin
         item.vineyardId = vineyardId
+        // Self-heal: stamp the current authenticated user as the creator if
+        // the caller forgot to plumb auth through. Never overwrite an
+        // existing non-nil value.
+        if item.createdByUserId == nil, let uid = currentUserIdProvider?() {
+            item.createdByUserId = uid
+            if (item.createdBy ?? "").isEmpty,
+               let name = currentUserNameProvider?(), !name.isEmpty {
+                item.createdBy = name
+            }
+            #if DEBUG
+            print("[Pins] addPin self-stamped createdByUserId=\(uid) on pin \(item.id)")
+            #endif
+        }
+        #if DEBUG
+        print("[Pins] addPin id=\(item.id) createdBy=\(item.createdBy ?? "nil") createdByUserId=\(item.createdByUserId?.uuidString ?? "nil")")
+        #endif
         pins.append(item)
         pinRepo.saveSlice(pins, for: vineyardId)
         onPinChanged?(item.id)
@@ -591,9 +615,22 @@ final class MigratedDataStore {
     func updatePin(_ pin: VinePin) {
         guard let vineyardId = selectedVineyardId else { return }
         guard let index = pins.firstIndex(where: { $0.id == pin.id }) else { return }
-        pins[index] = pin
+        var item = pin
+        // Self-heal: never push a pin with a nil createdByUserId if we have
+        // an authenticated user available locally.
+        if item.createdByUserId == nil, let uid = currentUserIdProvider?() {
+            item.createdByUserId = uid
+            if (item.createdBy ?? "").isEmpty,
+               let name = currentUserNameProvider?(), !name.isEmpty {
+                item.createdBy = name
+            }
+            #if DEBUG
+            print("[Pins] updatePin self-stamped createdByUserId=\(uid) on pin \(item.id)")
+            #endif
+        }
+        pins[index] = item
         pinRepo.saveSlice(pins, for: vineyardId)
-        onPinChanged?(pin.id)
+        onPinChanged?(item.id)
     }
 
     func deletePin(_ pinId: UUID) {

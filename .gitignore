@@ -6,3 +6,4 @@ migration/out/*
 !migration/out/.gitkeep
 migration/node_modules/
 migration/bun.lock
+.rork

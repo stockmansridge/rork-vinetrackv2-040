@@ -47,6 +47,10 @@ final class PinSyncService {
     func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
         self.store = store
         self.auth = auth
+        // Always refresh the user-id/name providers so addPin/updatePin can
+        // self-heal even on subsequent sign-ins. Safe to overwrite.
+        store.currentUserIdProvider = { [weak auth] in auth?.userId }
+        store.currentUserNameProvider = { [weak auth] in auth?.userName }
         guard !isConfigured else { return }
         isConfigured = true
         store.onPinChanged = { [weak self] id in
@@ -149,10 +153,27 @@ final class PinSyncService {
                         // Still upsert pin metadata; photo will retry next sync.
                     }
                 }
-                payloads.append(BackendPin.upsert(from: pin, clientUpdatedAt: ts))
+                let payload = BackendPin.upsert(from: pin, clientUpdatedAt: ts)
+                #if DEBUG
+                let _createdByText = pin.createdBy ?? "nil"
+                let _createdByUserId = pin.createdByUserId?.uuidString ?? "nil"
+                let _payloadCreatedBy = payload.createdBy?.uuidString ?? "nil"
+                let _authUserId = currentUserId?.uuidString ?? "nil"
+                print("[PinSync] push pin id=\(pin.id) createdByText=\(_createdByText) createdByUserId=\(_createdByUserId) payload.created_by=\(_payloadCreatedBy) authUserId=\(_authUserId)")
+                #endif
+                payloads.append(payload)
                 pushedIds.append(pinId)
             }
             if !payloads.isEmpty {
+                #if DEBUG
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                encoder.outputFormatting = [.sortedKeys]
+                if let json = try? encoder.encode(payloads),
+                   let str = String(data: json, encoding: .utf8) {
+                    print("[PinSync] upsert payload JSON: \(str)")
+                }
+                #endif
                 try await repository.upsertPins(payloads)
                 metadata.clearDirty(pushedIds)
             }
