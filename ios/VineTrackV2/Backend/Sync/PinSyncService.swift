@@ -99,6 +99,8 @@ final class PinSyncService {
 
     func pushLocalPins(vineyardId: UUID) async throws {
         guard let store else { return }
+        let currentUserId = auth?.userId
+        let currentUserName = auth?.userName
         let dirty = metadata.pendingUpserts
         if !dirty.isEmpty {
             let pinsById = Dictionary(store.pins.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
@@ -107,6 +109,20 @@ final class PinSyncService {
             var photoUploadFailures: [String] = []
             for (pinId, ts) in dirty {
                 guard var pin = pinsById[pinId], pin.vineyardId == vineyardId else { continue }
+                // Self-heal: stamp the current authenticated user as the
+                // creator if the pin was created without one. Never
+                // overwrite an existing non-nil value — that would lose
+                // attribution to the original creator.
+                if pin.createdByUserId == nil, let uid = currentUserId {
+                    pin.createdByUserId = uid
+                    if (pin.createdBy ?? "").isEmpty, let name = currentUserName, !name.isEmpty {
+                        pin.createdBy = name
+                    }
+                    store.applyRemotePinUpsert(pin)
+                    #if DEBUG
+                    print("[PinSync] stamped created_by=\(uid) on pin \(pin.id) before push")
+                    #endif
+                }
                 // If the pin has local photo bytes but no synced path yet, upload first.
                 if let data = pin.photoData, pin.photoPath == nil {
                     // Cache locally first so even an upload failure leaves a
@@ -196,8 +212,20 @@ final class PinSyncService {
         // If remote is empty AND we have local pins AND we have never synced before,
         // push them all up so the cloud picks them up.
         if remote.isEmpty, lastSync == nil {
-            let localForVineyard = store.pins.filter { $0.vineyardId == vineyardId }
+            var localForVineyard = store.pins.filter { $0.vineyardId == vineyardId }
             if !localForVineyard.isEmpty {
+                let currentUserId = auth?.userId
+                let currentUserName = auth?.userName
+                if let uid = currentUserId {
+                    for i in localForVineyard.indices where localForVineyard[i].createdByUserId == nil {
+                        localForVineyard[i].createdByUserId = uid
+                        if (localForVineyard[i].createdBy ?? "").isEmpty,
+                           let name = currentUserName, !name.isEmpty {
+                            localForVineyard[i].createdBy = name
+                        }
+                        store.applyRemotePinUpsert(localForVineyard[i])
+                    }
+                }
                 let now = Date()
                 let payloads = localForVineyard.map {
                     BackendPin.upsert(from: $0, clientUpdatedAt: now)

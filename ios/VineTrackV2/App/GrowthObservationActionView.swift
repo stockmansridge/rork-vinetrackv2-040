@@ -217,6 +217,7 @@ struct GrowthObservationActionView: View {
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: nil
         )
         print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: .growth, resolved: resolved, store: store, tracking: tracking))
@@ -243,6 +244,7 @@ struct GrowthObservationActionView: View {
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: nil
         )
         print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: pendingSide, mode: .growth, resolved: resolved, store: store, tracking: tracking))

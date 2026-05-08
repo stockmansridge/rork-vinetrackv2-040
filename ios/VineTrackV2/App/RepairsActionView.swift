@@ -128,6 +128,7 @@ struct RepairsActionView: View {
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
+            createdByUserId: auth.userId,
             notes: nil
         )
         print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: .repairs, resolved: resolved, store: store, tracking: tracking))

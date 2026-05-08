@@ -371,7 +371,8 @@ struct RepairsGrowthView: View {
             side: side,
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
-            createdBy: auth.userName
+            createdBy: auth.userName,
+            createdByUserId: auth.userId
         )
         print(PinContextResolver.diagnostic(coordinate: coord, side: side, mode: .repairs, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {
@@ -423,7 +424,8 @@ struct RepairsGrowthView: View {
             side: .right,
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
-            createdBy: auth.userName
+            createdBy: auth.userName,
+            createdByUserId: auth.userId
         )
         print(PinContextResolver.diagnostic(coordinate: coord, side: .right, mode: .growth, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {

@@ -223,6 +223,7 @@ struct PinDropConfirmationSheet: View {
                 paddockId: selectedPaddockId,
                 rowNumber: rowNumber,
                 createdBy: auth.userName,
+                createdByUserId: auth.userId,
                 notes: finalNotes
             )
             onSaved("Pin Dropped", "\(btn.name) \u{2022} \(side == .left ? "Left" : "Right")")
@@ -237,6 +238,7 @@ struct PinDropConfirmationSheet: View {
                 paddockId: selectedPaddockId,
                 rowNumber: rowNumber,
                 createdBy: auth.userName,
+                createdByUserId: auth.userId,
                 notes: finalNotes
             )
             onSaved("Pin Dropped", "EL \(stage.code) \u{2022} \(stage.description)")
