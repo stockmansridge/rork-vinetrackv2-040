@@ -296,6 +296,13 @@ final class TripTrackingService {
     // MARK: - End
 
     func endTrip() {
+        // Final completion pass — credit the current/last locked row if
+        // it was clearly driven but never produced a normal row-end
+        // transition (typical for the last planned row, where there is
+        // no "next row" to trigger the advance). Safe to call even if
+        // the sheet already invoked it; idempotent.
+        finalizePendingRowsForReview()
+
         guard var trip = activeTrip else { return }
         // Persist the manual-correction audit trail onto the trip so the
         // saved record (and the Trip Report) reflects every override that
@@ -1312,6 +1319,14 @@ final class TripTrackingService {
                 // 50 m before the end) which then makes the planned
                 // sequence advance and triggers a spurious wrong-row
                 // warning while the operator is still driving the row.
+                //
+                // Special case: when this is the FIRST planned row, the
+                // operator very often starts the trip part-way down the
+                // row (e.g. drove the tractor from the shed into the
+                // headland). In that case 60 % of the row length is
+                // unreachable because we never accumulated the early
+                // metres. Use a forgiving threshold so the first row
+                // doesn't get stuck partial.
                 ruleUsed = "longRow"
                 let nearEnd = isNearPathEnd(
                     path: path,
@@ -1319,7 +1334,9 @@ final class TripTrackingService {
                     location: location,
                     tolerance: nearRowEndTolerance
                 )
-                let nearEndCoverage = length * 0.6
+                let isFirstPlanned: Bool = trip.sequenceIndex == 0
+                    && (trip.rowSequence.first.map { abs($0 - path) < 0.01 } ?? false)
+                let nearEndCoverage = length * (isFirstPlanned ? 0.35 : 0.6)
                 let overshootCoverage = length * 0.95
                 requiredDistance = nearEnd ? nearEndCoverage : overshootCoverage
                 if accumulated >= requiredDistance {
@@ -1702,6 +1719,103 @@ final class TripTrackingService {
         cachedRowIndexKey = []
         let names = newIds.compactMap { id in store.paddocks.first(where: { $0.id == id })?.name }
         recordCorrection("paddocks_added: \(names.joined(separator: ", "))")
+    }
+
+    /// Final-pass completion review used by the End Trip Review sheet
+    /// (and `endTrip`). Gives the current planned path and the live
+    /// locked path (if different) one last chance to be marked complete
+    /// using a more forgiving threshold than the live auto-complete.
+    ///
+    /// This is the safety net for first/last-row issues where the
+    /// normal row-end transition never fires:
+    ///  - first row was started mid-way so coverage never hits 60 %.
+    ///  - last row has no following row to trigger the advance, and
+    ///    the operator stops the trip before the exit-corridor rule
+    ///    triggers.
+    /// Idempotent — already completed/skipped paths are left alone.
+    func finalizePendingRowsForReview() {
+        guard let store, var trip = activeTrip else { return }
+        guard !trip.rowSequence.isEmpty else { return }
+
+        // Resolve all paddocks selected for this trip.
+        var ids: [UUID] = trip.paddockIds
+        if ids.isEmpty, let id = trip.paddockId { ids = [id] }
+        let paddocks: [Paddock] = ids.compactMap { id in
+            store.paddocks.first(where: { $0.id == id })
+        }
+        guard !paddocks.isEmpty else { return }
+
+        // Candidate rows to revisit: the current planned sequence path
+        // and the locked live path (if different and still in the
+        // planned sequence). We do not credit arbitrary off-cycle
+        // paths the operator drove through.
+        var candidates: [Double] = []
+        if trip.rowSequence.indices.contains(trip.sequenceIndex) {
+            candidates.append(trip.rowSequence[trip.sequenceIndex])
+        }
+        if let locked = lockedPath,
+           trip.rowSequence.contains(where: { abs($0 - locked) < 0.01 }),
+           !candidates.contains(where: { abs($0 - locked) < 0.01 }) {
+            candidates.append(locked)
+        }
+
+        var credited: [Double] = []
+        for path in candidates {
+            if trip.completedPaths.contains(path) || trip.skippedPaths.contains(path) { continue }
+            // Find the paddock that owns this path so we can measure it.
+            guard let paddock = paddocks.first(where: { rowLength(forPath: path, paddock: $0) != nil })
+                ?? paddocks.first else { continue }
+            let length = rowLength(forPath: path, paddock: paddock)
+            let accumulated = pathDistanceMap[path, default: 0]
+
+            // First or last row of the planned sequence — the cases
+            // where the live finalize most often misses the row.
+            let isFirstPlanned = trip.rowSequence.first.map { abs($0 - path) < 0.01 } ?? false
+            let isLastPlanned = trip.rowSequence.last.map { abs($0 - path) < 0.01 } ?? false
+            let isEdge = isFirstPlanned || isLastPlanned
+
+            let threshold: Double
+            if let len = length, len > 1 {
+                if len <= shortRowThresholdMetres {
+                    // Short rows: very forgiving on the review pass.
+                    threshold = max(2.0, len * 0.35)
+                } else if isEdge {
+                    // First/last long row: 25 % coverage or 20 m.
+                    threshold = max(20.0, len * 0.25)
+                } else {
+                    // Mid-sequence long row: a little stricter.
+                    threshold = max(30.0, len * 0.40)
+                }
+            } else {
+                threshold = 8.0
+            }
+
+            if accumulated >= threshold {
+                trip.completedPaths.append(path)
+                credited.append(path)
+            }
+        }
+
+        guard !credited.isEmpty else { return }
+
+        // Advance the sequence index past any newly completed entries
+        // so the End Trip Review counts reflect the fix immediately.
+        var idx = trip.sequenceIndex
+        while idx < trip.rowSequence.count {
+            let p = trip.rowSequence[idx]
+            if !trip.completedPaths.contains(p) && !trip.skippedPaths.contains(p) { break }
+            idx += 1
+        }
+        let clamped = min(idx, max(trip.rowSequence.count - 1, 0))
+        if clamped != trip.sequenceIndex {
+            trip.sequenceIndex = clamped
+            if trip.rowSequence.indices.contains(clamped) {
+                trip.currentRowNumber = trip.rowSequence[clamped]
+            }
+        }
+        store.updateTrip(trip)
+        let summary = credited.sorted().map { String(format: "%g", $0) }.joined(separator: ",")
+        recordCorrection("end_review_auto_finalize: [\(summary)]")
     }
 
     private func rowLength(forPath path: Double, paddock: Paddock) -> Double? {

@@ -122,6 +122,14 @@ struct EndTripReviewSheet: View {
             }
             .navigationTitle("Review & Finish Trip")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                // Final completion pass: credits the current/last
+                // locked row if it was clearly driven but never
+                // produced a normal row-end transition (typical for
+                // first row started mid-way and last row with no
+                // following row to trigger advance).
+                tracking.finalizePendingRowsForReview()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
