@@ -25,13 +25,17 @@ struct PinDuplicateWarningSheet: View {
     }
 
     private var attachmentLabel: String? {
-        PinAttachmentFormatter.rowAndSide(
-            rowNumber: existingPin.rowNumber,
-            side: existingPin.rowNumber != nil ? existingPin.side : nil
-        )
+        PinAttachmentFormatter.attachmentLine(existingPin)
+    }
+
+    private var drivingPathLabel: String? {
+        PinAttachmentFormatter.drivingPathLine(existingPin)
     }
 
     private var headlineText: String {
+        if let pinRow = existingPin.pinRowNumber {
+            return "Possible duplicate pin nearby on Row \(pinRow)"
+        }
         if let row = existingPin.rowNumber {
             return "Possible duplicate pin nearby on Row \(row).5"
         }
@@ -54,6 +58,12 @@ struct PinDuplicateWarningSheet: View {
                     if let attachmentLabel {
                         Text("Attached to \(attachmentLabel)")
                             .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    if let drivingPathLabel {
+                        Text(drivingPathLabel)
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
@@ -87,9 +97,15 @@ struct PinDuplicateWarningSheet: View {
                         }
                         LabeledContent("Status", value: existingPin.isCompleted ? "Completed" : "Active")
                         LabeledContent("Block", value: paddockName)
-                        if let row = existingPin.rowNumber {
+                        if let pinRow = existingPin.pinRowNumber {
+                            LabeledContent("Pin Row", value: "\(pinRow)")
+                            LabeledContent("Side", value: (existingPin.pinSide ?? existingPin.side).rawValue)
+                        } else if let row = existingPin.rowNumber {
                             LabeledContent("Row", value: "\(row).5")
                             LabeledContent("Side", value: existingPin.side.rawValue)
+                        }
+                        if let drivingPath = existingPin.drivingRowNumber {
+                            LabeledContent("Driving Path", value: String(format: "%.1f", drivingPath))
                         }
                         LabeledContent(
                             "Created",

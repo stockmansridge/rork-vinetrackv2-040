@@ -1121,12 +1121,17 @@ struct PinDetailSheet: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(pin.buttonName)
                                 .font(.title3.weight(.semibold))
-                            if let attached = PinAttachmentFormatter.rowAndSide(rowNumber: pin.rowNumber, side: pin.side) {
+                            if let attached = PinAttachmentFormatter.attachmentLine(pin) {
                                 Text("Attached to \(attached)")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(VineyardTheme.olive)
                             }
-                            Text("\(pin.side.rawValue) hand side facing \(compassDirection)")
+                            if let driving = PinAttachmentFormatter.drivingPathLine(pin) {
+                                Text(driving)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("\((pin.pinSide ?? pin.side).rawValue) hand side facing \(compassDirection)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1189,10 +1194,15 @@ struct PinDetailSheet: View {
 
                 Section("Details") {
                     LabeledContent("Block", value: paddockName)
-                    if let rowNumber = pin.rowNumber {
+                    if let pinRow = pin.pinRowNumber {
+                        LabeledContent("Pin Row", value: "\(pinRow)")
+                    } else if let rowNumber = pin.rowNumber {
                         LabeledContent("Row", value: "\(rowNumber).5")
                     }
-                    LabeledContent("Side", value: "\(pin.side.rawValue) hand")
+                    if let drivingPath = pin.drivingRowNumber {
+                        LabeledContent("Driving Path", value: String(format: "%.1f", drivingPath))
+                    }
+                    LabeledContent("Side", value: "\((pin.pinSide ?? pin.side).rawValue) hand")
                     LabeledContent("Facing", value: "\(compassDirection) (\(Int(pin.heading))\u{00B0})")
                     if let createdByName = resolveDisplayName(userId: pin.createdByUserId, fallbackText: pin.createdBy) {
                         LabeledContent("Created by", value: createdByName)

@@ -348,18 +348,18 @@ struct RepairsGrowthView: View {
         }
         let raw = loc.coordinate
         let resolved = PinContextResolver.resolve(coordinate: raw, store: store, tracking: tracking)
-        let snap = snapToLockedRow(coord: raw, resolved: resolved)
-        let coord = snap.coordinate
+        let attachment = liveAttachment(raw: raw, resolved: resolved, side: side)
+        let coord = attachment.snappedCoordinate ?? raw
         let proceed = {
             createRepairPin(
                 button: button,
                 side: side,
                 coord: coord,
                 resolved: resolved,
-                snappedToRow: snap.snapped
+                attachment: attachment
             )
         }
-        if let dup = checkDuplicate(at: coord, resolved: resolved, side: side, mode: button.mode) {
+        if let dup = checkDuplicate(at: coord, resolved: resolved, attachment: attachment, side: side, mode: button.mode) {
             recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
@@ -377,7 +377,7 @@ struct RepairsGrowthView: View {
         side: PinSide,
         coord: CLLocationCoordinate2D,
         resolved: PinContextResolver.Resolved,
-        snappedToRow: Bool
+        attachment: PinAttachmentResolver.Attachment
     ) {
         let heading = locationService.heading?.trueHeading ?? 0
         let pin = store.createPinFromButton(
@@ -388,17 +388,15 @@ struct RepairsGrowthView: View {
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
-            createdByUserId: auth.userId
+            createdByUserId: auth.userId,
+            attachment: attachment
         )
         print(PinContextResolver.diagnostic(coordinate: coord, side: side, mode: .repairs, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return
         }
-        let subtitle = PinAttachmentFormatter.toastSubtitle(
-            rowNumber: snappedToRow ? resolved.rowNumber : nil,
-            side: side
-        )
+        let subtitle = PinAttachmentFormatter.toastSubtitle(attachment: attachment, fallbackSide: side)
         showPinToast(title: "\(button.name) pin dropped", subtitle: subtitle)
         if store.settings.autoPhotoPrompt {
             pendingPhotoPinId = createdPin.id
@@ -419,17 +417,17 @@ struct RepairsGrowthView: View {
         }
         let raw = loc.coordinate
         let resolved = PinContextResolver.resolve(coordinate: raw, store: store, tracking: tracking)
-        let snap = snapToLockedRow(coord: raw, resolved: resolved)
-        let coord = snap.coordinate
+        let attachment = liveAttachment(raw: raw, resolved: resolved, side: .right)
+        let coord = attachment.snappedCoordinate ?? raw
         let proceed = {
             createGrowthPin(
                 stage: stage,
                 coord: coord,
                 resolved: resolved,
-                snappedToRow: snap.snapped
+                attachment: attachment
             )
         }
-        if let dup = checkDuplicate(at: coord, resolved: resolved, side: .right, mode: .growth) {
+        if let dup = checkDuplicate(at: coord, resolved: resolved, attachment: attachment, side: .right, mode: .growth) {
             recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
@@ -446,7 +444,7 @@ struct RepairsGrowthView: View {
         stage: GrowthStage,
         coord: CLLocationCoordinate2D,
         resolved: PinContextResolver.Resolved,
-        snappedToRow: Bool
+        attachment: PinAttachmentResolver.Attachment
     ) {
         let heading = locationService.heading?.trueHeading ?? 0
         let pin = store.createGrowthStagePin(
@@ -458,17 +456,18 @@ struct RepairsGrowthView: View {
             paddockId: resolved.paddockId,
             rowNumber: resolved.rowNumber,
             createdBy: auth.userName,
-            createdByUserId: auth.userId
+            createdByUserId: auth.userId,
+            attachment: attachment
         )
         print(PinContextResolver.diagnostic(coordinate: coord, side: .right, mode: .growth, resolved: resolved, store: store, tracking: tracking))
         guard let createdPin = pin else {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return
         }
-        let attached = PinAttachmentFormatter.rowAndSide(rowNumber: snappedToRow ? resolved.rowNumber : nil, side: nil)
+        let attached = PinAttachmentFormatter.attachmentSubtitle(attachment: attachment)
         let subtitle: String = {
             if let attached {
-                return "EL \(stage.code) \u{2022} Attached to \(attached)"
+                return "EL \(stage.code) \u{2022} \(attached)"
             }
             return "EL \(stage.code) \u{2022} \(stage.description)"
         }()
@@ -492,43 +491,48 @@ struct RepairsGrowthView: View {
         }
     }
 
-    /// Snap the raw GPS coordinate to the live locked row line when an
-    /// active trip has a confident lock. Same operational policy as
-    /// TripTrackingService.dropPinDuringTrip so manual taps in the trip
-    /// pin grid place pins on the row centreline too.
-    private func snapToLockedRow(
-        coord: CLLocationCoordinate2D,
-        resolved: PinContextResolver.Resolved
-    ) -> (coordinate: CLLocationCoordinate2D, snapped: Bool) {
-        guard tracking.isTracking,
-              tracking.diagLockConfidence >= 0.6,
-              let lockedPath = tracking.diagLockedPath ?? tracking.currentRowNumber,
-              let pid = resolved.paddockId,
-              let paddock = store.paddocks.first(where: { $0.id == pid }),
-              let snap = RowGuidance.snapToPath(
-                coordinate: coord,
-                path: lockedPath,
-                in: paddock
-              )
-        else { return (coord, false) }
-        return (snap.snapped, true)
+    /// Build a full attachment using the live trip lock + row geometry.
+    /// Falls back to a side-only manual attachment when no confident
+    /// lock or paddock geometry is available.
+    private func liveAttachment(
+        raw: CLLocationCoordinate2D,
+        resolved: PinContextResolver.Resolved,
+        side: PinSide
+    ) -> PinAttachmentResolver.Attachment {
+        let confident = tracking.isTracking && tracking.diagLockConfidence >= 0.6
+        let drivingPath: Double? = tracking.diagLockedPath ?? tracking.currentRowNumber
+        let paddock: Paddock? = resolved.paddockId.flatMap { id in
+            store.paddocks.first(where: { $0.id == id })
+        }
+        let heading = locationService.heading?.trueHeading ?? 0
+        return PinAttachmentResolver.resolveLive(
+            rawCoordinate: raw,
+            heading: heading,
+            operatorSide: side,
+            drivingPath: drivingPath,
+            paddock: paddock,
+            confident: confident
+        )
     }
 
     private func checkDuplicate(
         at coord: CLLocationCoordinate2D,
         resolved: PinContextResolver.Resolved,
+        attachment: PinAttachmentResolver.Attachment,
         side: PinSide,
         mode: PinMode
     ) -> (pin: VinePin, distance: Double, radius: Double)? {
-        // When we have a paddock + row, prefer along-row geometry so two
-        // pins on the same row line are matched even if their raw GPS
-        // samples are a metre or two apart.
+        // Prefer the resolved actual vine row (pin_row_number) when the
+        // attachment confidently snapped — that's what newer pins store.
+        // Fall back to the legacy nearest-row resolution otherwise.
+        let rowForDuplicate = attachment.pinRowNumber ?? resolved.rowNumber
+        let sideForDuplicate = attachment.pinSide ?? side
         if let alongRow = PinDuplicateChecker.nearbyPinAlongRow(
             snappedCoordinate: coord,
             vineyardId: store.selectedVineyardId,
             paddockId: resolved.paddockId,
-            rowNumber: resolved.rowNumber,
-            side: side,
+            rowNumber: rowForDuplicate,
+            side: sideForDuplicate,
             mode: mode,
             in: store.pins,
             paddocks: store.paddocks

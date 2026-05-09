@@ -31,6 +31,14 @@ nonisolated struct BackendPin: Codable, Sendable, Identifiable {
     let deletedAt: Date?
     let clientUpdatedAt: Date?
     let syncVersion: Int?
+    // Attachment geometry (added in 041; nullable on legacy rows).
+    let drivingRowNumber: Double?
+    let pinRowNumber: Double?
+    let pinSide: String?
+    let alongRowDistanceM: Double?
+    let snappedLatitude: Double?
+    let snappedLongitude: Double?
+    let snappedToRow: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -63,6 +71,13 @@ nonisolated struct BackendPin: Codable, Sendable, Identifiable {
         case deletedAt = "deleted_at"
         case clientUpdatedAt = "client_updated_at"
         case syncVersion = "sync_version"
+        case drivingRowNumber = "driving_row_number"
+        case pinRowNumber = "pin_row_number"
+        case pinSide = "pin_side"
+        case alongRowDistanceM = "along_row_distance_m"
+        case snappedLatitude = "snapped_latitude"
+        case snappedLongitude = "snapped_longitude"
+        case snappedToRow = "snapped_to_row"
     }
 }
 
@@ -91,6 +106,14 @@ nonisolated struct BackendPinUpsert: Encodable, Sendable {
     let photoPath: String?
     let createdBy: UUID?
     let clientUpdatedAt: Date
+    // Attachment geometry (added in 041).
+    let drivingRowNumber: Double?
+    let pinRowNumber: Double?
+    let pinSide: String?
+    let alongRowDistanceM: Double?
+    let snappedLatitude: Double?
+    let snappedLongitude: Double?
+    let snappedToRow: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -114,6 +137,13 @@ nonisolated struct BackendPinUpsert: Encodable, Sendable {
         case photoPath = "photo_path"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
+        case drivingRowNumber = "driving_row_number"
+        case pinRowNumber = "pin_row_number"
+        case pinSide = "pin_side"
+        case alongRowDistanceM = "along_row_distance_m"
+        case snappedLatitude = "snapped_latitude"
+        case snappedLongitude = "snapped_longitude"
+        case snappedToRow = "snapped_to_row"
     }
 }
 
@@ -143,7 +173,14 @@ extension BackendPin {
             completedAt: pin.completedAt,
             photoPath: pin.photoPath,
             createdBy: pin.createdByUserId,
-            clientUpdatedAt: clientUpdatedAt
+            clientUpdatedAt: clientUpdatedAt,
+            drivingRowNumber: pin.drivingRowNumber,
+            pinRowNumber: pin.pinRowNumber.map(Double.init),
+            pinSide: pin.pinSide?.rawValue,
+            alongRowDistanceM: pin.alongRowDistanceM,
+            snappedLatitude: pin.snappedLatitude,
+            snappedLongitude: pin.snappedLongitude,
+            snappedToRow: pin.snappedToRow
         )
     }
 
@@ -151,7 +188,7 @@ extension BackendPin {
     /// row is missing critical coordinates.
     func toVinePin(preservingPhoto existingPhoto: Data? = nil, preservingCreatedByText existingCreatedByText: String? = nil) -> VinePin? {
         guard let latitude, let longitude else { return nil }
-        let pinSide = PinSide(rawValue: side ?? "") ?? .left
+        let resolvedSide = PinSide(rawValue: side ?? "") ?? .left
         let pinMode = PinMode(rawValue: mode ?? "") ?? .repairs
         return VinePin(
             id: id,
@@ -161,7 +198,7 @@ extension BackendPin {
             heading: heading ?? 0,
             buttonName: buttonName ?? "",
             buttonColor: buttonColor ?? "blue",
-            side: pinSide,
+            side: resolvedSide,
             mode: pinMode,
             paddockId: paddockId,
             rowNumber: rowNumber,
@@ -176,7 +213,14 @@ extension BackendPin {
             photoPath: photoPath,
             tripId: tripId,
             growthStageCode: growthStageCode,
-            notes: notes
+            notes: notes,
+            drivingRowNumber: drivingRowNumber,
+            pinRowNumber: pinRowNumber.map { Int($0.rounded()) },
+            pinSide: pinSide.flatMap { PinSide(rawValue: $0) },
+            alongRowDistanceM: alongRowDistanceM,
+            snappedLatitude: snappedLatitude,
+            snappedLongitude: snappedLongitude,
+            snappedToRow: snappedToRow ?? false
         )
     }
 }

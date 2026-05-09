@@ -130,7 +130,8 @@ extension MigratedDataStore {
         createdBy: String? = nil,
         createdByUserId: UUID? = nil,
         growthStageCode: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        attachment: PinAttachmentResolver.Attachment? = nil
     ) -> VinePin? {
         guard let vineyardId = selectedVineyardId else { return nil }
         let pin = VinePin(
@@ -149,7 +150,14 @@ extension MigratedDataStore {
             createdByUserId: createdByUserId,
             isCompleted: false,
             growthStageCode: growthStageCode,
-            notes: notes
+            notes: notes,
+            drivingRowNumber: attachment?.drivingRowNumber,
+            pinRowNumber: attachment?.pinRowNumber,
+            pinSide: attachment?.pinSide,
+            alongRowDistanceM: attachment?.alongRowDistanceM,
+            snappedLatitude: attachment?.snappedCoordinate?.latitude,
+            snappedLongitude: attachment?.snappedCoordinate?.longitude,
+            snappedToRow: attachment?.snappedToRow ?? false
         )
         addPin(pin)
         return pin
@@ -167,7 +175,8 @@ extension MigratedDataStore {
         rowNumber: Int? = nil,
         createdBy: String? = nil,
         createdByUserId: UUID? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        attachment: PinAttachmentResolver.Attachment? = nil
     ) -> VinePin? {
         guard let vineyardId = selectedVineyardId else { return nil }
         let pin = VinePin(
@@ -186,7 +195,14 @@ extension MigratedDataStore {
             createdByUserId: createdByUserId,
             isCompleted: false,
             growthStageCode: stageCode,
-            notes: notes ?? stageDescription
+            notes: notes ?? stageDescription,
+            drivingRowNumber: attachment?.drivingRowNumber,
+            pinRowNumber: attachment?.pinRowNumber,
+            pinSide: attachment?.pinSide,
+            alongRowDistanceM: attachment?.alongRowDistanceM,
+            snappedLatitude: attachment?.snappedCoordinate?.latitude,
+            snappedLongitude: attachment?.snappedCoordinate?.longitude,
+            snappedToRow: attachment?.snappedToRow ?? false
         )
         addPin(pin)
         return pin

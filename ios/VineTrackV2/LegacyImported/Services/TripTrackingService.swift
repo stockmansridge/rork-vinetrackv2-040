@@ -445,20 +445,23 @@ final class TripTrackingService {
         // and gives us a stable along-row coordinate for duplicate
         // checking. Falls back to the raw GPS point when no lock or
         // geometry is available.
-        var pinCoordinate = location.coordinate
-        var snappedToRow = false
-        if diagLockConfidence >= 0.6,
-           let lockedPath = lockedPath ?? currentRowNumber,
-           let pid = resolvedPaddock,
-           let paddock = store.paddocks.first(where: { $0.id == pid }),
-           let snap = RowGuidance.snapToPath(
-               coordinate: location.coordinate,
-               path: lockedPath,
-               in: paddock
-           ) {
-            pinCoordinate = snap.snapped
-            snappedToRow = true
+        let confident = diagLockConfidence >= 0.6
+        let drivingPath: Double? = lockedPath ?? currentRowNumber
+        let paddockForGeometry: Paddock? = resolvedPaddock.flatMap { id in
+            store.paddocks.first(where: { $0.id == id })
         }
+        let attachment = PinAttachmentResolver.resolveLive(
+            rawCoordinate: location.coordinate,
+            heading: locationService?.heading?.trueHeading ?? 0,
+            operatorSide: side,
+            drivingPath: drivingPath,
+            paddock: paddockForGeometry,
+            confident: confident
+        )
+        let pinCoordinate = attachment.snappedCoordinate ?? location.coordinate
+        let snappedToRow = attachment.snappedToRow
+        let dupRow = attachment.pinRowNumber ?? resolvedRow
+        let dupSide = attachment.pinSide ?? side
 
         if !force {
             // Prefer along-row duplicate detection when we have a row
@@ -469,8 +472,8 @@ final class TripTrackingService {
                 snappedCoordinate: pinCoordinate,
                 vineyardId: store.selectedVineyardId,
                 paddockId: resolvedPaddock,
-                rowNumber: resolvedRow,
-                side: side,
+                rowNumber: dupRow,
+                side: dupSide,
                 mode: button.mode,
                 in: store.pins,
                 paddocks: store.paddocks
@@ -519,7 +522,8 @@ final class TripTrackingService {
             side: side,
             paddockId: resolvedPaddock,
             rowNumber: resolvedRow,
-            notes: notes
+            notes: notes,
+            attachment: attachment
         ) else { return .failed("Could not create pin \u{2014} no vineyard selected.") }
         print(PinContextResolver.diagnostic(coordinate: location.coordinate, side: side, mode: button.mode, resolved: resolved, store: store, tracking: self))
 
