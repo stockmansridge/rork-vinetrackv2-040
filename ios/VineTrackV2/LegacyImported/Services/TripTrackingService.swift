@@ -1804,18 +1804,34 @@ final class TripTrackingService {
                 if len <= shortRowThresholdMetres {
                     // Short rows: very forgiving on the review pass.
                     threshold = max(2.0, len * 0.35)
-                } else if isEdge {
-                    // First/last long row: 25 % coverage or 20 m.
-                    threshold = max(20.0, len * 0.25)
+                } else if isLastPlanned {
+                    // Last row in plan: most permissive — there is no
+                    // "next row" to trigger the normal advance, and the
+                    // operator is opening End Trip Review precisely
+                    // because they're done. 10 % coverage or 8 m.
+                    threshold = max(8.0, len * 0.10)
+                } else if isFirstPlanned {
+                    // First long row: 20 % coverage or 15 m (slightly
+                    // stricter than last because the operator might
+                    // genuinely be still in the row).
+                    threshold = max(15.0, len * 0.20)
                 } else {
                     // Mid-sequence long row: a little stricter.
                     threshold = max(30.0, len * 0.40)
                 }
             } else {
-                threshold = 8.0
+                threshold = isEdge ? 4.0 : 8.0
             }
 
-            if accumulated >= threshold {
+            // Edge-case fallback: if the live tracker is currently
+            // locked onto this path AND we have any meaningful
+            // coverage, credit it. Catches the last row when GPS
+            // confidence was solid but coverage just under the
+            // threshold (typical short trail-out at row end).
+            let isCurrentlyLocked = lockedPath.map { abs($0 - path) < 0.01 } ?? false
+            let lockedFallbackHits = isCurrentlyLocked && accumulated >= 3.0 && isEdge
+
+            if accumulated >= threshold || lockedFallbackHits {
                 trip.completedPaths.append(path)
                 credited.append(path)
             }

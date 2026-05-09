@@ -159,6 +159,17 @@ struct TripDetailView: View {
                 seedingDetailsSection(details)
             }
 
+            if let notes = trip.completionNotes?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !notes.isEmpty {
+                Section("Completion Notes") {
+                    Text(notes)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .padding(.vertical, 2)
+                }
+            }
+
             if !trip.manualCorrectionEvents.isEmpty {
                 Section("Manual Corrections") {
                     ForEach(Array(trip.manualCorrectionEvents.enumerated()), id: \.offset) { _, event in

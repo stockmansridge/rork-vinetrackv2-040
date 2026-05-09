@@ -291,6 +291,14 @@ struct TripPDFService {
                 }
             }
 
+            // ── Completion Notes ─────────────────────────────────────────
+            if let notes = trip.completionNotes?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !notes.isEmpty {
+                drawSectionHeader("Completion Notes")
+                drawWrappedRow(label: "Notes", value: notes)
+            }
+
             // ── Manual Corrections ───────────────────────────────────────
             if !trip.manualCorrectionEvents.isEmpty {
                 drawSectionHeader("Manual Corrections")

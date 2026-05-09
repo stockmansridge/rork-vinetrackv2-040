@@ -101,6 +101,13 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
     /// Each entry is `"<ISO8601 timestamp> <note>"`.
     var manualCorrectionEvents: [String]
 
+    /// Optional free-text notes captured at trip completion (End Trip
+    /// Review). Distinct from `tripTitle` (job details entered at start)
+    /// and from `manualCorrectionEvents` (audit log). Synced to
+    /// Supabase as `trips.completion_notes` (see
+    /// `sql/040_trips_completion_notes.sql`).
+    var completionNotes: String?
+
     /// Convenience: returns a short label suitable for the active trip header.
     /// Prefers an explicit user-entered title, then the friendly label for the
     /// selected `tripFunction` (built-in or `custom:<slug>`), then "Trip".
@@ -170,7 +177,8 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         tripFunction: String? = nil,
         tripTitle: String? = nil,
         seedingDetails: SeedingDetails? = nil,
-        manualCorrectionEvents: [String] = []
+        manualCorrectionEvents: [String] = [],
+        completionNotes: String? = nil
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -204,6 +212,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         self.tripTitle = tripTitle
         self.seedingDetails = seedingDetails
         self.manualCorrectionEvents = manualCorrectionEvents
+        self.completionNotes = completionNotes
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
@@ -218,6 +227,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         case tripFunction, tripTitle
         case seedingDetails
         case manualCorrectionEvents
+        case completionNotes
     }
 
     init(from decoder: Decoder) throws {
@@ -251,6 +261,7 @@ nonisolated struct Trip: Codable, Identifiable, Sendable, Hashable {
         tripTitle = try container.decodeIfPresent(String.self, forKey: .tripTitle)
         seedingDetails = try container.decodeIfPresent(SeedingDetails.self, forKey: .seedingDetails)
         manualCorrectionEvents = try container.decodeIfPresent([String].self, forKey: .manualCorrectionEvents) ?? []
+        completionNotes = try container.decodeIfPresent(String.self, forKey: .completionNotes)
 
         if let doubleRow = try? container.decode(Double.self, forKey: .currentRowNumber) {
             currentRowNumber = doubleRow

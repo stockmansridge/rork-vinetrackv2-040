@@ -40,6 +40,9 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
     /// Optional audit trail of manual Live-Trip corrections. Each entry is
     /// `"<ISO8601 timestamp> <note>"` (see sql/039_trips_manual_correction_events.sql).
     let manualCorrectionEvents: [String]?
+    /// Optional free-text notes captured at trip completion (End Trip
+    /// Review). See `sql/040_trips_completion_notes.sql`.
+    let completionNotes: String?
 
     let createdBy: UUID?
     let updatedBy: UUID?
@@ -82,6 +85,7 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
         case manualCorrectionEvents = "manual_correction_events"
+        case completionNotes = "completion_notes"
         case createdBy = "created_by"
         case updatedBy = "updated_by"
         case createdAt = "created_at"
@@ -134,6 +138,10 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
     /// non-nil so older clients re-upserting a trip do not clobber existing
     /// values on the server.
     let manualCorrectionEvents: [String]?
+    /// Optional free-text notes captured at trip completion (End Trip
+    /// Review). Encoded only when non-nil so older clients don't clobber
+    /// existing server values.
+    let completionNotes: String?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -170,6 +178,7 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
         case manualCorrectionEvents = "manual_correction_events"
+        case completionNotes = "completion_notes"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
     }
@@ -219,6 +228,9 @@ extension BackendTrip {
             tripTitle: trip.tripTitle,
             seedingDetails: trip.seedingDetails,
             manualCorrectionEvents: trip.manualCorrectionEvents.isEmpty ? nil : trip.manualCorrectionEvents,
+            completionNotes: trip.completionNotes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true
+                ? nil
+                : trip.completionNotes,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -258,7 +270,8 @@ extension BackendTrip {
             tripFunction: tripFunction,
             tripTitle: tripTitle,
             seedingDetails: seedingDetails,
-            manualCorrectionEvents: manualCorrectionEvents ?? []
+            manualCorrectionEvents: manualCorrectionEvents ?? [],
+            completionNotes: completionNotes
         )
     }
 }

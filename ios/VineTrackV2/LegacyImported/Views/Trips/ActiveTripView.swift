@@ -1633,12 +1633,14 @@ struct ActiveTripView: View {
     // MARK: - Trip controls
 
     private var tripControls: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             if !trip.rowSequence.isEmpty && !trip.isPaused {
                 // Compact undo/done pair — secondary to the live GPS
                 // auto-advancement, but always available as a manual
                 // fallback. Labels include the actual path number so it's
-                // obvious in the cab which row each button affects.
+                // obvious in the cab which row each button affects. Both
+                // buttons share remaining width so on a narrow iPhone
+                // (SE) the labels still fit alongside pause + stop.
                 HStack(spacing: 6) {
                     Button {
                         advanceRow(by: -1)
@@ -1646,9 +1648,9 @@ struct ActiveTripView: View {
                         Text(undoButtonLabel)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.55)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, 4)
+                            .frame(maxWidth: .infinity)
                             .frame(height: 44)
                     }
                     .buttonStyle(.bordered)
@@ -1660,16 +1662,16 @@ struct ActiveTripView: View {
                         Text(doneButtonLabel)
                             .font(.subheadline.weight(.bold))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.55)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 8)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, 4)
+                            .frame(maxWidth: .infinity)
                             .frame(height: 44)
                     }
                     .buttonStyle(.borderedProminent)
                     .clipShape(Capsule())
                     .disabled(trip.sequenceIndex >= trip.rowSequence.count - 1)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             } else if trip.isPaused {
                 HStack(spacing: 8) {
                     Image(systemName: "pause.fill").foregroundStyle(.orange)
@@ -1712,7 +1714,7 @@ struct ActiveTripView: View {
             } label: {
                 Image(systemName: trip.isPaused ? "play.fill" : "pause.fill")
                     .font(.headline)
-                    .frame(width: 50, height: 50)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.bordered)
             .tint(trip.isPaused ? .green : .orange)
@@ -1727,7 +1729,7 @@ struct ActiveTripView: View {
             } label: {
                 Image(systemName: "stop.fill")
                     .font(.headline)
-                    .frame(width: 50, height: 50)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(.bordered)
             .tint(.red)
@@ -1742,7 +1744,8 @@ struct ActiveTripView: View {
                 Text("This will stop tracking and finalise the trip.")
             }
         }
-        .padding()
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground))
     }
 

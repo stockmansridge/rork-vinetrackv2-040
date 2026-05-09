@@ -12,6 +12,10 @@ struct EndTripReviewSheet: View {
 
     @State private var manualCompletes: Set<Double> = []
     @State private var manualSkips: Set<Double> = []
+    /// Optional free-text completion notes typed by the operator.
+    /// Persisted onto the trip and synced as `trips.completion_notes`.
+    @State private var completionNotes: String = ""
+    @FocusState private var notesFocused: Bool
 
     private struct DisplayRow: Identifiable {
         let id: Int
@@ -112,6 +116,25 @@ struct EndTripReviewSheet: View {
                 }
 
                 Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Completion notes")
+                            .font(.subheadline.weight(.semibold))
+                        TextField(
+                            "e.g. Finished block but last row was wet.",
+                            text: $completionNotes,
+                            axis: .vertical
+                        )
+                        .lineLimit(2...5)
+                        .textInputAutocapitalization(.sentences)
+                        .autocorrectionDisabled(false)
+                        .focused($notesFocused)
+                    }
+                    .padding(.vertical, 2)
+                } footer: {
+                    Text("Optional notes for this completed job. These will appear in reports.")
+                }
+
+                Section {
                     Text("Manual completions are recorded in the trip's audit log so the report shows exactly what was driven vs. ticked off after the fact.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -126,7 +149,15 @@ struct EndTripReviewSheet: View {
                 // first row started mid-way and last row with no
                 // following row to trigger advance).
                 tracking.finalizePendingRowsForReview()
+                // Pre-fill any existing notes (e.g. when reopening the
+                // sheet after dismissing without finishing).
+                if completionNotes.isEmpty,
+                   let existing = tracking.activeTrip?.completionNotes,
+                   !existing.isEmpty {
+                    completionNotes = existing
+                }
             }
+            .scrollDismissesKeyboard(.interactively)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -222,14 +253,29 @@ struct EndTripReviewSheet: View {
     }
 
     private func applyAndFinish() {
-        if !manualCompletes.isEmpty {
-            if var live = tracking.activeTrip {
+        // Persist any manual ticks AND the optional completion notes
+        // onto the live trip in a single update so the saved record
+        // (and the synced row) reflects everything in one shot.
+        let trimmedNotes = completionNotes
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if var live = tracking.activeTrip {
+            var changed = false
+            if !manualCompletes.isEmpty {
                 for path in manualCompletes {
                     if !live.completedPaths.contains(path) && !live.skippedPaths.contains(path) {
                         live.completedPaths.append(path)
+                        changed = true
                     }
                 }
+            }
+            if (live.completionNotes ?? "") != trimmedNotes {
+                live.completionNotes = trimmedNotes.isEmpty ? nil : trimmedNotes
+                changed = true
+            }
+            if changed {
                 store.updateTrip(live)
+            }
+            if !manualCompletes.isEmpty {
                 let summary = manualCompletes
                     .sorted()
                     .map { String(format: "%g", $0) }
