@@ -1131,7 +1131,7 @@ struct PinDetailSheet: View {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                             }
-                            Text("\((pin.pinSide ?? pin.side).rawValue) hand side facing \(compassDirection)")
+                            Text("Facing \(compassDirection)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -1194,15 +1194,24 @@ struct PinDetailSheet: View {
 
                 Section("Details") {
                     LabeledContent("Block", value: paddockName)
-                    if let pinRow = pin.pinRowNumber {
-                        LabeledContent("Pin Row", value: "\(pinRow)")
+                    // New attachment model: prefer split row info when available.
+                    // Side belongs with the driving path, not the attached vine row.
+                    if pin.pinRowNumber != nil || pin.drivingRowNumber != nil {
+                        if let pinRow = pin.pinRowNumber {
+                            LabeledContent("Attached row", value: "Row \(pinRow)")
+                        }
+                        if let drivingPath = pin.drivingRowNumber {
+                            let side = (pin.pinSide ?? pin.side).rawValue
+                            LabeledContent(
+                                "Driving path",
+                                value: "\(String(format: "%.1f", drivingPath)) — \(side) hand"
+                            )
+                        }
                     } else if let rowNumber = pin.rowNumber {
+                        // Legacy fallback only when neither new field is set.
                         LabeledContent("Row", value: "\(rowNumber).5")
+                        LabeledContent("Side", value: "\(pin.side.rawValue) hand")
                     }
-                    if let drivingPath = pin.drivingRowNumber {
-                        LabeledContent("Driving Path", value: String(format: "%.1f", drivingPath))
-                    }
-                    LabeledContent("Side", value: "\((pin.pinSide ?? pin.side).rawValue) hand")
                     LabeledContent("Facing", value: "\(compassDirection) (\(Int(pin.heading))\u{00B0})")
                     if let createdByName = resolveDisplayName(userId: pin.createdByUserId, fallbackText: pin.createdBy) {
                         LabeledContent("Created by", value: createdByName)

@@ -97,15 +97,20 @@ struct PinDuplicateWarningSheet: View {
                         }
                         LabeledContent("Status", value: existingPin.isCompleted ? "Completed" : "Active")
                         LabeledContent("Block", value: paddockName)
-                        if let pinRow = existingPin.pinRowNumber {
-                            LabeledContent("Pin Row", value: "\(pinRow)")
-                            LabeledContent("Side", value: (existingPin.pinSide ?? existingPin.side).rawValue)
+                        if existingPin.pinRowNumber != nil || existingPin.drivingRowNumber != nil {
+                            if let pinRow = existingPin.pinRowNumber {
+                                LabeledContent("Attached row", value: "Row \(pinRow)")
+                            }
+                            if let drivingPath = existingPin.drivingRowNumber {
+                                let side = (existingPin.pinSide ?? existingPin.side).rawValue
+                                LabeledContent(
+                                    "Driving path",
+                                    value: "\(String(format: "%.1f", drivingPath)) — \(side) hand"
+                                )
+                            }
                         } else if let row = existingPin.rowNumber {
                             LabeledContent("Row", value: "\(row).5")
-                            LabeledContent("Side", value: existingPin.side.rawValue)
-                        }
-                        if let drivingPath = existingPin.drivingRowNumber {
-                            LabeledContent("Driving Path", value: String(format: "%.1f", drivingPath))
+                            LabeledContent("Side", value: "\(existingPin.side.rawValue) hand")
                         }
                         LabeledContent(
                             "Created",

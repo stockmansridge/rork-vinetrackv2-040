@@ -13,15 +13,14 @@ import Foundation
 /// it represented the driving path floor and is shown as `Row X.5`.
 nonisolated enum PinAttachmentFormatter {
 
-    /// Preferred attachment line, e.g.
-    /// "Row 14 — Left" or "Row 14.5" (legacy).
+    /// Preferred attachment line. Side is intentionally NOT included here —
+    /// Left/Right belongs with the driving path/operator view, not the
+    /// attached vine row.
+    /// Returns "Row 14" when the new model is populated, otherwise the
+    /// legacy "Row 14.5" wording.
     static func attachmentLine(_ pin: VinePin) -> String? {
         if let pinRow = pin.pinRowNumber {
-            let base = "Row \(pinRow)"
-            if let side = pin.pinSide ?? pin.side as PinSide? {
-                return "\(base) — \(side.rawValue)"
-            }
-            return base
+            return "Row \(pinRow)"
         }
         if let legacy = pin.rowNumber {
             return "Row \(legacy).5"
@@ -29,13 +28,14 @@ nonisolated enum PinAttachmentFormatter {
         return nil
     }
 
-    /// Optional second line for the driving path, e.g. "Driving Path 14.5".
-    /// Returns nil when no driving_row_number is recorded or when it would
-    /// duplicate the legacy attachment line.
+    /// Optional second line for the driving path, e.g.
+    /// "Driving Path 14.5 — Left hand".
+    /// Returns nil when no driving_row_number is recorded.
     static func drivingPathLine(_ pin: VinePin) -> String? {
         guard let path = pin.drivingRowNumber else { return nil }
         let formatted = formatPath(path)
-        return "Driving Path \(formatted)"
+        let side = pin.pinSide ?? pin.side
+        return "Driving Path \(formatted) — \(side.rawValue) hand"
     }
 
     /// Subtitle for confirmation toasts after a pin is dropped during a
@@ -44,26 +44,29 @@ nonisolated enum PinAttachmentFormatter {
         attachment: PinAttachmentResolver.Attachment,
         fallbackSide: PinSide
     ) -> String {
-        if attachment.snappedToRow,
-           let row = attachment.pinRowNumber,
-           let side = attachment.pinSide {
-            return "Attached to Row \(row) — \(side.rawValue)"
+        if attachment.snappedToRow, let row = attachment.pinRowNumber {
+            var line = "Attached to Row \(row)"
+            if let path = attachment.drivingRowNumber {
+                let side = attachment.pinSide ?? fallbackSide
+                line += " • Driving Path \(formatPath(path)) — \(side.rawValue) hand"
+            }
+            return line
         }
         if let path = attachment.drivingRowNumber {
-            return "Driving Path \(formatPath(path)) — \(fallbackSide.rawValue) side"
+            return "Driving Path \(formatPath(path)) — \(fallbackSide.rawValue) hand"
         }
-        return "\(fallbackSide.rawValue) side"
+        return "\(fallbackSide.rawValue) hand"
     }
 
     /// Short attached-to subtitle for inline labels (e.g. growth-stage toast).
     static func attachmentSubtitle(attachment: PinAttachmentResolver.Attachment) -> String? {
         if attachment.snappedToRow, let row = attachment.pinRowNumber {
-            if let side = attachment.pinSide {
-                return "Attached to Row \(row) — \(side.rawValue)"
-            }
             return "Attached to Row \(row)"
         }
         if let path = attachment.drivingRowNumber {
+            if let side = attachment.pinSide {
+                return "Driving Path \(formatPath(path)) — \(side.rawValue) hand"
+            }
             return "Driving Path \(formatPath(path))"
         }
         return nil
