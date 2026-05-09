@@ -62,6 +62,14 @@ struct NewMainTabView: View {
                 locationService.startUpdating()
             }
             tripTracking.configure(store: store, locationService: locationService)
+            // Provide active-trip lookup so MigratedDataStore.addPin can
+            // self-link any pin dropped during a live trip back to that
+            // trip (so the Trip Report shows pins logged > 0 even when
+            // the pin was created via QuickPinSheet / RepairsActionView /
+            // GrowthObservationActionView / PinDropConfirmationSheet).
+            store.currentActiveTripIdProvider = { [weak tripTracking = tripTracking] in
+                tripTracking?.activeTrip?.id
+            }
             pinSync.configure(store: store, auth: auth)
             paddockSync.configure(store: store, auth: auth)
             tripSync.configure(store: store, auth: auth)

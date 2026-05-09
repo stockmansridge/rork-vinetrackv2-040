@@ -1707,12 +1707,47 @@ struct StartTripSheet: View {
             gearboxSetting: parseNumber(seedBackGearbox)
         ) : nil
         let lines = mixLines.filter { $0.hasAnyValue }
+        // Auto-calculate `percent_of_mix` for each mix line as a share
+        // of the total kg/ha within the same seed box. Preserves any
+        // value the operator entered manually — only fills blanks so
+        // both the iOS PDF and Lovable trip report can render the
+        // percentage column without the operator doing the maths.
+        let calculated = Self.fillCalculatedPercentOfMix(in: lines)
         return SeedingDetails(
             frontBox: front,
             backBox: back,
             sowingDepthCm: parseNumber(sowingDepth),
-            mixLines: lines.isEmpty ? nil : lines
+            mixLines: calculated.isEmpty ? nil : calculated
         )
+    }
+
+    /// Returns `lines` with any missing `percentOfMix` populated from
+    /// `kgPerHa` as a percentage of the total kg/ha for the same seed
+    /// box. If a line already has an operator-entered percentage it is
+    /// preserved unchanged. Lines without `kgPerHa`, or whose box has
+    /// zero total kg/ha, are left blank.
+    static func fillCalculatedPercentOfMix(in lines: [SeedingMixLine]) -> [SeedingMixLine] {
+        guard !lines.isEmpty else { return lines }
+        // Total kg/ha per box ("Front" / "Back" / nil).
+        var totals: [String: Double] = [:]
+        for line in lines {
+            guard let kg = line.kgPerHa, kg > 0 else { continue }
+            let key = (line.seedBox?.isEmpty == false ? line.seedBox! : "_unspecified")
+            totals[key, default: 0] += kg
+        }
+        return lines.map { line in
+            var updated = line
+            if updated.percentOfMix == nil,
+               let kg = updated.kgPerHa, kg > 0 {
+                let key = (updated.seedBox?.isEmpty == false ? updated.seedBox! : "_unspecified")
+                if let total = totals[key], total > 0 {
+                    let pct = (kg / total) * 100.0
+                    // Round to one decimal place so the report looks clean.
+                    updated.percentOfMix = (pct * 10).rounded() / 10
+                }
+            }
+            return updated
+        }
     }
 }
 

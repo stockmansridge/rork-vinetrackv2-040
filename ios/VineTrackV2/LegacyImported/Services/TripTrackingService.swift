@@ -93,6 +93,16 @@ final class TripTrackingService {
     /// Drives end-of-row exit completion for short rows.
     private var previousOnPlannedInCorridor: Bool = false
 
+    /// Last locked path that triggered an auto_sequence_recover audit
+    /// event. Used to debounce repeated recoveries on the same row so
+    /// the formal Trip Report stays focused on operator-meaningful
+    /// events.
+    private var lastAutoSequenceRecoverPath: Double?
+    private var lastAutoSequenceRecoverAt: Date?
+    /// Minimum gap between successive auto_sequence_recover audit
+    /// entries for the same path.
+    private let autoSequenceRecoverCooldown: TimeInterval = 60.0
+
     /// Smoothed ground speed in m/s. Derived from a rolling-window
     /// distance/time calculation across recent GPS samples — *not* from
     /// CLLocation.speed, which iOS halves at slow tractor speeds after
@@ -359,6 +369,8 @@ final class TripTrackingService {
         lastDismissedRealignPath = nil
         lastAutoRealignShownAt = nil
         previousOnPlannedInCorridor = false
+        lastAutoSequenceRecoverPath = nil
+        lastAutoSequenceRecoverAt = nil
         diagFreeDriveActive = false
         diagFreeDriveCandidatePath = nil
         diagFreeDriveStablePath = nil
@@ -1650,7 +1662,20 @@ final class TripTrackingService {
                     trip.nextRowNumber = trip.rowSequence[idx + 1]
                 }
                 store?.updateTrip(trip)
-                recordCorrection("auto_sequence_recover: \(locked)")
+                // Debounce: only audit one auto_sequence_recover per
+                // path, and not within the cooldown window. Without
+                // this, the live tick can re-fire the recovery many
+                // times per row and flood the formal Trip Report
+                // with noisy lines that drown out operator events.
+                let now = Date()
+                let isNewPath = lastAutoSequenceRecoverPath.map { abs($0 - locked) > 0.01 } ?? true
+                let isOutsideCooldown = lastAutoSequenceRecoverAt
+                    .map { now.timeIntervalSince($0) > autoSequenceRecoverCooldown } ?? true
+                if isNewPath || isOutsideCooldown {
+                    lastAutoSequenceRecoverPath = locked
+                    lastAutoSequenceRecoverAt = now
+                    recordCorrection("auto_sequence_recover: \(locked)")
+                }
             }
             return
         }

@@ -64,6 +64,13 @@ final class MigratedDataStore {
     /// last-resort fallback for `createdBy` text when missing.
     var currentUserNameProvider: (() -> String?)?
 
+    /// Provides the id of the currently active trip, if any. Used by
+    /// `addPin` to associate pins dropped during a trip with the trip
+    /// (so the Trip Report shows them and so Lovable can link pins to
+    /// trips on Supabase). Wired in `NewMainTabView.onAppear` from
+    /// `TripTrackingService.activeTrip`.
+    var currentActiveTripIdProvider: (() -> UUID?)?
+
     /// Called when a paddock is added/updated locally. Sync services observe
     /// this to mark the paddock as dirty for upload.
     var onPaddockChanged: ((UUID) -> Void)?
@@ -607,8 +614,27 @@ final class MigratedDataStore {
         #if DEBUG
         print("[Pins] addPin id=\(item.id) createdBy=\(item.createdBy ?? "nil") createdByUserId=\(item.createdByUserId?.uuidString ?? "nil")")
         #endif
+        // Self-heal: if a trip is active and the pin wasn't already
+        // linked, associate it with the trip so the Trip Report can
+        // show "Pins logged" > 0 and Supabase keeps a pin↔trip link.
+        if item.tripId == nil, let activeTripId = currentActiveTripIdProvider?() {
+            item.tripId = activeTripId
+            #if DEBUG
+            print("[Pins] addPin self-linked tripId=\(activeTripId) on pin \(item.id)")
+            #endif
+        }
         pins.append(item)
         pinRepo.saveSlice(pins, for: vineyardId)
+        // Append to the active trip's pinIds so the saved trip record
+        // carries the association even if downstream code only reads
+        // `trip.pinIds` (e.g. PDF export, Lovable trip report).
+        if let tripId = item.tripId,
+           let idx = trips.firstIndex(where: { $0.id == tripId }),
+           !trips[idx].pinIds.contains(item.id) {
+            trips[idx].pinIds.append(item.id)
+            tripRepo.saveSlice(trips, for: vineyardId)
+            onTripChanged?(tripId)
+        }
         onPinChanged?(item.id)
     }
 
