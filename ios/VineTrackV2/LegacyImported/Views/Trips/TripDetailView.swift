@@ -83,9 +83,14 @@ struct TripDetailView: View {
                         statRow("Started", value: startDescription, icon: "flag")
                     }
                     statRow("Paths planned", value: "\(trip.rowSequence.count)", icon: "list.number")
-                    statRow("Completed", value: "\(trip.completedPaths.count)", icon: "checkmark.circle")
-                    if !trip.skippedPaths.isEmpty {
-                        statRow("Skipped", value: "\(trip.skippedPaths.count)", icon: "xmark.circle")
+                    statRow("Complete", value: "\(rowCompletionResults.filter { $0.status == .complete }.count)", icon: "checkmark.circle")
+                    let partialCount = rowCompletionResults.filter { $0.status == .partial }.count
+                    if partialCount > 0 {
+                        statRow("Partial", value: "\(partialCount)", icon: "exclamationmark.triangle")
+                    }
+                    let notDoneCount = rowCompletionResults.filter { $0.status == .notComplete }.count
+                    if notDoneCount > 0 {
+                        statRow("Not complete", value: "\(notDoneCount)", icon: "xmark.circle")
                     }
                 }
                 if pinsForTrip.count > 0 {
@@ -105,7 +110,16 @@ struct TripDetailView: View {
                 }
             }
 
-            if !coveredRowSummary.isEmpty {
+            if !rowCompletionResults.isEmpty {
+                Section("Rows / Paths") {
+                    if let paddockName = coverageSourcePaddockName {
+                        statRow("Paddock", value: paddockName, icon: "leaf")
+                    }
+                    ForEach(rowCompletionResults) { result in
+                        rowCompletionRow(result)
+                    }
+                }
+            } else if !coveredRowSummary.isEmpty {
                 Section("Row Coverage") {
                     statRow("Rows covered", value: "\(coveredRowNumbers.count)", icon: "checkmark.circle")
                     if let paddockName = coverageSourcePaddockName {
@@ -273,6 +287,36 @@ struct TripDetailView: View {
         print("[Trail/Detail] full=\(trip.pathPoints.count) display=\(displayCount) " +
               "polylines=\(segments.count) mode=bucketed-static")
         #endif
+    }
+
+    private var rowCompletionResults: [RowCompletionResult] {
+        guard !trip.rowSequence.isEmpty else { return [] }
+        return RowCompletionDeriver.results(for: trip)
+    }
+
+    @ViewBuilder
+    private func rowCompletionRow(_ result: RowCompletionResult) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: result.status.iconName)
+                .font(.body)
+                .foregroundStyle(rowTint(result.status))
+                .frame(width: 22)
+            Text(result.formattedPath)
+                .font(.subheadline.weight(.semibold))
+                .frame(minWidth: 44, alignment: .leading)
+            Spacer()
+            Text(result.statusAndSourceLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func rowTint(_ status: RowCompletionStatus) -> Color {
+        switch status {
+        case .complete: return VineyardTheme.leafGreen
+        case .partial: return .orange
+        case .notComplete: return .red
+        }
     }
 
     private var coverageSourcePaddock: Paddock? {

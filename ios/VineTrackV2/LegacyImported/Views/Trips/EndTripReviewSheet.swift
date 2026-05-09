@@ -13,45 +13,42 @@ struct EndTripReviewSheet: View {
     @State private var manualCompletes: Set<Double> = []
     @State private var manualSkips: Set<Double> = []
 
-    private enum Status {
-        case complete
-        case partial
-        case missed
-    }
-
-    private struct Row: Identifiable {
+    private struct DisplayRow: Identifiable {
         let id: Int
-        let path: Double
-        let status: Status
+        let result: RowCompletionResult
+        let manuallyTicked: Bool
+        var path: Double { result.path }
+        var status: RowCompletionStatus {
+            manuallyTicked ? .complete : result.status
+        }
     }
 
-    private var rows: [Row] {
-        let live = tracking.activeTrip ?? trip
-        let completed = Set(live.completedPaths)
-        let skipped = Set(live.skippedPaths)
+    private var liveTrip: Trip { tracking.activeTrip ?? trip }
+
+    private var rows: [DisplayRow] {
+        let live = liveTrip
+        // Promote the live current row to .partial so the sheet still hints
+        // at it; the rest of the derivation comes straight from the shared
+        // deriver so this view shows exactly what the report will show.
         let currentPath: Double? = live.rowSequence.indices.contains(live.sequenceIndex)
             ? live.rowSequence[live.sequenceIndex]
             : nil
-        return live.rowSequence.enumerated().map { idx, path in
-            let isCompleted = completed.contains(path) || manualCompletes.contains(path)
-            let isSkipped = skipped.contains(path) || manualSkips.contains(path)
-            let status: Status
-            if isCompleted {
-                status = .complete
-            } else if isSkipped {
-                status = .partial
-            } else if let cp = currentPath, abs(cp - path) < 0.01 {
-                status = .partial
-            } else {
-                status = .missed
+        let derived = RowCompletionDeriver.results(for: live)
+        return derived.enumerated().map { idx, r in
+            var result = r
+            if result.status == .notComplete,
+               let cp = currentPath,
+               abs(cp - r.path) < 0.01 {
+                result = RowCompletionResult(path: r.path, status: .partial, source: .auto)
             }
-            return Row(id: idx, path: path, status: status)
+            let ticked = manualCompletes.contains(r.path)
+            return DisplayRow(id: idx, result: result, manuallyTicked: ticked)
         }
     }
 
     private var completedCount: Int { rows.filter { $0.status == .complete }.count }
     private var partialCount: Int { rows.filter { $0.status == .partial }.count }
-    private var missedCount: Int { rows.filter { $0.status == .missed }.count }
+    private var missedCount: Int { rows.filter { $0.status == .notComplete }.count }
 
     var body: some View {
         NavigationStack {
@@ -75,7 +72,7 @@ struct EndTripReviewSheet: View {
                         Divider().frame(height: 36)
                         statCell(value: "\(partialCount)", label: "Partial", tint: .orange)
                         Divider().frame(height: 36)
-                        statCell(value: "\(missedCount)", label: "Missed", tint: .red)
+                        statCell(value: "\(missedCount)", label: "Not done", tint: .red)
                     }
                     .padding(.vertical, 4)
                 }
@@ -90,16 +87,16 @@ struct EndTripReviewSheet: View {
                     if missedCount > 0 {
                         Section {
                             Button {
-                                let liveTrip = tracking.activeTrip ?? trip
-                                let completed = Set(liveTrip.completedPaths)
-                                let skipped = Set(liveTrip.skippedPaths)
-                                for r in rows where r.status == .missed {
+                                let live = liveTrip
+                                let completed = Set(live.completedPaths)
+                                let skipped = Set(live.skippedPaths)
+                                for r in rows where r.status == .notComplete {
                                     if !completed.contains(r.path) && !skipped.contains(r.path) {
                                         manualCompletes.insert(r.path)
                                     }
                                 }
                             } label: {
-                                Label("Tick all \(missedCount) missed rows as complete", systemImage: "checkmark.circle.fill")
+                                Label("Tick all \(missedCount) not-done rows as complete", systemImage: "checkmark.circle.fill")
                                     .font(.subheadline.weight(.semibold))
                             }
                         } footer: {
@@ -145,25 +142,26 @@ struct EndTripReviewSheet: View {
     }
 
     @ViewBuilder
-    private func rowItem(_ row: Row) -> some View {
-        let isManualCompleted = manualCompletes.contains(row.path)
-        let liveTrip = tracking.activeTrip ?? trip
-        let alreadyCompleted = liveTrip.completedPaths.contains(row.path)
-        let alreadySkipped = liveTrip.skippedPaths.contains(row.path)
+    private func rowItem(_ row: DisplayRow) -> some View {
+        let isManualCompleted = row.manuallyTicked
+        let live = liveTrip
+        let alreadyCompleted = live.completedPaths.contains(where: { abs($0 - row.path) < 0.01 })
+        let alreadySkipped = live.skippedPaths.contains(where: { abs($0 - row.path) < 0.01 })
+        let displayStatus = row.status
 
         HStack(spacing: 12) {
-            Image(systemName: iconName(for: row.status))
+            Image(systemName: displayStatus.iconName)
                 .font(.title2)
-                .foregroundStyle(tint(for: row.status))
+                .foregroundStyle(tint(for: displayStatus))
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Path \(formatPath(row.path))")
+                Text("Path \(row.result.formattedPath)")
                     .font(.headline)
-                Text(label(for: row.status, manuallyCompleted: isManualCompleted))
+                Text(detailLabel(for: row, manuallyCompleted: isManualCompleted))
                     .font(.caption)
-                    .foregroundStyle(row.status == .missed && !isManualCompleted ? .red : .secondary)
-                    .fontWeight(row.status == .missed && !isManualCompleted ? .semibold : .regular)
+                    .foregroundStyle(displayStatus == .notComplete && !isManualCompleted ? .red : .secondary)
+                    .fontWeight(displayStatus == .notComplete && !isManualCompleted ? .semibold : .regular)
             }
 
             Spacer()
@@ -184,7 +182,7 @@ struct EndTripReviewSheet: View {
         }
         .padding(.vertical, 4)
         .listRowBackground(
-            row.status == .missed && !isManualCompleted
+            displayStatus == .notComplete && !isManualCompleted
                 ? Color.red.opacity(0.06)
                 : Color(.secondarySystemGroupedBackground)
         )
@@ -202,36 +200,25 @@ struct EndTripReviewSheet: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func iconName(for status: Status) -> String {
-        switch status {
-        case .complete: return "checkmark.circle.fill"
-        case .partial: return "circle.lefthalf.filled"
-        case .missed: return "exclamationmark.circle"
-        }
-    }
-
-    private func tint(for status: Status) -> Color {
+    private func tint(for status: RowCompletionStatus) -> Color {
         switch status {
         case .complete: return .green
         case .partial: return .orange
-        case .missed: return .red
+        case .notComplete: return .red
         }
     }
 
-    private func label(for status: Status, manuallyCompleted: Bool) -> String {
-        if manuallyCompleted { return "Will be ticked complete on save" }
-        switch status {
-        case .complete: return "Complete"
-        case .partial: return "Partial / current row"
-        case .missed: return "Missed — not detected by GPS"
+    private func detailLabel(for row: DisplayRow, manuallyCompleted: Bool) -> String {
+        if manuallyCompleted { return "Will be ticked Complete — End review" }
+        switch row.status {
+        case .complete:
+            if let source = row.result.source { return "Complete — \(source.label)" }
+            return "Complete"
+        case .partial:
+            return "Partial — Auto"
+        case .notComplete:
+            return "Not complete — not detected by GPS"
         }
-    }
-
-    private func formatPath(_ value: Double) -> String {
-        if value.truncatingRemainder(dividingBy: 1) == 0 {
-            return String(format: "%.0f", value)
-        }
-        return String(format: "%.1f", value)
     }
 
     private func applyAndFinish() {

@@ -46,6 +46,8 @@ struct TripPDFService {
         }()
 
         let manuallyMarkedComplete: [Double] = parseEndReviewCompleted(trip.manualCorrectionEvents)
+        let rowResults: [RowCompletionResult] = RowCompletionDeriver.results(for: trip)
+        let rowResultByPath: [Double: RowCompletionResult] = Dictionary(uniqueKeysWithValues: rowResults.map { ($0.path, $0) })
 
         let data = renderer.pdfData { context in
             context.beginPage()
@@ -231,11 +233,7 @@ struct TripPDFService {
 
             // ── Rows / Paths Covered ─────────────────────────────────────
             if !trip.rowSequence.isEmpty {
-                drawSectionHeader("Rows / Paths Covered")
-
-                let completed = Set(trip.completedPaths)
-                let skipped = Set(trip.skippedPaths)
-                let manualSet = Set(manuallyMarkedComplete)
+                drawSectionHeader("Rows / Paths")
 
                 let groups: [PaddockCoverage] = {
                     if !paddockGroups.isEmpty { return paddockGroups }
@@ -250,23 +248,27 @@ struct TripPDFService {
                         if gIdx > 0 { y += 4 }
                         drawSubHeader(group.name.isEmpty ? "Block \(gIdx + 1)" : group.name)
                     }
-                    let completedList = group.plannedPaths.filter { completed.contains($0) }.sorted()
-                    let missedList = group.plannedPaths.filter { !completed.contains($0) && !skipped.contains($0) }.sorted()
-                    let partialList = group.plannedPaths.filter { skipped.contains($0) }.sorted()
-                    let manualList = completedList.filter { manualSet.contains($0) }
+                    let groupResults = group.plannedPaths.compactMap { rowResultByPath[$0] }
+                    let completeCount = groupResults.filter { $0.status == .complete }.count
+                    let partialCount = groupResults.filter { $0.status == .partial }.count
+                    let notDoneCount = groupResults.filter { $0.status == .notComplete }.count
 
-                    drawRow(label: "Total planned", value: "\(group.plannedPaths.count)", indent: 12)
-                    drawWrappedRow(label: "Completed", value: completedList.isEmpty ? "—" : pathListText(completedList), indent: 12)
-                    if !partialList.isEmpty {
-                        drawWrappedRow(label: "Partial", value: pathListText(partialList), indent: 12)
-                    }
-                    if !missedList.isEmpty {
-                        drawWrappedRow(label: "Missed", value: pathListText(missedList), indent: 12)
-                    }
-                    if !manualList.isEmpty {
-                        drawWrappedRow(label: "Manually marked complete", value: pathListText(manualList), indent: 12)
+                    drawRow(
+                        label: "Total planned",
+                        value: "\(group.plannedPaths.count)  (✅ \(completeCount)  ⚠️ \(partialCount)  ❌ \(notDoneCount))",
+                        indent: 12
+                    )
+
+                    // Row-by-row simple list — the operational record.
+                    for result in groupResults {
+                        drawRow(
+                            label: "\(result.status.emoji)  \(result.formattedPath)",
+                            value: result.statusAndSourceLabel,
+                            indent: 12
+                        )
                     }
                 }
+                _ = manuallyMarkedComplete // retained for backwards compatibility; sources now embedded per row
             }
 
             // ── Tank Sessions (existing) ─────────────────────────────────
