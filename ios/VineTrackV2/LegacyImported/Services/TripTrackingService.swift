@@ -82,6 +82,16 @@ final class TripTrackingService {
     /// Last path the operator dismissed for realignment — we won't re-prompt
     /// for the same path until the lock changes.
     private var lastDismissedRealignPath: Double?
+    /// Last time we surfaced a realign suggestion. Used to throttle the
+    /// banner so it doesn't flood the screen during turning manoeuvres.
+    private var lastAutoRealignShownAt: Date?
+    /// Minimum gap between successive realign suggestions, even for
+    /// different paths. Keeps the screen quiet while the planned and
+    /// live sequences settle after a row-end manoeuvre.
+    private let autoRealignReshowCooldown: TimeInterval = 15.0
+    /// Was the previous GPS tick on the planned path AND in-corridor?
+    /// Drives end-of-row exit completion for short rows.
+    private var previousOnPlannedInCorridor: Bool = false
 
     /// Smoothed ground speed in m/s. Derived from a rolling-window
     /// distance/time calculation across recent GPS samples — *not* from
@@ -340,6 +350,8 @@ final class TripTrackingService {
         diagManualCorrectionEvents.removeAll()
         autoRealignSuggestedPath = nil
         lastDismissedRealignPath = nil
+        lastAutoRealignShownAt = nil
+        previousOnPlannedInCorridor = false
         diagFreeDriveActive = false
         diagFreeDriveCandidatePath = nil
         diagFreeDriveStablePath = nil
@@ -990,7 +1002,44 @@ final class TripTrackingService {
                         advanceSequenceAfterCompletion(trip: &trip)
                     }
                 }
+                previousOnPlannedInCorridor = true
             } else {
+                // End-of-row exit completion: if the previous tick was on
+                // the planned path in-corridor and the tractor has now
+                // left the corridor near a row end, treat the row as
+                // worked. This is critical for short rows where GPS
+                // coverage often falls a metre or two short — without
+                // this rule the planned sequence cascades out of sync.
+                if previousOnPlannedInCorridor,
+                   let target = currentSequencePath,
+                   !trip.completedPaths.contains(target),
+                   !trip.skippedPaths.contains(target) {
+                    let nearEnd = isNearPathEnd(
+                        path: target,
+                        paddock: paddock,
+                        location: locationService?.location,
+                        tolerance: exitCompletionEndTolerance
+                    )
+                    if nearEnd {
+                        let len = rowLength(forPath: target, paddock: paddock) ?? 0
+                        let acc = pathDistanceMap[target, default: 0]
+                        let minByFraction = max(0, len * exitCompletionMinCoverageFraction)
+                        let minRequired = max(exitCompletionMinCoverageMeters, minByFraction)
+                        if acc >= minRequired {
+                            trip.completedPaths.append(target)
+                            lastAutoCompletePath = target
+                            lastAutoCompleteAt = Date()
+                            diagAutoCompleteLastPath = target
+                            diagAutoCompleteLastFiredAt = lastAutoCompleteAt
+                            #if DEBUG
+                            diagAutoCompleteFiredCount += 1
+                            print("[TripAutoComplete] exit-near-end path=\(target) len=\(len) acc=\(acc)")
+                            #endif
+                            advanceSequenceAfterCompletion(trip: &trip)
+                        }
+                    }
+                }
+                previousOnPlannedInCorridor = false
                 // Off-cycle: reset last tracking location so the next valid
                 // on-path tick doesn't accumulate the off-path distance.
                 lastTrackingLocation = locationService?.location
@@ -1120,7 +1169,20 @@ final class TripTrackingService {
     /// Rows shorter than this are considered "short" and use a more
     /// forgiving auto-completion rule that accounts for GPS drift, turning
     /// radius and slow tractor speed at the row ends.
-    private let shortRowThresholdMetres: Double = 25.0
+    private let shortRowThresholdMetres: Double = 40.0
+    /// Tolerance (m) used by end-of-row exit completion. When the tractor
+    /// leaves the corridor of the planned path within this distance of
+    /// either row end, we treat the row as worked even if GPS coverage
+    /// fell short of the normal threshold (common on short vineyard rows).
+    private let exitCompletionEndTolerance: Double = 8.0
+    /// Minimum fraction of the planned row that must be covered before
+    /// end-of-row exit can finalize it. Prevents a passing tractor that
+    /// barely entered the corridor from being credited with the row.
+    private let exitCompletionMinCoverageFraction: Double = 0.3
+    /// Absolute minimum metres of accumulated coverage required before
+    /// end-of-row exit completion can fire (used in addition to the
+    /// fractional rule). Stops a 0.5m brush of the corridor counting.
+    private let exitCompletionMinCoverageMeters: Double = 3.0
 
     /// Advance the planned sequence to the next pending path after the
     /// current one auto-completes. Skips any entries that are already
@@ -1179,11 +1241,14 @@ final class TripTrackingService {
         if let length, length > 1 {
             if length <= shortRowThresholdMetres {
                 // Short-row rule: complete on either
-                //  • ~60 % of the row length covered (min 4 m), OR
-                //  • operator is within ~3 m of either row end.
+                //  • ~50 % of the row length covered (min 3 m), OR
+                //  • operator is within ~5 m of either row end.
+                // Tuned more forgiving than the long-row rule so short
+                // rows (≈10–15 m) don't cascade into realign warnings
+                // when GPS coverage falls a metre or two short.
                 ruleUsed = "shortRow"
-                requiredDistance = max(4.0, length * 0.6)
-                let nearEnd = isNearPathEnd(path: path, paddock: paddock, location: location, tolerance: 3.0)
+                requiredDistance = max(3.0, length * 0.5)
+                let nearEnd = isNearPathEnd(path: path, paddock: paddock, location: location, tolerance: 5.0)
                 if accumulated >= requiredDistance || nearEnd {
                     trip.completedPaths.append(path)
                     didComplete = true
@@ -1474,7 +1539,7 @@ final class TripTrackingService {
               !trip.rowSequence.isEmpty,
               trip.rowSequence.indices.contains(trip.sequenceIndex),
               let locked = lockedPath,
-              diagLockConfidence >= 0.4 else {
+              diagLockConfidence >= 0.6 else {
             autoRealignSuggestedPath = nil
             return
         }
@@ -1491,6 +1556,29 @@ final class TripTrackingService {
         }
         if let dismissed = lastDismissedRealignPath, abs(dismissed - locked) < 0.01 {
             return
+        }
+        // Quiet the realign banner during normal row-end turning and when
+        // the operator is already most of the way through the planned row
+        // — at that point the right move is to finish/accept rather than
+        // realign. Both conditions are common during short-row work.
+        if diagNearRowEnd {
+            diagWrongRowSuppressedReason = "realign suppressed: near row end"
+            return
+        }
+        if diagPlannedCompletionPercent > 40 {
+            diagWrongRowSuppressedReason = "realign suppressed: planned >40% complete"
+            return
+        }
+        // Cooldown: avoid flooding the screen with realign prompts. If we
+        // recently surfaced a suggestion, hold off until the cooldown has
+        // passed (unless the locked path is the same one already showing).
+        if let last = lastAutoRealignShownAt,
+           Date().timeIntervalSince(last) < autoRealignReshowCooldown,
+           autoRealignSuggestedPath.map({ abs($0 - locked) > 0.01 }) ?? true {
+            return
+        }
+        if autoRealignSuggestedPath.map({ abs($0 - locked) > 0.01 }) ?? true {
+            lastAutoRealignShownAt = Date()
         }
         autoRealignSuggestedPath = locked
     }

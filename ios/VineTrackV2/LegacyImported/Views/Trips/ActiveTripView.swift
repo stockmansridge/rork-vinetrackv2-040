@@ -166,9 +166,13 @@ struct ActiveTripView: View {
     private var shouldShowWrongPathBanner: Bool {
         guard isOffPlannedPath else { return false }
         if tracking.diagNearRowEnd { return false }
-        if tracking.diagPlannedCompletionPercent > 50 { return false }
-        // Require some lock confidence so brief GPS hops don't trigger.
-        if tracking.diagLockConfidence < 0.3 { return false }
+        // Once 35% or more of the planned row has been covered, finishing
+        // is the right action — no need to scream "wrong row" at the
+        // operator. Mirrors the auto-realign suppression rule.
+        if tracking.diagPlannedCompletionPercent > 35 { return false }
+        // Require solid lock confidence so brief GPS hops while turning
+        // at headlands don't trigger the banner.
+        if tracking.diagLockConfidence < 0.6 { return false }
         return true
     }
 
@@ -1338,6 +1342,9 @@ struct ActiveTripView: View {
     private var rowIndicatorOverlay: some View {
         HStack {
             rowChip(arrow: "arrow.left", label: leftRowLabel)
+                // Push the left chip down to match the right side so the
+                // two row indicators sit at the same height in the cab.
+                .padding(.top, 180)
                 .padding(.leading, 12)
 
             Spacer()
@@ -1593,15 +1600,20 @@ struct ActiveTripView: View {
     private var tripControls: some View {
         HStack(spacing: 12) {
             if !trip.rowSequence.isEmpty && !trip.isPaused {
-                // Compact previous/next pair — secondary to the live GPS
-                // auto-advancement, but always available as a manual fallback.
+                // Compact undo/done pair — secondary to the live GPS
+                // auto-advancement, but always available as a manual
+                // fallback. Labels include the actual path number so it's
+                // obvious in the cab which row each button affects.
                 HStack(spacing: 6) {
                     Button {
                         advanceRow(by: -1)
                     } label: {
-                        Image(systemName: "chevron.left")
+                        Text(undoButtonLabel)
                             .font(.subheadline.weight(.semibold))
-                            .frame(width: 44, height: 44)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .padding(.horizontal, 12)
+                            .frame(height: 44)
                     }
                     .buttonStyle(.bordered)
                     .disabled(trip.sequenceIndex <= 0)
@@ -1609,8 +1621,10 @@ struct ActiveTripView: View {
                     Button {
                         advanceRow(by: 1)
                     } label: {
-                        Label("Next Path", systemImage: "chevron.right")
+                        Text(doneButtonLabel)
                             .font(.subheadline.weight(.bold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .padding(.horizontal, 14)
                             .frame(height: 44)
                     }
@@ -1696,6 +1710,28 @@ struct ActiveTripView: View {
     }
 
     // MARK: - Helpers
+
+    /// Label for the primary "mark current path complete & move on" button.
+    /// Includes the actual planned path number so the operator can see in
+    /// the cab exactly which row will be ticked off.
+    private var doneButtonLabel: String {
+        if let p = plannedPath {
+            return "Done \(formatPath(p))"
+        }
+        return "Done"
+    }
+
+    /// Label for the secondary undo button. Reads as "Undo {previous path}"
+    /// so it is clear that tapping will UN-tick the row that was just
+    /// completed and step the planned sequence back by one.
+    private var undoButtonLabel: String {
+        let live = tracking.activeTrip ?? trip
+        let prevIndex = live.sequenceIndex - 1
+        if prevIndex >= 0, live.rowSequence.indices.contains(prevIndex) {
+            return "Undo \(formatPath(live.rowSequence[prevIndex]))"
+        }
+        return "Undo"
+    }
 
     private func advanceRow(by delta: Int) {
         guard !trip.rowSequence.isEmpty else { return }
