@@ -299,14 +299,11 @@ struct TripPDFService {
                 drawWrappedRow(label: "Notes", value: notes)
             }
 
-            // ── Manual Corrections ───────────────────────────────────────
-            if !trip.manualCorrectionEvents.isEmpty {
-                drawSectionHeader("Manual Corrections")
-                for event in trip.manualCorrectionEvents {
-                    let line = formatCorrectionEvent(event, timeZone: timeZone)
-                    drawWrappedRow(label: line.time, value: line.description)
-                }
-            }
+            // Manual Corrections section intentionally omitted from the
+            // exported customer/operator PDF. Internal correction events
+            // (auto_sequence_recover, end_review_completed, end_review_finalised, …)
+            // are still stored on the trip for diagnostics and remain visible
+            // in the in-app Trip Detail view.
 
             // ── Costs ────────────────────────────────────────────────────
             let hasChemCosts = !chemicalCosts.isEmpty
