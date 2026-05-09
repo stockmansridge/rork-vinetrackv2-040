@@ -58,7 +58,7 @@ begin
   y := sin(d_lon) * cos(lat2);
   x := cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(d_lon);
   brg := atan2(y, x) * 180.0 / pi();
-  return ((brg::numeric % 360) + 360)::double precision % 360;
+  return ((((brg::numeric % 360) + 360) % 360))::double precision;
 end;
 $function$;
 
@@ -241,7 +241,7 @@ begin
   else
     forward := path_bearing;
   end if;
-  left_bearing := ((forward - 90)::numeric % 360 + 360)::double precision % 360;
+  left_bearing := (((forward - 90)::numeric % 360 + 360) % 360)::double precision;
 
   lower_mid_lat := (r1_s_lat + r1_e_lat) / 2.0;
   lower_mid_lon := (r1_s_lon + r1_e_lon) / 2.0;
