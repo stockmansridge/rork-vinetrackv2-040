@@ -783,11 +783,30 @@ struct PinRowView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(pin.side.rawValue) hand side facing \(headingText)")
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
+                let drivingPathText: String? = {
+                    if let path = pin.drivingRowNumber {
+                        return path == path.rounded() ? String(format: "%.1f", path) : String(format: "%.1f", path)
+                    }
+                    if let legacy = pin.rowNumber { return "\(legacy).5" }
+                    return nil
+                }()
+                let sideLabel = (pin.pinSide ?? pin.side).rawValue
 
-                if let rowNumber = pin.rowNumber {
+                if let drivingPathText {
+                    Text("Row \(drivingPathText) \(sideLabel) hand side facing \(headingText)")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                } else {
+                    Text("\(sideLabel) hand side facing \(headingText)")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                }
+
+                if let pinRow = pin.pinRowNumber {
+                    Text("\(paddockName) row \(pinRow)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let rowNumber = pin.rowNumber {
                     Text("\(paddockName) row \(rowNumber).5")
                         .font(.caption)
                         .foregroundStyle(.secondary)
