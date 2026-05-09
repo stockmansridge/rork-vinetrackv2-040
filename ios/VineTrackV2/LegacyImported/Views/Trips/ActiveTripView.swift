@@ -115,10 +115,21 @@ struct ActiveTripView: View {
     }
 
     private var nextPath: Double? {
-        guard !trip.rowSequence.isEmpty else { return nil }
-        let next = trip.sequenceIndex + 1
-        if next < trip.rowSequence.count {
-            return trip.rowSequence[next]
+        let live = tracking.activeTrip ?? trip
+        guard !live.rowSequence.isEmpty else { return nil }
+        // Skip any pending entries that match the displayed current path or
+        // are already completed/skipped — prevents "Current 96.5 / Next
+        // 96.5" when the planned pointer hasn't advanced past a duplicate
+        // or just-completed row.
+        let current = displayPath
+        var idx = live.sequenceIndex + 1
+        while idx < live.rowSequence.count {
+            let candidate = live.rowSequence[idx]
+            let sameAsCurrent = current.map { abs($0 - candidate) < 0.01 } ?? false
+            let alreadyDone = live.completedPaths.contains(where: { abs($0 - candidate) < 0.01 })
+                || live.skippedPaths.contains(where: { abs($0 - candidate) < 0.01 })
+            if !sameAsCurrent && !alreadyDone { return candidate }
+            idx += 1
         }
         return nil
     }
@@ -426,7 +437,8 @@ struct ActiveTripView: View {
                     wrongPathBanner
                 }
 
-                if tracking.autoRealignSuggestedPath != nil {
+                if let suggested = tracking.autoRealignSuggestedPath,
+                   shouldShowRealignBanner(for: suggested) {
                     autoRealignBanner
                 }
             }
@@ -1277,6 +1289,18 @@ struct ActiveTripView: View {
         .allowsHitTesting(false)
         .transition(.move(edge: .top).combined(with: .opacity))
         .sensoryFeedback(.warning, trigger: shouldShowWrongPathBanner)
+    }
+
+    /// Defensive UI guard so we never show "Realign to 96.5" while
+    /// Current/Next already display 96.5. Mirrors the service-side
+    /// suppression but protects against any state-update lag.
+    private func shouldShowRealignBanner(for suggested: Double) -> Bool {
+        if let current = displayPath, abs(current - suggested) < 0.01 { return false }
+        if let next = nextPath, abs(next - suggested) < 0.01 { return false }
+        if let planned = plannedPath, abs(planned - suggested) < 0.01 { return false }
+        if let live = liveDetectedPath, abs(live - suggested) < 0.01,
+           let current = displayPath, abs(current - live) < 0.01 { return false }
+        return true
     }
 
     /// Auto-realign suggestion. Shown when the tracker is confidently

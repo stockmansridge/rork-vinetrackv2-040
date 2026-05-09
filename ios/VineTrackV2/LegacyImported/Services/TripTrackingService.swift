@@ -1207,7 +1207,10 @@ final class TripTrackingService {
             if clamped + 1 < trip.rowSequence.count {
                 trip.nextRowNumber = trip.rowSequence[clamped + 1]
             } else {
-                trip.nextRowNumber = trip.rowSequence[clamped]
+                // End of sequence: keep nextRowNumber distinct from the
+                // current row so the UI doesn't show "Current 96.5 / Next
+                // 96.5". Use a sentinel just past the last row.
+                trip.nextRowNumber = trip.rowSequence[clamped] + 1
             }
         }
     }
@@ -1535,7 +1538,7 @@ final class TripTrackingService {
     /// Re-evaluate whether to suggest a realignment. Called from the row-lock
     /// updater whenever the locked path or trip state changes.
     private func recomputeAutoRealignSuggestion() {
-        guard let trip = activeTrip,
+        guard var trip = activeTrip,
               !trip.rowSequence.isEmpty,
               trip.rowSequence.indices.contains(trip.sequenceIndex),
               let locked = lockedPath,
@@ -1546,6 +1549,30 @@ final class TripTrackingService {
         let planned = trip.rowSequence[trip.sequenceIndex]
         if abs(planned - locked) < 0.01 {
             autoRealignSuggestedPath = nil
+            return
+        }
+        // Suppress contradictory banners: if the operator-visible "current"
+        // path or the displayed "next" path already matches the locked
+        // live path, asking them to realign to the same row is confusing.
+        // In that case quietly sync the planned pointer instead.
+        let displayedCurrent = currentRowNumber ?? trip.currentRowNumber
+        let displayedNext = trip.nextRowNumber
+        if abs(displayedCurrent - locked) < 0.01 || abs(displayedNext - locked) < 0.01 {
+            autoRealignSuggestedPath = nil
+            // Stalled-sequence recovery: live row is the locked path but the
+            // planned pointer is stuck (likely because a previous short row
+            // didn't auto-complete). Advance the pointer silently to the
+            // locked path so Current/Next labels make sense again.
+            if let idx = trip.rowSequence.firstIndex(where: { abs($0 - locked) < 0.01 }),
+               idx != trip.sequenceIndex {
+                trip.sequenceIndex = idx
+                trip.currentRowNumber = trip.rowSequence[idx]
+                if idx + 1 < trip.rowSequence.count {
+                    trip.nextRowNumber = trip.rowSequence[idx + 1]
+                }
+                store?.updateTrip(trip)
+                recordCorrection("auto_sequence_recover: \(locked)")
+            }
             return
         }
         // Only suggest if the locked path actually exists somewhere in the
