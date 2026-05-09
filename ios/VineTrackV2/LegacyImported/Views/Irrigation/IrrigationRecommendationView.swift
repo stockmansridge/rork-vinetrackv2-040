@@ -41,6 +41,50 @@ struct IrrigationRecommendationView: View {
     @State private var showMissingRainHelper: Bool = false
     @State private var didLoadWeatherWizardStatus: Bool = false
 
+    // Info popover state — keyed by term identifier.
+    @State private var activeInfoTerm: InfoTerm?
+
+    private enum InfoTerm: String, Identifiable, CaseIterable {
+        case eto, kc, applicationRate, irrigationEfficiency
+        case rainfallEffectiveness, replacement, soilBuffer, recentRain
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .eto: return "ETo"
+            case .kc: return "Crop coefficient (Kc)"
+            case .applicationRate: return "Application rate (mm/hr)"
+            case .irrigationEfficiency: return "Irrigation efficiency (%)"
+            case .rainfallEffectiveness: return "Rainfall effectiveness (%)"
+            case .replacement: return "Replacement (%)"
+            case .soilBuffer: return "Soil moisture buffer (mm)"
+            case .recentRain: return "Recent actual rain (mm)"
+            }
+        }
+
+        var body: String {
+            switch self {
+            case .eto:
+                return "ETo means reference evapotranspiration. It estimates how much water is lost from a reference crop through evaporation and plant transpiration. Vine water use is estimated by multiplying ETo by the crop coefficient."
+            case .kc:
+                return "Crop coefficient adjusts reference ETo to better match vine water use. A lower Kc means the vines are using less water; a higher Kc means more canopy and higher water demand."
+            case .applicationRate:
+                return "Application rate is how many millimetres of water your irrigation system applies per hour. It converts the required irrigation depth into an irrigation duration."
+            case .irrigationEfficiency:
+                return "Irrigation efficiency allows for losses in the system and soil. A lower efficiency means more water must be applied to achieve the target amount in the root zone."
+            case .rainfallEffectiveness:
+                return "Rainfall effectiveness estimates how much forecast or recent rain is actually useful to the vines. Some rainfall may be lost to runoff, evaporation, interception, or shallow wetting."
+            case .replacement:
+                return "Replacement controls how much of the calculated deficit you want to replace. 100% replaces the full calculated deficit; lower values apply less."
+            case .soilBuffer:
+                return "Soil moisture buffer is an allowance for water already available in the soil. It reduces the calculated irrigation requirement."
+            case .recentRain:
+                return "Recent actual rain is rain that has already fallen. The advisor uses it to reduce the forecast irrigation requirement."
+            }
+        }
+    }
+
     // Persisted rainfall history coverage (number of days in the last
     // 365 days that have a recorded rainfall row in any source). Used
     // to surface the "Build rainfall history" prompt even when the
@@ -108,6 +152,22 @@ struct IrrigationRecommendationView: View {
     private var recentActualRainOffsetMm: Double {
         guard includeRecentActualRain, let r = recentRainResult else { return 0 }
         return r.dailyMm.values.reduce(0, +)
+    }
+
+    // MARK: - Dormancy awareness
+
+    /// True when the vines are likely dormant based on latitude and the
+    /// current calendar month. Southern Hemisphere: Jun/Jul/Aug.
+    /// Northern Hemisphere: Dec/Jan/Feb. Used as a first-pass heuristic
+    /// when no growth-stage data is available.
+    private var isLikelyDormant: Bool {
+        let month = Calendar.current.component(.month, from: Date())
+        let lat = latitude ?? 0
+        if lat < 0 {
+            return [6, 7, 8].contains(month)
+        } else {
+            return [12, 1, 2].contains(month)
+        }
     }
 
     private var result: IrrigationRecommendationResult? {
@@ -545,8 +605,11 @@ struct IrrigationRecommendationView: View {
 
                 Toggle(isOn: $includeRecentActualRain) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Include recent actual rain")
-                            .font(.subheadline)
+                        HStack(spacing: 4) {
+                            Text("Include recent actual rain")
+                                .font(.subheadline)
+                            infoButton(for: .recentRain)
+                        }
                         Text(includeRecentActualRain
                              ? "Subtracted from forecast deficit (after rainfall effectiveness)."
                              : "Recent actual rain is shown but not used in the calculation.")
@@ -555,6 +618,13 @@ struct IrrigationRecommendationView: View {
                     }
                 }
                 .tint(VineyardTheme.leafGreen)
+
+                if isLikelyDormant {
+                    Label("Dormant season — recent rainfall is shown for reference.",
+                          systemImage: "leaf.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
             .padding(.vertical, 4)
         } header: {
@@ -770,16 +840,45 @@ struct IrrigationRecommendationView: View {
 
     private func recommendationCard(_ result: IrrigationRecommendationResult) -> some View {
         let needsIrrigation = result.netDeficitMm > 0 && settings.irrigationApplicationRateMmPerHour > 0
+        let dormant = isLikelyDormant
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: needsIrrigation ? "drop.fill" : "checkmark.seal.fill")
-                    .foregroundStyle(needsIrrigation ? VineyardTheme.vineRed : VineyardTheme.leafGreen)
-                Text(needsIrrigation ? "Irrigation recommended" : "No irrigation needed")
+                Image(systemName: dormant
+                                  ? "leaf.fill"
+                                  : (needsIrrigation ? "drop.fill" : "checkmark.seal.fill"))
+                    .foregroundStyle(dormant
+                                     ? Color.orange
+                                     : (needsIrrigation ? VineyardTheme.vineRed : VineyardTheme.leafGreen))
+                Text(dormant
+                     ? "Dormant season caution"
+                     : (needsIrrigation ? "Irrigation recommended" : "No irrigation needed"))
                     .font(.headline)
                 Spacer()
             }
 
-            if needsIrrigation {
+            if dormant {
+                Text("The vines are likely dormant. The calculated water deficit is shown for reference, but irrigation may not be required unless soil moisture is low, young vines need support, or conditions are unusually dry.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if needsIrrigation {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Calculated irrigation equivalent")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(hoursMinutesString(result.recommendedIrrigationHours))
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .monospacedDigit()
+                        Text(String(format: "Equivalent to %.1f mm over the next %d days", result.grossIrrigationMm, result.dailyBreakdown.count))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.1), in: .rect(cornerRadius: 10))
+                }
+            } else if needsIrrigation {
                 Text(String(format: "%.1f hours", result.recommendedIrrigationHours))
                     .font(.system(size: 34, weight: .bold))
                     .foregroundStyle(VineyardTheme.leafGreen)
@@ -800,9 +899,9 @@ struct IrrigationRecommendationView: View {
             Divider()
 
             HStack(spacing: 14) {
-                summaryStat("Crop use", String(format: "%.1f mm", result.forecastCropUseMm))
-                summaryStat("Eff. rain", String(format: "%.1f mm", result.forecastEffectiveRainMm))
-                summaryStat("Net deficit", String(format: "%.1f mm", result.netDeficitMm))
+                summaryStat("Crop use", String(format: "%.1f mm", result.forecastCropUseMm), info: .eto)
+                summaryStat("Eff. rain", String(format: "%.1f mm", result.forecastEffectiveRainMm), info: .rainfallEffectiveness)
+                summaryStat("Net deficit", String(format: "%.1f mm", result.netDeficitMm), info: nil)
             }
 
             if result.recentActualRainMm > 0 {
@@ -825,16 +924,51 @@ struct IrrigationRecommendationView: View {
         .padding(.vertical, 6)
     }
 
-    private func summaryStat(_ label: String, _ value: String) -> some View {
+    private func summaryStat(_ label: String, _ value: String, info: InfoTerm? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let info {
+                    infoButton(for: info)
+                }
+            }
             Text(value)
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Info popover button
+
+    private func infoButton(for term: InfoTerm) -> some View {
+        Button {
+            activeInfoTerm = term
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.caption2)
+                .foregroundStyle(.tint)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("About \(term.title)")
+        .popover(isPresented: Binding(
+            get: { activeInfoTerm == term },
+            set: { if !$0 { activeInfoTerm = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(term.title)
+                    .font(.headline)
+                Text(term.body)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(minWidth: 260, maxWidth: 320)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     // MARK: - Block
@@ -962,11 +1096,13 @@ struct IrrigationRecommendationView: View {
                                 HStack {
                                     metric("ETo", String(format: "%.1f", day.forecastEToMm), suffix: "mm")
                                     Divider().frame(height: 20)
-                                    metric("Rain", String(format: "%.1f", day.forecastRainMm), suffix: "mm")
+                                    metric("Rain", String(format: "%.1f", day.forecastRainMm), suffix: "mm",
+                                           highlight: day.forecastRainMm > 0 ? .blue : nil)
                                     Divider().frame(height: 20)
                                     metric("Crop use", String(format: "%.1f", day.cropUseMm), suffix: "mm")
                                     Divider().frame(height: 20)
-                                    metric("Eff. rain", String(format: "%.1f", day.effectiveRainMm), suffix: "mm")
+                                    metric("Eff. rain", String(format: "%.1f", day.effectiveRainMm), suffix: "mm",
+                                           highlight: day.effectiveRainMm > 0 ? .blue : nil)
                                 }
                             }
                         }
@@ -992,7 +1128,8 @@ struct IrrigationRecommendationView: View {
                     field: .appRate,
                     help: "How many millimetres of water your irrigation system applies to this block in one hour.",
                     isSiteData: appRateIsSiteData,
-                    siteDataNote: "Pre-filled from this paddock's system rate."
+                    siteDataNote: "Pre-filled from this paddock's system rate.",
+                    info: .applicationRate
                 )
                 settingRow(
                     label: "Crop coefficient (Kc)",
@@ -1000,7 +1137,8 @@ struct IrrigationRecommendationView: View {
                     field: .kc,
                     help: "Vine water demand vs reference grass. 0.65 is a typical mid-season value.",
                     isSiteData: false,
-                    siteDataNote: nil
+                    siteDataNote: nil,
+                    info: .kc
                 )
                 settingRow(
                     label: "Irrigation efficiency (%)",
@@ -1008,7 +1146,8 @@ struct IrrigationRecommendationView: View {
                     field: .efficiency,
                     help: "How much pumped water reaches vine roots. Drip systems ~90%.",
                     isSiteData: false,
-                    siteDataNote: nil
+                    siteDataNote: nil,
+                    info: .irrigationEfficiency
                 )
                 settingRow(
                     label: "Rainfall effectiveness (%)",
@@ -1016,7 +1155,8 @@ struct IrrigationRecommendationView: View {
                     field: .rainEff,
                     help: "Fraction of forecast rainfall available to the vines. Typically ~80%.",
                     isSiteData: false,
-                    siteDataNote: nil
+                    siteDataNote: nil,
+                    info: .rainfallEffectiveness
                 )
                 settingRow(
                     label: "Replacement (%)",
@@ -1024,7 +1164,8 @@ struct IrrigationRecommendationView: View {
                     field: .replacement,
                     help: "How much vine water use to replace. Lower for deficit irrigation.",
                     isSiteData: false,
-                    siteDataNote: nil
+                    siteDataNote: nil,
+                    info: .replacement
                 )
                 settingRow(
                     label: "Soil buffer (mm)",
@@ -1032,7 +1173,8 @@ struct IrrigationRecommendationView: View {
                     field: .buffer,
                     help: "Extra water already stored in the soil. Subtracted from the deficit.",
                     isSiteData: false,
-                    siteDataNote: nil
+                    siteDataNote: nil,
+                    info: .soilBuffer
                 )
             }
         } footer: {
@@ -1046,12 +1188,16 @@ struct IrrigationRecommendationView: View {
         field: Field,
         help: String,
         isSiteData: Bool,
-        siteDataNote: String?
+        siteDataNote: String?,
+        info: InfoTerm? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 HStack(spacing: 4) {
                     Text(label)
+                    if let info {
+                        infoButton(for: info)
+                    }
                     if isSiteData {
                         Image(systemName: "sparkles")
                             .font(.caption)
@@ -1079,7 +1225,7 @@ struct IrrigationRecommendationView: View {
 
     // MARK: - Helpers
 
-    private func metric(_ label: String, _ value: String, suffix: String) -> some View {
+    private func metric(_ label: String, _ value: String, suffix: String, highlight: Color? = nil) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.caption2)
@@ -1087,6 +1233,7 @@ struct IrrigationRecommendationView: View {
             Text("\(value) \(suffix)")
                 .font(.caption.weight(.semibold))
                 .monospacedDigit()
+                .foregroundStyle(highlight ?? .primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
