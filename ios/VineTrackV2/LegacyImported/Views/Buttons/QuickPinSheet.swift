@@ -208,7 +208,7 @@ struct QuickPinSheet: View {
         }
 
         let proceed = { createPin(button: button, location: loc) }
-        if let dup = checkDuplicate(at: loc.coordinate) {
+        if let dup = checkDuplicate(at: loc.coordinate, side: side, mode: button.mode) {
             recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
@@ -232,7 +232,7 @@ struct QuickPinSheet: View {
             return
         }
         let proceed = { createGrowthPin(stage: stage, location: loc) }
-        if let dup = checkDuplicate(at: loc.coordinate) {
+        if let dup = checkDuplicate(at: loc.coordinate, side: side, mode: .growth) {
             recordDuplicateWarningShown(dup)
             duplicateWarning = DuplicateWarning(
                 existing: dup.pin,
@@ -292,8 +292,27 @@ struct QuickPinSheet: View {
     }
 
     private func checkDuplicate(
-        at coord: CLLocationCoordinate2D
+        at coord: CLLocationCoordinate2D,
+        side: PinSide,
+        mode: PinMode
     ) -> (pin: VinePin, distance: Double, radius: Double)? {
+        let rowNumber = Int(rowText.trimmingCharacters(in: .whitespacesAndNewlines))
+        // When the operator has explicitly entered paddock + row, prefer
+        // along-row geometry so two pins on the same row line are caught
+        // even if their raw GPS samples are a metre or two apart.
+        if let alongRow = PinDuplicateChecker.nearbyPinAlongRow(
+            snappedCoordinate: coord,
+            vineyardId: store.selectedVineyardId,
+            paddockId: selectedPaddockId,
+            rowNumber: rowNumber,
+            side: side,
+            mode: mode,
+            in: store.pins,
+            paddocks: store.paddocks
+        ) {
+            tracking.diagDuplicateRadiusMeters = PinDuplicateChecker.alongRowDuplicateMetres
+            return (alongRow.pin, alongRow.distance, PinDuplicateChecker.alongRowDuplicateMetres)
+        }
         let radius = PinDuplicateChecker.duplicateRadius(
             coordinate: coord,
             paddockId: selectedPaddockId,

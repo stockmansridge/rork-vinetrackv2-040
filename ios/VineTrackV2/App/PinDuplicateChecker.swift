@@ -66,6 +66,7 @@ nonisolated enum PinDuplicateChecker {
         vineyardId: UUID?,
         paddockId: UUID?,
         rowNumber: Int?,
+        side: PinSide? = nil,
         mode: PinMode?,
         in pins: [VinePin],
         paddocks: [Paddock]
@@ -86,6 +87,9 @@ nonisolated enum PinDuplicateChecker {
             if let vid = vineyardId, pin.vineyardId != vid { continue }
             guard pin.paddockId == paddockId else { continue }
             guard pin.rowNumber == rowNumber else { continue }
+            // Only constrain by side when the caller actually knows the
+            // side — otherwise treat both sides as candidate duplicates.
+            if let side, pin.side != side { continue }
             if let mode, pin.mode != mode { continue }
             guard let snappedOther = RowGuidance.snapToRow(
                 coordinate: pin.coordinate,

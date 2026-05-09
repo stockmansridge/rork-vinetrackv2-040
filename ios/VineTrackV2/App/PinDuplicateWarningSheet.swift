@@ -24,6 +24,20 @@ struct PinDuplicateWarningSheet: View {
         return String(format: "%.1f m away", distance)
     }
 
+    private var attachmentLabel: String? {
+        PinAttachmentFormatter.rowAndSide(
+            rowNumber: existingPin.rowNumber,
+            side: existingPin.rowNumber != nil ? existingPin.side : nil
+        )
+    }
+
+    private var headlineText: String {
+        if let row = existingPin.rowNumber {
+            return "Possible duplicate pin nearby on Row \(row).5"
+        }
+        return "Possible duplicate pin nearby"
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -33,9 +47,16 @@ struct PinDuplicateWarningSheet: View {
                         .foregroundStyle(.orange)
                         .padding(.top, 8)
 
-                    Text("Possible duplicate pin nearby")
+                    Text(headlineText)
                         .font(.title3.weight(.bold))
                         .multilineTextAlignment(.center)
+
+                    if let attachmentLabel {
+                        Text("Attached to \(attachmentLabel)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
 
                     Text("There's already a pin within \(String(format: "%.1f m", radius)) of this location. You can view it, create another anyway, or cancel.")
                         .font(.subheadline)
@@ -67,7 +88,8 @@ struct PinDuplicateWarningSheet: View {
                         LabeledContent("Status", value: existingPin.isCompleted ? "Completed" : "Active")
                         LabeledContent("Block", value: paddockName)
                         if let row = existingPin.rowNumber {
-                            LabeledContent("Row", value: "\(row)")
+                            LabeledContent("Row", value: "\(row).5")
+                            LabeledContent("Side", value: existingPin.side.rawValue)
                         }
                         LabeledContent(
                             "Created",

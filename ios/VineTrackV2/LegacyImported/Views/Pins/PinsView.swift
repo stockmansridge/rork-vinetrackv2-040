@@ -1121,8 +1121,13 @@ struct PinDetailSheet: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(pin.buttonName)
                                 .font(.title3.weight(.semibold))
+                            if let attached = PinAttachmentFormatter.rowAndSide(rowNumber: pin.rowNumber, side: pin.side) {
+                                Text("Attached to \(attached)")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(VineyardTheme.olive)
+                            }
                             Text("\(pin.side.rawValue) hand side facing \(compassDirection)")
-                                .font(.subheadline)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }

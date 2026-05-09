@@ -470,6 +470,7 @@ final class TripTrackingService {
                 vineyardId: store.selectedVineyardId,
                 paddockId: resolvedPaddock,
                 rowNumber: resolvedRow,
+                side: side,
                 mode: button.mode,
                 in: store.pins,
                 paddocks: store.paddocks
