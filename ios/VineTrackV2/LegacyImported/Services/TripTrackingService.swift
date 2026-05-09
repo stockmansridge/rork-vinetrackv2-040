@@ -419,15 +419,62 @@ final class TripTrackingService {
         let resolvedPaddock = paddockId ?? resolved.paddockId ?? trip.paddockId
         let resolvedRow = rowNumber ?? resolved.rowNumber
 
+        // Snap the pin coordinate onto the live locked row line when we
+        // have a confident lock. Pins are almost always for issues on the
+        // vine row itself (broken post, irrigation, growth, repair) so
+        // placing them on the row centreline is operationally correct
+        // and gives us a stable along-row coordinate for duplicate
+        // checking. Falls back to the raw GPS point when no lock or
+        // geometry is available.
+        var pinCoordinate = location.coordinate
+        var snappedToRow = false
+        if diagLockConfidence >= 0.6,
+           let lockedPath = lockedPath ?? currentRowNumber,
+           let pid = resolvedPaddock,
+           let paddock = store.paddocks.first(where: { $0.id == pid }),
+           let snap = RowGuidance.snapToPath(
+               coordinate: location.coordinate,
+               path: lockedPath,
+               in: paddock
+           ) {
+            pinCoordinate = snap.snapped
+            snappedToRow = true
+        }
+
         if !force {
+            // Prefer along-row duplicate detection when we have a row
+            // lock. Same vineyard + paddock + row + mode within ~2.5 m
+            // along the row line is a likely duplicate even if the raw
+            // GPS samples sit slightly apart.
+            if let alongRow = PinDuplicateChecker.nearbyPinAlongRow(
+                snappedCoordinate: pinCoordinate,
+                vineyardId: store.selectedVineyardId,
+                paddockId: resolvedPaddock,
+                rowNumber: resolvedRow,
+                mode: button.mode,
+                in: store.pins,
+                paddocks: store.paddocks
+            ) {
+                let title = alongRow.pin.buttonName.isEmpty ? "pin" : alongRow.pin.buttonName
+                let status = alongRow.pin.isCompleted ? "completed" : "active"
+                let dist = String(format: "%.2f", alongRow.distance)
+                diagDuplicateRadiusMeters = PinDuplicateChecker.alongRowDuplicateMetres
+                diagDuplicateCheckResult =
+                    "duplicate_warning_shown_along_row: \(title), \(dist)m, status=\(status)"
+                return .duplicateNearby(
+                    existing: alongRow.pin,
+                    distance: alongRow.distance,
+                    radius: PinDuplicateChecker.alongRowDuplicateMetres
+                )
+            }
             let radius = PinDuplicateChecker.duplicateRadius(
-                coordinate: location.coordinate,
+                coordinate: pinCoordinate,
                 paddockId: resolvedPaddock,
                 paddocks: store.paddocks
             )
             diagDuplicateRadiusMeters = radius
             if let match = PinDuplicateChecker.nearbyPin(
-                coordinate: location.coordinate,
+                coordinate: pinCoordinate,
                 vineyardId: store.selectedVineyardId,
                 paddockId: resolvedPaddock,
                 radius: radius,
@@ -440,14 +487,14 @@ final class TripTrackingService {
                     "duplicate_warning_shown: \(title), \(dist)m, status=\(status)"
                 return .duplicateNearby(existing: match.pin, distance: match.distance, radius: radius)
             }
-            diagDuplicateCheckResult = "no_duplicate_found"
+            diagDuplicateCheckResult = snappedToRow ? "no_duplicate_found_snapped" : "no_duplicate_found"
         } else {
             diagDuplicateCheckResult = "duplicate_create_anyway"
         }
 
         guard var pin = store.createPinFromButton(
             button: button,
-            coordinate: location.coordinate,
+            coordinate: pinCoordinate,
             heading: locationService?.heading?.trueHeading ?? 0,
             side: side,
             paddockId: resolvedPaddock,
@@ -1257,9 +1304,24 @@ final class TripTrackingService {
                     didComplete = true
                 }
             } else {
-                // Long-row rule: original 80 % progress threshold.
+                // Long-row rule: don't auto-complete in the middle of the row.
+                // Either the operator must be near the row end (about to
+                // turn out) with at least 60 % coverage, OR they have
+                // covered ~95 % of the row (rare overshoot). This prevents
+                // a 245 m row from being marked complete at 80 % (about
+                // 50 m before the end) which then makes the planned
+                // sequence advance and triggers a spurious wrong-row
+                // warning while the operator is still driving the row.
                 ruleUsed = "longRow"
-                requiredDistance = length * 0.8
+                let nearEnd = isNearPathEnd(
+                    path: path,
+                    paddock: paddock,
+                    location: location,
+                    tolerance: nearRowEndTolerance
+                )
+                let nearEndCoverage = length * 0.6
+                let overshootCoverage = length * 0.95
+                requiredDistance = nearEnd ? nearEndCoverage : overshootCoverage
                 if accumulated >= requiredDistance {
                     trip.completedPaths.append(path)
                     didComplete = true

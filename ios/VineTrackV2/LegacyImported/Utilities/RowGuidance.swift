@@ -180,6 +180,95 @@ nonisolated enum RowGuidance {
         return inside
     }
 
+    /// Project a coordinate onto the row line of `rowNumber` in `paddock`,
+    /// returning the snapped coordinate and the along-row distance (m)
+    /// from the row start. Returns nil when the row geometry isn't
+    /// available or the row is degenerate.
+    static func snapToRow(
+        coordinate: CLLocationCoordinate2D,
+        rowNumber: Int,
+        in paddock: Paddock
+    ) -> (snapped: CLLocationCoordinate2D, distanceAlongMetres: Double, rowLengthMetres: Double)? {
+        guard let row = paddock.rows.first(where: { $0.number == rowNumber }) else {
+            return nil
+        }
+        return snap(
+            coordinate: coordinate,
+            start: row.startPoint.coordinate,
+            end: row.endPoint.coordinate
+        )
+    }
+
+    /// Project a coordinate onto the row centreline implied by an X.5
+    /// path number (the path between rows X and X+1). The snapped point
+    /// is on the geometric mid-line between the two rows.
+    static func snapToPath(
+        coordinate: CLLocationCoordinate2D,
+        path: Double,
+        in paddock: Paddock
+    ) -> (snapped: CLLocationCoordinate2D, distanceAlongMetres: Double, rowLengthMetres: Double)? {
+        let lower = Int(floor(path))
+        let upper = Int(ceil(path))
+        guard let r1 = paddock.rows.first(where: { $0.number == lower }) ?? paddock.rows.first(where: { $0.number == upper }) else {
+            return nil
+        }
+        // If we have both neighbours, use their midline; otherwise snap
+        // to whichever single row is available.
+        if lower != upper,
+           let r2 = paddock.rows.first(where: { $0.number == upper }),
+           let r1Strict = paddock.rows.first(where: { $0.number == lower }) {
+            let start = midpoint(r1Strict.startPoint.coordinate, r2.startPoint.coordinate)
+            let end = midpoint(r1Strict.endPoint.coordinate, r2.endPoint.coordinate)
+            return snap(coordinate: coordinate, start: start, end: end)
+        }
+        return snap(coordinate: coordinate, start: r1.startPoint.coordinate, end: r1.endPoint.coordinate)
+    }
+
+    /// Project `coordinate` onto the segment `start`→`end`. Returns the
+    /// snapped point, along-segment distance from `start`, and the
+    /// segment length in metres.
+    private static func snap(
+        coordinate: CLLocationCoordinate2D,
+        start a: CLLocationCoordinate2D,
+        end b: CLLocationCoordinate2D
+    ) -> (snapped: CLLocationCoordinate2D, distanceAlongMetres: Double, rowLengthMetres: Double)? {
+        let centroidLat = (a.latitude + b.latitude + coordinate.latitude) / 3.0
+        let mPerDegLat = 111_320.0
+        let mPerDegLon = 111_320.0 * cos(centroidLat * .pi / 180.0)
+
+        let ax = a.longitude * mPerDegLon
+        let ay = a.latitude * mPerDegLat
+        let bx = b.longitude * mPerDegLon
+        let by = b.latitude * mPerDegLat
+        let px = coordinate.longitude * mPerDegLon
+        let py = coordinate.latitude * mPerDegLat
+
+        let dx = bx - ax
+        let dy = by - ay
+        let lenSq = dx * dx + dy * dy
+        guard lenSq > 1e-6 else { return nil }
+        let length = sqrt(lenSq)
+        var t = ((px - ax) * dx + (py - ay) * dy) / lenSq
+        t = max(0, min(1, t))
+        let cx = ax + t * dx
+        let cy = ay + t * dy
+        let snapped = CLLocationCoordinate2D(
+            latitude: cy / mPerDegLat,
+            longitude: cx / mPerDegLon
+        )
+        return (snapped, t * length, length)
+    }
+
+    private static func midpoint(
+        _ a: CLLocationCoordinate2D,
+        _ b: CLLocationCoordinate2D
+    ) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(
+            latitude: (a.latitude + b.latitude) / 2.0,
+            longitude: (a.longitude + b.longitude) / 2.0
+        )
+    }
+
     static func metresBetween(
         _ a: CLLocationCoordinate2D,
         _ b: CLLocationCoordinate2D

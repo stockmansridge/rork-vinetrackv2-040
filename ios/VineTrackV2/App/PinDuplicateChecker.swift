@@ -49,6 +49,61 @@ nonisolated enum PinDuplicateChecker {
     /// vineyard. Active (not-completed) pins are preferred; completed pins
     /// are returned only when no active match exists. Returns `nil` when
     /// no pin is in range.
+    /// Along-row duplicate radius. When pin-snapping projects two pins
+    /// onto the same row line, raw GPS distance under-counts duplicates
+    /// because tractor jitter spreads samples along the row. We use a
+    /// tighter, fixed along-row radius for same-row, same-mode pins so a
+    /// repair tapped twice within a couple of metres warns reliably.
+    static let alongRowDuplicateMetres: Double = 2.5
+
+    /// Find a likely duplicate using along-row geometry. Same vineyard +
+    /// same paddock + same row number + same mode + along-row distance
+    /// within `alongRowDuplicateMetres`. Returns the closest match (open
+    /// pins preferred). Falls back to nil when no row context exists —
+    /// callers should then use the lat/lng-based `nearbyPin` check.
+    static func nearbyPinAlongRow(
+        snappedCoordinate: CLLocationCoordinate2D,
+        vineyardId: UUID?,
+        paddockId: UUID?,
+        rowNumber: Int?,
+        mode: PinMode?,
+        in pins: [VinePin],
+        paddocks: [Paddock]
+    ) -> (pin: VinePin, distance: Double)? {
+        guard let paddockId, let rowNumber,
+              let paddock = paddocks.first(where: { $0.id == paddockId }) else {
+            return nil
+        }
+        guard let snappedSelf = RowGuidance.snapToRow(
+            coordinate: snappedCoordinate,
+            rowNumber: rowNumber,
+            in: paddock
+        ) else { return nil }
+
+        var bestActive: (pin: VinePin, distance: Double)?
+        var bestDone: (pin: VinePin, distance: Double)?
+        for pin in pins {
+            if let vid = vineyardId, pin.vineyardId != vid { continue }
+            guard pin.paddockId == paddockId else { continue }
+            guard pin.rowNumber == rowNumber else { continue }
+            if let mode, pin.mode != mode { continue }
+            guard let snappedOther = RowGuidance.snapToRow(
+                coordinate: pin.coordinate,
+                rowNumber: rowNumber,
+                in: paddock
+            ) else { continue }
+            let delta = abs(snappedSelf.distanceAlongMetres - snappedOther.distanceAlongMetres)
+            guard delta <= alongRowDuplicateMetres else { continue }
+            let scoped: (VinePin, Double) = (pin, delta)
+            if pin.isCompleted {
+                if bestDone == nil || delta < bestDone!.distance { bestDone = scoped }
+            } else {
+                if bestActive == nil || delta < bestActive!.distance { bestActive = scoped }
+            }
+        }
+        return bestActive ?? bestDone
+    }
+
     static func nearbyPin(
         coordinate: CLLocationCoordinate2D,
         vineyardId: UUID?,

@@ -184,6 +184,17 @@ struct ActiveTripView: View {
         // Require solid lock confidence so brief GPS hops while turning
         // at headlands don't trigger the banner.
         if tracking.diagLockConfidence < 0.6 { return false }
+        // Post-completion grace: if the planned sequence has just
+        // advanced (auto-complete fired in the last 20s) and the live
+        // path is still the row that was just completed, the operator
+        // is finishing the row — don't warn.
+        if let firedAt = tracking.diagAutoCompleteLastFiredAt,
+           Date().timeIntervalSince(firedAt) < 20,
+           let last = tracking.diagAutoCompleteLastPath,
+           let live = liveDetectedPath,
+           abs(last - live) < 0.01 {
+            return false
+        }
         return true
     }
 
@@ -1635,8 +1646,9 @@ struct ActiveTripView: View {
                         Text(undoButtonLabel)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .padding(.horizontal, 12)
+                            .minimumScaleFactor(0.55)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6)
                             .frame(height: 44)
                     }
                     .buttonStyle(.bordered)
@@ -1648,8 +1660,9 @@ struct ActiveTripView: View {
                         Text(doneButtonLabel)
                             .font(.subheadline.weight(.bold))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .padding(.horizontal, 14)
+                            .minimumScaleFactor(0.55)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 8)
                             .frame(height: 44)
                     }
                     .buttonStyle(.borderedProminent)
