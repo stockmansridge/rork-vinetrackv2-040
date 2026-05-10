@@ -3,6 +3,7 @@ import MapKit
 
 struct DamageRecordsListView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(DamageRecordSyncService.self) private var damageRecordSync
     @Environment(\.accessControl) private var accessControl
 
     private var canDelete: Bool { accessControl?.canDelete ?? false }
@@ -42,6 +43,12 @@ struct DamageRecordsListView: View {
         }
         .navigationTitle("Record Damage")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            await damageRecordSync.syncForSelectedVineyard()
+        }
+        .refreshable {
+            await damageRecordSync.syncForSelectedVineyard()
+        }
     }
 
     // MARK: - Empty State
@@ -185,6 +192,7 @@ struct DamageRecordsListView: View {
             if canDelete {
                 Button(role: .destructive) {
                     store.deleteDamageRecord(record)
+                    Task { await damageRecordSync.syncForSelectedVineyard() }
                 } label: {
                     Label("Delete Record", systemImage: "trash")
                 }

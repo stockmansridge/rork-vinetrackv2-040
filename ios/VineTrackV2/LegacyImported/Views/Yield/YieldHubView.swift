@@ -2,6 +2,9 @@ import SwiftUI
 
 struct YieldHubView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(DamageRecordSyncService.self) private var damageRecordSync
+    @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
+    @Environment(HistoricalYieldRecordSyncService.self) private var historicalYieldSync
 
     var body: some View {
         ScrollView {
@@ -68,6 +71,16 @@ struct YieldHubView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("Yield Forecasting")
         .navigationBarTitleDisplayMode(.large)
+        .task {
+            await damageRecordSync.syncForSelectedVineyard()
+            await yieldSessionSync.syncForSelectedVineyard()
+            await historicalYieldSync.syncForSelectedVineyard()
+        }
+        .refreshable {
+            await damageRecordSync.syncForSelectedVineyard()
+            await yieldSessionSync.syncForSelectedVineyard()
+            await historicalYieldSync.syncForSelectedVineyard()
+        }
     }
 
     private var headerCard: some View {

@@ -3,6 +3,7 @@ import MapKit
 
 struct RecordDamageView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(DamageRecordSyncService.self) private var damageRecordSync
     @Environment(\.accessControl) private var accessControl
     @Environment(\.dismiss) private var dismiss
     let paddock: Paddock
@@ -105,6 +106,7 @@ struct RecordDamageView: View {
             Button("Delete Record", role: .destructive) {
                 if let record = editingRecord {
                     store.deleteDamageRecord(record)
+                    Task { await damageRecordSync.syncForSelectedVineyard() }
                     dismiss()
                 }
             }
@@ -576,6 +578,7 @@ struct RecordDamageView: View {
                 updated.damagePercent = damagePercent
                 updated.notes = notes
                 store.updateDamageRecord(updated)
+                Task { await damageRecordSync.syncForSelectedVineyard() }
             } else {
                 let record = DamageRecord(
                     vineyardId: paddock.vineyardId,
@@ -587,6 +590,7 @@ struct RecordDamageView: View {
                     notes: notes
                 )
                 store.addDamageRecord(record)
+                Task { await damageRecordSync.syncForSelectedVineyard() }
             }
             showConfirmation = true
         } label: {
