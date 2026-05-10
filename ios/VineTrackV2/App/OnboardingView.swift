@@ -111,7 +111,7 @@ struct OnboardingView: View {
                     Text("Welcome to")
                         .foregroundStyle(.primary)
                     BrandWordmark(
-                        font: .title.weight(.bold),
+                        size: 28,
                         vineColor: .primary
                     )
                 }

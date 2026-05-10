@@ -80,7 +80,7 @@ struct NewBackendLoginView: View {
                 .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 8)
 
             VStack(spacing: isCompactHeight ? 4 : 6) {
-                BrandWordmark(font: .system(size: isCompactHeight ? 38 : 48, weight: .heavy, design: .default))
+                BrandWordmark(size: isCompactHeight ? 38 : 48)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                     .shadow(color: .black.opacity(0.28), radius: 2, x: 0, y: 2)
