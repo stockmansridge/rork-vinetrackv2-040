@@ -277,10 +277,17 @@ private struct AdminUserRowView: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                if user.vineyardCount > 0 {
-                    Label("\(user.vineyardCount)", systemImage: "building.2.fill")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(VineyardTheme.leafGreen)
+                HStack(spacing: 6) {
+                    if user.vineyardCount > 0 {
+                        Label("\(user.vineyardCount)", systemImage: "building.2.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(VineyardTheme.leafGreen)
+                    }
+                    if user.blockCount > 0 {
+                        Label("\(user.blockCount)", systemImage: "square.grid.2x2.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.purple)
+                    }
                 }
                 if let last = user.lastSignInAt {
                     Text(last, format: .relative(presentation: .named))
@@ -365,6 +372,7 @@ private struct AdminUserDetailView: View {
                 LabeledContent("Email", value: user.email)
                 LabeledContent("Vineyards", value: "\(user.vineyardCount)")
                 LabeledContent("Owned", value: "\(user.ownedCount)")
+                LabeledContent("Blocks", value: "\(user.blockCount)")
                 if let created = user.createdAt {
                     LabeledContent("Joined") {
                         Text(created, format: .dateTime.month(.abbreviated).day().year())

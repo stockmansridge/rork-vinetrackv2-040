@@ -22,6 +22,7 @@ nonisolated struct AdminUserRow: Identifiable, Sendable, Hashable {
     let lastSignInAt: Date?
     let vineyardCount: Int
     let ownedCount: Int
+    let blockCount: Int
 
     var displayName: String {
         if let name = fullName, !name.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -155,6 +156,7 @@ nonisolated private struct UserDTO: Decodable, Sendable {
     let lastSignInAt: Date?
     let vineyardCount: Int
     let ownedCount: Int
+    let blockCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case id, email
@@ -164,6 +166,7 @@ nonisolated private struct UserDTO: Decodable, Sendable {
         case lastSignInAt = "last_sign_in_at"
         case vineyardCount = "vineyard_count"
         case ownedCount = "owned_count"
+        case blockCount = "block_count"
     }
 }
 
@@ -381,7 +384,8 @@ final class SupabaseAdminRepository {
                 updatedAt: $0.updatedAt,
                 lastSignInAt: $0.lastSignInAt,
                 vineyardCount: $0.vineyardCount,
-                ownedCount: $0.ownedCount
+                ownedCount: $0.ownedCount,
+                blockCount: $0.blockCount ?? 0
             )
         }
     }
