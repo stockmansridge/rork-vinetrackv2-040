@@ -20,7 +20,7 @@ struct ActiveTripView: View {
     @State private var smoothedCourse: Double?
     @State private var noGpsToast: Bool = false
     @State private var showRowIndicator: Bool = true
-    @State private var showPinOverlay: Bool = false
+    @State private var showPinOverlay: Bool = true
     @State private var showManualCorrection: Bool = false
     @State private var showEndConfirmation: Bool = false
     @State private var showEndReview: Bool = false
