@@ -212,6 +212,21 @@ nonisolated struct DamageRecord: Codable, Identifiable, Sendable, Hashable {
     var damagePercent: Double
     var notes: String
 
+    // Portal-facing fields (Phase 048 — additive). These are populated by the
+    // Lovable web portal and round-tripped through sync. iOS does not edit them
+    // yet, so they remain optional and are only encoded when set.
+    var rowNumber: Int?
+    var side: String?
+    var severity: String?
+    var status: String?
+    var dateObserved: Date?
+    var operatorName: String?
+    var latitude: Double?
+    var longitude: Double?
+    var pinId: UUID?
+    var tripId: UUID?
+    var photoUrls: [String]?
+
     init(
         id: UUID = UUID(),
         vineyardId: UUID = UUID(),
@@ -220,7 +235,18 @@ nonisolated struct DamageRecord: Codable, Identifiable, Sendable, Hashable {
         date: Date = Date(),
         damageType: DamageType = .frost,
         damagePercent: Double = 20,
-        notes: String = ""
+        notes: String = "",
+        rowNumber: Int? = nil,
+        side: String? = nil,
+        severity: String? = nil,
+        status: String? = nil,
+        dateObserved: Date? = nil,
+        operatorName: String? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil,
+        pinId: UUID? = nil,
+        tripId: UUID? = nil,
+        photoUrls: [String]? = nil
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -230,6 +256,17 @@ nonisolated struct DamageRecord: Codable, Identifiable, Sendable, Hashable {
         self.damageType = damageType
         self.damagePercent = damagePercent
         self.notes = notes
+        self.rowNumber = rowNumber
+        self.side = side
+        self.severity = severity
+        self.status = status
+        self.dateObserved = dateObserved
+        self.operatorName = operatorName
+        self.latitude = latitude
+        self.longitude = longitude
+        self.pinId = pinId
+        self.tripId = tripId
+        self.photoUrls = photoUrls
     }
 
     var areaHectares: Double {

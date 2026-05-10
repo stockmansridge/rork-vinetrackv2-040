@@ -355,6 +355,18 @@ nonisolated struct BackendDamageRecord: Codable, Sendable, Identifiable {
     let damagePercent: Double?
     let polygonPoints: [CoordinatePoint]?
     let notes: String?
+    // Portal extension (sql/048) — additive optional columns.
+    let rowNumber: Int?
+    let side: String?
+    let severity: String?
+    let status: String?
+    let dateObserved: Date?
+    let operatorName: String?
+    let latitude: Double?
+    let longitude: Double?
+    let pinId: UUID?
+    let tripId: UUID?
+    let photoUrls: [String]?
     let createdBy: UUID?
     let createdAt: Date?
     let updatedAt: Date?
@@ -370,6 +382,17 @@ nonisolated struct BackendDamageRecord: Codable, Sendable, Identifiable {
         case damagePercent = "damage_percent"
         case polygonPoints = "polygon_points"
         case notes
+        case rowNumber = "row_number"
+        case side
+        case severity
+        case status
+        case dateObserved = "date_observed"
+        case operatorName = "operator_name"
+        case latitude
+        case longitude
+        case pinId = "pin_id"
+        case tripId = "trip_id"
+        case photoUrls = "photo_urls"
         case createdBy = "created_by"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -387,6 +410,19 @@ nonisolated struct BackendDamageRecordUpsert: Encodable, Sendable {
     let damagePercent: Double
     let polygonPoints: [CoordinatePoint]
     let notes: String
+    // Portal extension fields — encoded only when non-nil so iOS writes
+    // never overwrite portal-set values with NULL.
+    let rowNumber: Int?
+    let side: String?
+    let severity: String?
+    let status: String?
+    let dateObserved: Date?
+    let operatorName: String?
+    let latitude: Double?
+    let longitude: Double?
+    let pinId: UUID?
+    let tripId: UUID?
+    let photoUrls: [String]?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -399,8 +435,44 @@ nonisolated struct BackendDamageRecordUpsert: Encodable, Sendable {
         case damagePercent = "damage_percent"
         case polygonPoints = "polygon_points"
         case notes
+        case rowNumber = "row_number"
+        case side
+        case severity
+        case status
+        case dateObserved = "date_observed"
+        case operatorName = "operator_name"
+        case latitude
+        case longitude
+        case pinId = "pin_id"
+        case tripId = "trip_id"
+        case photoUrls = "photo_urls"
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(vineyardId, forKey: .vineyardId)
+        try c.encode(paddockId, forKey: .paddockId)
+        try c.encode(date, forKey: .date)
+        try c.encode(damageType, forKey: .damageType)
+        try c.encode(damagePercent, forKey: .damagePercent)
+        try c.encode(polygonPoints, forKey: .polygonPoints)
+        try c.encode(notes, forKey: .notes)
+        try c.encodeIfPresent(rowNumber, forKey: .rowNumber)
+        try c.encodeIfPresent(side, forKey: .side)
+        try c.encodeIfPresent(severity, forKey: .severity)
+        try c.encodeIfPresent(status, forKey: .status)
+        try c.encodeIfPresent(dateObserved, forKey: .dateObserved)
+        try c.encodeIfPresent(operatorName, forKey: .operatorName)
+        try c.encodeIfPresent(latitude, forKey: .latitude)
+        try c.encodeIfPresent(longitude, forKey: .longitude)
+        try c.encodeIfPresent(pinId, forKey: .pinId)
+        try c.encodeIfPresent(tripId, forKey: .tripId)
+        try c.encodeIfPresent(photoUrls, forKey: .photoUrls)
+        try c.encodeIfPresent(createdBy, forKey: .createdBy)
+        try c.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
     }
 }
 
@@ -415,6 +487,17 @@ extension BackendDamageRecord {
             damagePercent: d.damagePercent,
             polygonPoints: d.polygonPoints,
             notes: d.notes,
+            rowNumber: d.rowNumber,
+            side: d.side,
+            severity: d.severity,
+            status: d.status,
+            dateObserved: d.dateObserved,
+            operatorName: d.operatorName,
+            latitude: d.latitude,
+            longitude: d.longitude,
+            pinId: d.pinId,
+            tripId: d.tripId,
+            photoUrls: d.photoUrls,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -429,7 +512,18 @@ extension BackendDamageRecord {
             date: date ?? Date(),
             damageType: damageType.flatMap { DamageType(rawValue: $0) } ?? .frost,
             damagePercent: damagePercent ?? 0,
-            notes: notes ?? ""
+            notes: notes ?? "",
+            rowNumber: rowNumber,
+            side: side,
+            severity: severity,
+            status: status,
+            dateObserved: dateObserved,
+            operatorName: operatorName,
+            latitude: latitude,
+            longitude: longitude,
+            pinId: pinId,
+            tripId: tripId,
+            photoUrls: photoUrls
         )
     }
 }
