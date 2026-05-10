@@ -19,5 +19,10 @@
 	<array>
 		<string>location</string>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Montserrat-ExtraBold.ttf</string>
+		<string>Montserrat-Black.ttf</string>
+	</array>
 </dict>
 </plist>

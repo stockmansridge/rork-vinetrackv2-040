@@ -10,11 +10,18 @@ enum BrandColors {
 /// font is available on the system, falling back to the heaviest system font
 /// otherwise so the look stays consistent.
 enum BrandTypography {
-    /// Returns the Montserrat ExtraBold font at the given size, or a system
-    /// black-weight fallback when Montserrat is not installed.
+    /// Returns the Montserrat ExtraBold font at the given size. The bundled
+    /// Montserrat-ExtraBold.ttf ships with the app so this is always available;
+    /// if registration ever fails, SwiftUI falls back to a system black-weight
+    /// font of the same size so the wordmark still reads as heavy.
     static func wordmarkFont(size: CGFloat) -> Font {
-        Font.custom("Montserrat-ExtraBold", size: size)
-            .weight(.heavy)
+        if UIFont(name: "Montserrat-ExtraBold", size: size) != nil {
+            return Font.custom("Montserrat-ExtraBold", size: size)
+        }
+        if UIFont(name: "Montserrat-Black", size: size) != nil {
+            return Font.custom("Montserrat-Black", size: size)
+        }
+        return Font.system(size: size, weight: .black, design: .default)
     }
 
     /// Slightly tight letter spacing (~-1.5% of the font size) used for the
