@@ -17,6 +17,7 @@ private enum AdminDestination: Identifiable, Hashable {
     case workTasks
     case userDetail(AdminUserRow)
     case vineyardDetail(AdminVineyardRow)
+    case paddockDetail(AdminVineyardPaddockRow)
 
     var id: String {
         switch self {
@@ -29,6 +30,7 @@ private enum AdminDestination: Identifiable, Hashable {
         case .workTasks: return "workTasks"
         case .userDetail(let u): return "user-\(u.id.uuidString)"
         case .vineyardDetail(let v): return "vineyard-\(v.id.uuidString)"
+        case .paddockDetail(let p): return "paddock-\(p.id.uuidString)"
         }
     }
 }
@@ -99,7 +101,11 @@ struct AdminDashboardView: View {
                 selectedDestination = .vineyardDetail(v)
             })
         case .vineyardDetail(let vineyard):
-            AdminVineyardDetailView(vineyard: vineyard)
+            AdminVineyardDetailView(vineyard: vineyard, onSelectPaddock: { p in
+                selectedDestination = .paddockDetail(p)
+            })
+        case .paddockDetail(let paddock):
+            AdminPaddockDetailView(paddock: paddock)
         }
     }
 
@@ -582,6 +588,7 @@ private struct AdminVineyardsListView: View {
 
 private struct AdminVineyardDetailView: View {
     let vineyard: AdminVineyardRow
+    var onSelectPaddock: ((AdminVineyardPaddockRow) -> Void)? = nil
 
     @State private var paddocks: [AdminVineyardPaddockRow] = []
     @State private var isLoadingPaddocks: Bool = false
@@ -624,20 +631,29 @@ private struct AdminVineyardDetailView: View {
             if !paddocks.isEmpty {
                 Section("Paddocks") {
                     ForEach(paddocks) { p in
-                        HStack {
-                            Image(systemName: p.polygonPoints.count >= 3 ? "map.fill" : "map")
-                                .foregroundStyle(p.polygonPoints.count >= 3 ? Color.green : Color.secondary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(p.name).font(.subheadline.weight(.medium))
-                                Text("\(p.rowCount) rows\(p.polygonPoints.count >= 3 ? "" : " • no map")")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        Button {
+                            onSelectPaddock?(p)
+                        } label: {
+                            HStack {
+                                Image(systemName: p.polygonPoints.count >= 3 ? "map.fill" : "map")
+                                    .foregroundStyle(p.polygonPoints.count >= 3 ? Color.green : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(p.name).font(.subheadline.weight(.medium))
+                                    Text("\(p.rowCount) rows\(p.polygonPoints.count >= 3 ? "" : " • no map")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if p.deletedAt != nil {
+                                    Text("Archived").font(.caption2).foregroundStyle(.orange)
+                                }
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
                             }
-                            Spacer()
-                            if p.deletedAt != nil {
-                                Text("Archived").font(.caption2).foregroundStyle(.orange)
-                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1014,5 +1030,177 @@ private struct AdminWorkTasksListView: View {
         defer { isLoading = false }
         do { rows = try await repository.fetchWorkTasks() }
         catch { loadError = error.localizedDescription }
+    }
+}
+
+// MARK: - Paddock detail (admin)
+
+private struct AdminPaddockDetailView: View {
+    let paddock: AdminVineyardPaddockRow
+
+    @State private var position: MapCameraPosition = .automatic
+    @State private var showRowNumbers: Bool = true
+    @State private var hasSetInitialPosition: Bool = false
+
+    private var sortedRows: [PaddockRow] {
+        paddock.rows.sorted { $0.number < $1.number }
+    }
+
+    private var hasGeometry: Bool {
+        paddock.polygonPoints.count >= 3 || !paddock.rows.isEmpty
+    }
+
+    private func regionForContent() -> MKCoordinateRegion? {
+        var lats: [Double] = []
+        var lons: [Double] = []
+        for pt in paddock.polygonPoints {
+            lats.append(pt.latitude); lons.append(pt.longitude)
+        }
+        for row in paddock.rows {
+            lats.append(row.startPoint.latitude); lons.append(row.startPoint.longitude)
+            lats.append(row.endPoint.latitude);   lons.append(row.endPoint.longitude)
+        }
+        guard let minLat = lats.min(), let maxLat = lats.max(),
+              let minLon = lons.min(), let maxLon = lons.max() else { return nil }
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.4, 0.0008),
+            longitudeDelta: max((maxLon - minLon) * 1.4, 0.0008)
+        )
+        return MKCoordinateRegion(center: center, span: span)
+    }
+
+    var body: some View {
+        Form {
+            Section("Map") {
+                ZStack {
+                    Color(.secondarySystemBackground)
+                        .frame(height: 320)
+                        .overlay {
+                            if hasGeometry {
+                                Map(position: $position) {
+                                    if paddock.polygonPoints.count >= 3 {
+                                        MapPolygon(coordinates: paddock.polygonPoints.map(\.coordinate))
+                                            .foregroundStyle(Color.green.opacity(0.15))
+                                            .stroke(Color.green, lineWidth: 2)
+                                    }
+                                    ForEach(sortedRows) { row in
+                                        MapPolyline(coordinates: [row.startPoint.coordinate, row.endPoint.coordinate])
+                                            .stroke(Color.yellow, lineWidth: 2)
+                                        if showRowNumbers {
+                                            Annotation("", coordinate: row.startPoint.coordinate) {
+                                                Text("\(row.number)")
+                                                    .font(.caption2.weight(.bold))
+                                                    .foregroundStyle(.black)
+                                                    .padding(.horizontal, 5)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.yellow.opacity(0.95), in: Capsule())
+                                                    .allowsHitTesting(false)
+                                            }
+                                        }
+                                    }
+                                }
+                                .mapStyle(.hybrid)
+                            } else {
+                                VStack(spacing: 8) {
+                                    Image(systemName: "map")
+                                        .font(.title2)
+                                        .foregroundStyle(.secondary)
+                                    Text("No polygon or row geometry available for this paddock.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .padding(.horizontal)
+                                }
+                            }
+                        }
+                }
+                .frame(height: 320)
+                .clipShape(.rect(cornerRadius: 12))
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+
+                Toggle("Show row numbers", isOn: $showRowNumbers)
+            }
+
+            Section("Paddock") {
+                LabeledContent("Name", value: paddock.name)
+                LabeledContent("Polygon points", value: "\(paddock.polygonPoints.count)")
+                LabeledContent("Rows", value: "\(paddock.rowCount)")
+                if let dir = paddock.rowDirection {
+                    LabeledContent("Row direction", value: String(format: "%.1f°", dir))
+                }
+                if let w = paddock.rowWidth {
+                    LabeledContent("Row width", value: String(format: "%.2f m", w))
+                }
+                if let s = paddock.vineSpacing {
+                    LabeledContent("Vine spacing", value: String(format: "%.2f m", s))
+                }
+                if let d = paddock.createdAt {
+                    LabeledContent("Created") { Text(d, format: .dateTime.month(.abbreviated).day().year()) }
+                }
+                if let d = paddock.updatedAt {
+                    LabeledContent("Updated") { Text(d, format: .dateTime.month(.abbreviated).day().year().hour().minute()) }
+                }
+                if paddock.deletedAt != nil {
+                    LabeledContent("Status", value: "Archived")
+                }
+            }
+
+            Section("Rows (\(sortedRows.count))") {
+                if sortedRows.isEmpty {
+                    Text("No rows have been recorded for this paddock.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(sortedRows) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Row \(row.number)")
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(String(format: "%.1f m", rowLength(row)))
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Start  \(coordString(row.startPoint))")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                            Text("End    \(coordString(row.endPoint))")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+
+            Section("Paddock ID") {
+                Text(paddock.id.uuidString)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(paddock.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { applyInitialRegionIfNeeded() }
+    }
+
+    private func applyInitialRegionIfNeeded() {
+        guard !hasSetInitialPosition, let region = regionForContent() else { return }
+        position = .region(region)
+        hasSetInitialPosition = true
+    }
+
+    private func coordString(_ p: CoordinatePoint) -> String {
+        String(format: "%.6f, %.6f", p.latitude, p.longitude)
+    }
+
+    private func rowLength(_ row: PaddockRow) -> Double {
+        let a = CLLocation(latitude: row.startPoint.latitude, longitude: row.startPoint.longitude)
+        let b = CLLocation(latitude: row.endPoint.latitude, longitude: row.endPoint.longitude)
+        return a.distance(from: b)
     }
 }

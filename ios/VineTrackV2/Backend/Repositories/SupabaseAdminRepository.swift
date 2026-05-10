@@ -110,9 +110,13 @@ nonisolated struct AdminVineyardPaddockRow: Identifiable, Sendable, Hashable {
     let vineyardId: UUID
     let name: String
     let polygonPoints: [CoordinatePoint]
+    let rows: [PaddockRow]
     let rowCount: Int
     let rowDirection: Double?
     let rowWidth: Double?
+    let vineSpacing: Double?
+    let createdAt: Date?
+    let updatedAt: Date?
     let deletedAt: Date?
 }
 
@@ -293,18 +297,25 @@ nonisolated private struct VineyardPaddockDTO: Decodable, Sendable {
     let vineyardId: UUID
     let name: String
     let polygonPoints: [CoordinatePoint]?
+    let rows: [PaddockRow]?
     let rowCount: Int?
     let rowDirection: Double?
     let rowWidth: Double?
+    let vineSpacing: Double?
+    let createdAt: Date?
+    let updatedAt: Date?
     let deletedAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, name
+        case id, name, rows
         case vineyardId = "vineyard_id"
         case polygonPoints = "polygon_points"
         case rowCount = "row_count"
         case rowDirection = "row_direction"
         case rowWidth = "row_width"
+        case vineSpacing = "vine_spacing"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
         case deletedAt = "deleted_at"
     }
 }
@@ -464,9 +475,13 @@ final class SupabaseAdminRepository {
                 vineyardId: $0.vineyardId,
                 name: $0.name,
                 polygonPoints: $0.polygonPoints ?? [],
-                rowCount: $0.rowCount ?? 0,
+                rows: $0.rows ?? [],
+                rowCount: $0.rowCount ?? ($0.rows?.count ?? 0),
                 rowDirection: $0.rowDirection,
                 rowWidth: $0.rowWidth,
+                vineSpacing: $0.vineSpacing,
+                createdAt: $0.createdAt,
+                updatedAt: $0.updatedAt,
                 deletedAt: $0.deletedAt
             )
         }
