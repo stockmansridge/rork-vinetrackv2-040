@@ -1,4 +1,5 @@
 import SwiftUI
+import MapKit
 
 private enum AdminUserFilter: Hashable {
     case active7
@@ -582,8 +583,28 @@ private struct AdminVineyardsListView: View {
 private struct AdminVineyardDetailView: View {
     let vineyard: AdminVineyardRow
 
+    @State private var paddocks: [AdminVineyardPaddockRow] = []
+    @State private var isLoadingPaddocks: Bool = false
+    @State private var paddockError: String?
+    private let repository = SupabaseAdminRepository()
+
+    private var mappablePaddocks: [AdminVineyardPaddockRow] {
+        paddocks.filter { $0.deletedAt == nil && $0.polygonPoints.count >= 3 }
+    }
+
     var body: some View {
         Form {
+            Section("Vineyard Map") {
+                AdminVineyardMapSection(
+                    paddocks: mappablePaddocks,
+                    isLoading: isLoadingPaddocks,
+                    errorMessage: paddockError,
+                    totalPaddocks: paddocks.count
+                )
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            }
+
             Section("Vineyard") {
                 LabeledContent("Name", value: vineyard.name)
                 LabeledContent("Owner", value: vineyard.ownerDisplay)
@@ -591,6 +612,7 @@ private struct AdminVineyardDetailView: View {
                 if let c = vineyard.country, !c.isEmpty { LabeledContent("Country", value: c) }
                 LabeledContent("Members", value: "\(vineyard.memberCount)")
                 LabeledContent("Pending Invites", value: "\(vineyard.pendingInvites)")
+                LabeledContent("Paddocks", value: "\(paddocks.count)")
                 if let d = vineyard.createdAt {
                     LabeledContent("Created") { Text(d, format: .dateTime.month(.abbreviated).day().year()) }
                 }
@@ -598,12 +620,152 @@ private struct AdminVineyardDetailView: View {
                     LabeledContent("Status", value: "Archived")
                 }
             }
+
+            if !paddocks.isEmpty {
+                Section("Paddocks") {
+                    ForEach(paddocks) { p in
+                        HStack {
+                            Image(systemName: p.polygonPoints.count >= 3 ? "map.fill" : "map")
+                                .foregroundStyle(p.polygonPoints.count >= 3 ? Color.green : Color.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name).font(.subheadline.weight(.medium))
+                                Text("\(p.rowCount) rows\(p.polygonPoints.count >= 3 ? "" : " • no map")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if p.deletedAt != nil {
+                                Text("Archived").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+
             Section("Vineyard ID") {
                 Text(vineyard.id.uuidString).font(.caption.monospaced()).foregroundStyle(.secondary)
             }
         }
         .navigationTitle(vineyard.name)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: vineyard.id) {
+            await loadPaddocks()
+        }
+        .refreshable {
+            await loadPaddocks()
+        }
+    }
+
+    private func loadPaddocks() async {
+        isLoadingPaddocks = true
+        paddockError = nil
+        do {
+            paddocks = try await repository.fetchVineyardPaddocks(vineyardId: vineyard.id)
+        } catch {
+            paddockError = error.localizedDescription
+        }
+        isLoadingPaddocks = false
+    }
+}
+
+private struct AdminVineyardMapSection: View {
+    let paddocks: [AdminVineyardPaddockRow]
+    let isLoading: Bool
+    let errorMessage: String?
+    let totalPaddocks: Int
+
+    @State private var position: MapCameraPosition = .automatic
+    @State private var hasSetInitialPosition: Bool = false
+
+    private var paddockIDs: [UUID] { paddocks.map(\.id) }
+
+    private func regionForContent() -> MKCoordinateRegion? {
+        var lats: [Double] = []
+        var lons: [Double] = []
+        for p in paddocks {
+            for pt in p.polygonPoints {
+                lats.append(pt.latitude)
+                lons.append(pt.longitude)
+            }
+        }
+        guard let minLat = lats.min(), let maxLat = lats.max(),
+              let minLon = lons.min(), let maxLon = lons.max() else { return nil }
+        let center = CLLocationCoordinate2D(
+            latitude: (minLat + maxLat) / 2,
+            longitude: (minLon + maxLon) / 2
+        )
+        let span = MKCoordinateSpan(
+            latitudeDelta: max((maxLat - minLat) * 1.5, 0.002),
+            longitudeDelta: max((maxLon - minLon) * 1.5, 0.002)
+        )
+        return MKCoordinateRegion(center: center, span: span)
+    }
+
+    var body: some View {
+        ZStack {
+            Color(.secondarySystemBackground)
+                .frame(height: 280)
+                .overlay {
+                    if !paddocks.isEmpty {
+                        Map(position: $position) {
+                            ForEach(paddocks) { p in
+                                MapPolygon(coordinates: p.polygonPoints.map { $0.coordinate })
+                                    .foregroundStyle(Color.green.opacity(0.18))
+                                    .stroke(Color.green, lineWidth: 2)
+                                Annotation("", coordinate: p.polygonPoints.centroid) {
+                                    Text(p.name)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.green.opacity(0.85), in: .rect(cornerRadius: 6))
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                        }
+                        .mapStyle(.hybrid)
+                        .allowsHitTesting(true)
+                    } else {
+                        VStack(spacing: 8) {
+                            if isLoading {
+                                ProgressView()
+                                Text("Loading map…").font(.caption).foregroundStyle(.secondary)
+                            } else if let errorMessage {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .font(.title2)
+                                    .foregroundStyle(.orange)
+                                Text(errorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
+                            } else {
+                                Image(systemName: "map")
+                                    .font(.title2)
+                                    .foregroundStyle(.secondary)
+                                Text(totalPaddocks == 0 ? "No paddocks have been created for this vineyard." : "No paddocks have map geometry yet.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal)
+                            }
+                        }
+                    }
+                }
+        }
+        .frame(height: 280)
+        .clipShape(.rect(cornerRadius: 12))
+        .onAppear { applyInitialRegionIfNeeded() }
+        .onChange(of: paddockIDs) { _, _ in
+            hasSetInitialPosition = false
+            applyInitialRegionIfNeeded()
+        }
+    }
+
+    private func applyInitialRegionIfNeeded() {
+        guard !hasSetInitialPosition, let region = regionForContent() else { return }
+        position = .region(region)
+        hasSetInitialPosition = true
     }
 }
 

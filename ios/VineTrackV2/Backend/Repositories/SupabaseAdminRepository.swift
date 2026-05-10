@@ -105,6 +105,17 @@ nonisolated struct AdminWorkTaskRow: Identifiable, Sendable, Hashable {
     let createdAt: Date?
 }
 
+nonisolated struct AdminVineyardPaddockRow: Identifiable, Sendable, Hashable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String
+    let polygonPoints: [CoordinatePoint]
+    let rowCount: Int
+    let rowDirection: Double?
+    let rowWidth: Double?
+    let deletedAt: Date?
+}
+
 // MARK: - DTOs
 
 nonisolated private struct EngagementDTO: Decodable, Sendable {
@@ -277,6 +288,32 @@ nonisolated private struct WorkTaskDTO: Decodable, Sendable {
     }
 }
 
+nonisolated private struct VineyardPaddockDTO: Decodable, Sendable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String
+    let polygonPoints: [CoordinatePoint]?
+    let rowCount: Int?
+    let rowDirection: Double?
+    let rowWidth: Double?
+    let deletedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case vineyardId = "vineyard_id"
+        case polygonPoints = "polygon_points"
+        case rowCount = "row_count"
+        case rowDirection = "row_direction"
+        case rowWidth = "row_width"
+        case deletedAt = "deleted_at"
+    }
+}
+
+nonisolated private struct VineyardIdParams: Encodable, Sendable {
+    let vineyardId: UUID
+    enum CodingKeys: String, CodingKey { case vineyardId = "p_vineyard_id" }
+}
+
 nonisolated private struct EmptyParams: Encodable, Sendable {}
 
 nonisolated private struct UserIdParams: Encodable, Sendable {
@@ -411,6 +448,26 @@ final class SupabaseAdminRepository {
                 id: $0.id, vineyardId: $0.vineyardId, vineyardName: $0.vineyardName,
                 sprayReference: $0.sprayReference, operationType: $0.operationType,
                 date: $0.date, createdAt: $0.createdAt
+            )
+        }
+    }
+
+    func fetchVineyardPaddocks(vineyardId: UUID) async throws -> [AdminVineyardPaddockRow] {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        let rows: [VineyardPaddockDTO] = try await provider.client
+            .rpc("admin_list_vineyard_paddocks", params: VineyardIdParams(vineyardId: vineyardId))
+            .execute()
+            .value
+        return rows.map {
+            AdminVineyardPaddockRow(
+                id: $0.id,
+                vineyardId: $0.vineyardId,
+                name: $0.name,
+                polygonPoints: $0.polygonPoints ?? [],
+                rowCount: $0.rowCount ?? 0,
+                rowDirection: $0.rowDirection,
+                rowWidth: $0.rowWidth,
+                deletedAt: $0.deletedAt
             )
         }
     }
