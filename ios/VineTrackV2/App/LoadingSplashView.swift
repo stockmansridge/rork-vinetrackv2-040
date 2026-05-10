@@ -29,9 +29,7 @@ struct LoadingSplashView: View {
                         .scaleEffect(pulse ? 1.04 : 1.0)
                 }
 
-                Text("VineTrack")
-                    .font(.system(size: 38, weight: .heavy))
-                    .foregroundStyle(.white)
+                BrandWordmark(font: .system(size: 38, weight: .heavy))
                     .opacity(animate ? 1 : 0)
                     .offset(y: animate ? 0 : 10)
                     .shadow(color: .black.opacity(0.28), radius: 2, x: 0, y: 2)

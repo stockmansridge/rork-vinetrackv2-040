@@ -210,7 +210,7 @@ struct VineyardEmptyStateView: View {
                         .foregroundStyle(VineyardTheme.primaryAccent)
                 }
             }
-            Text(title)
+            brandedText(title)
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(VineyardTheme.textPrimary)
             if let message {

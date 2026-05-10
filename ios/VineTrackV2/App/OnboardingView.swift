@@ -12,6 +12,7 @@ struct OnboardingView: View {
         let title: String
         let message: String
         var assetImage: String? = nil
+        var useBrandWordmark: Bool = false
     }
 
     private let pages: [Page] = [
@@ -20,7 +21,8 @@ struct OnboardingView: View {
             iconColor: VineyardTheme.leafGreen,
             title: "Welcome to VineTrack",
             message: "Built by vignerons for vignerons — manage vineyard observations, spray records, irrigation, disease risk and team activity in one place.",
-            assetImage: "vinetrack_logo"
+            assetImage: "vinetrack_logo",
+            useBrandWordmark: true
         ),
         Page(
             icon: "mappin.and.ellipse",
@@ -104,9 +106,22 @@ struct OnboardingView: View {
                         .foregroundStyle(p.iconColor)
                 }
             }
-            Text(p.title)
+            if p.useBrandWordmark {
+                HStack(spacing: 6) {
+                    Text("Welcome to")
+                        .foregroundStyle(.primary)
+                    BrandWordmark(
+                        font: .title.weight(.bold),
+                        vineColor: .primary
+                    )
+                }
                 .font(.title.weight(.bold))
                 .multilineTextAlignment(.center)
+            } else {
+                Text(p.title)
+                    .font(.title.weight(.bold))
+                    .multilineTextAlignment(.center)
+            }
             Text(p.message)
                 .font(.body)
                 .foregroundStyle(.secondary)
