@@ -3,7 +3,11 @@
 -- (paddocks.rows jsonb) so the Admin Dashboard can render individual rows on
 -- a per-paddock detail map for troubleshooting.
 
-create or replace function public.admin_list_vineyard_paddocks(p_vineyard_id uuid)
+-- Drop the existing function first because the OUT parameter row type is
+-- changing (Postgres cannot CREATE OR REPLACE across return-type changes).
+drop function if exists public.admin_list_vineyard_paddocks(uuid);
+
+create function public.admin_list_vineyard_paddocks(p_vineyard_id uuid)
 returns table (
   id uuid,
   vineyard_id uuid,
