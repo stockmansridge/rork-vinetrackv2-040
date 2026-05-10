@@ -15,6 +15,16 @@ struct SprayTripSetupSheet: View {
 
     @State private var showProgramPicker: Bool = false
     @State private var showCalculator: Bool = false
+    @State private var showTemplatePicker: Bool = false
+    @State private var prefillTemplate: SprayRecord?
+
+    private var activeTemplates: [SprayRecord] {
+        store.sprayRecords.filter { $0.isTemplate }
+    }
+
+    private var nonTemplateRecords: [SprayRecord] {
+        store.sprayRecords.filter { !$0.isTemplate }
+    }
 
     var body: some View {
         NavigationStack {
@@ -38,38 +48,40 @@ struct SprayTripSetupSheet: View {
 
                 VStack(spacing: 12) {
                     SprayTripSetupCard(
-                        icon: "list.clipboard",
-                        title: "Use a Spray Program",
-                        subtitle: "Select from an existing spray record or template",
-                        color: .blue,
-                        disabled: store.sprayRecords.isEmpty
+                        icon: "doc.on.doc.fill",
+                        title: "Start from Template",
+                        subtitle: activeTemplates.isEmpty
+                            ? "No templates available — create one in the admin portal"
+                            : "Use a saved spray template to pre-fill a new job (\(activeTemplates.count) available)",
+                        color: .purple,
+                        disabled: activeTemplates.isEmpty
                     ) {
-                        showProgramPicker = true
+                        showTemplatePicker = true
                     }
 
                     SprayTripSetupCard(
                         icon: "plus.rectangle.on.rectangle",
-                        title: "Create a New Spray Job",
-                        subtitle: "Open the spray calculator to configure a new job",
+                        title: "Custom Spray Job",
+                        subtitle: "Open the spray calculator and configure a new job from scratch",
                         color: VineyardTheme.leafGreen,
                         disabled: false
                     ) {
                         showCalculator = true
                     }
+
+                    if !nonTemplateRecords.isEmpty {
+                        SprayTripSetupCard(
+                            icon: "list.clipboard",
+                            title: "Resume a Spray Program",
+                            subtitle: "Continue an in-progress or saved spray record",
+                            color: .blue,
+                            disabled: false
+                        ) {
+                            showProgramPicker = true
+                        }
+                    }
                 }
                 .padding(.horizontal)
-
-                if store.sprayRecords.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "info.circle")
-                            .font(.caption)
-                        Text("No spray programs yet. Create one to get started.")
-                            .font(.caption)
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                    .padding(.top, 16)
-                }
 
                 Spacer()
             }
@@ -86,8 +98,20 @@ struct SprayTripSetupSheet: View {
                     startTripFromRecord(record)
                 }
             }
-            .sheet(isPresented: $showCalculator, onDismiss: { dismiss() }) {
-                SprayCalculatorView()
+            .sheet(isPresented: $showTemplatePicker) {
+                SprayTemplatePickerSheet { template in
+                    prefillTemplate = template
+                    showTemplatePicker = false
+                    DispatchQueue.main.async {
+                        showCalculator = true
+                    }
+                }
+            }
+            .sheet(isPresented: $showCalculator, onDismiss: {
+                prefillTemplate = nil
+                dismiss()
+            }) {
+                SprayCalculatorView(prefillRecord: prefillTemplate)
             }
         }
     }
@@ -338,6 +362,140 @@ private struct SprayTripProgramRow: View {
 
             Image(systemName: "chevron.right")
                 .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Template Picker (read-only, active templates only)
+
+/// Lists active spray templates (is_template = true, deleted_at IS NULL).
+/// Templates are deep-copied into a new spray job by `SprayCalculatorView`'s
+/// prefill flow — the source template is never mutated.
+struct SprayTemplatePickerSheet: View {
+    @Environment(MigratedDataStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    let onSelect: (SprayRecord) -> Void
+
+    private var activeTemplates: [SprayRecord] {
+        // Soft-deleted templates are removed locally during sync, so filtering
+        // by `isTemplate` is equivalent to `is_template = true AND deleted_at IS NULL`.
+        store.sprayRecords
+            .filter { $0.isTemplate }
+            .sorted { $0.sprayReference.lowercased() < $1.sprayReference.lowercased() }
+    }
+
+    private var groupedTemplates: [(OperationType, [SprayRecord])] {
+        let grouped = Dictionary(grouping: activeTemplates, by: { $0.operationType })
+        return OperationType.allCases.compactMap { type in
+            guard let items = grouped[type], !items.isEmpty else { return nil }
+            return (type, items)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if activeTemplates.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Templates Available", systemImage: "doc.on.doc")
+                    } description: {
+                        Text("Spray templates are managed in the admin portal. Once created, they will appear here.")
+                    }
+                } else {
+                    List {
+                        ForEach(groupedTemplates, id: \.0) { type, templates in
+                            Section {
+                                ForEach(templates) { template in
+                                    Button {
+                                        onSelect(template)
+                                    } label: {
+                                        SprayTemplateRow(template: template)
+                                    }
+                                }
+                            } header: {
+                                Label(type.rawValue, systemImage: type.iconName)
+                            }
+                        }
+
+                        Section {
+                            Label {
+                                Text("Selecting a template will pre-fill a new spray job. The original template is not changed.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } icon: {
+                                Image(systemName: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Choose a Template")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private struct SprayTemplateRow: View {
+    let template: SprayRecord
+
+    private var chemicalSummary: String {
+        let names = template.tanks.flatMap { $0.chemicals }
+            .map { $0.name }
+            .filter { !$0.isEmpty }
+        return names.joined(separator: ", ")
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.on.doc.fill")
+                .font(.title3)
+                .foregroundStyle(.purple)
+                .frame(width: 32, height: 32)
+                .background(Color.purple.opacity(0.12))
+                .clipShape(.rect(cornerRadius: 8))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(template.sprayReference.isEmpty ? "Untitled Template" : template.sprayReference)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                if !chemicalSummary.isEmpty {
+                    Text(chemicalSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                HStack(spacing: 8) {
+                    Text("\(template.tanks.count) tank\(template.tanks.count == 1 ? "" : "s")")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    if !template.equipmentType.isEmpty {
+                        Text("•")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        Text(template.equipmentType)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
