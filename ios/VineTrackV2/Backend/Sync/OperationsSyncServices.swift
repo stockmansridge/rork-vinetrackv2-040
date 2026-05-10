@@ -646,6 +646,12 @@ final class DamageRecordSyncService {
             }
             if remote.isEmpty { return }
         }
+        #if DEBUG
+        print("[DamageRecordSync] pull vineyard=\(vineyardId.uuidString) since=\(lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? "nil") remote.count=\(remote.count)")
+        for item in remote {
+            print("[DamageRecordSync]   remote id=\(item.id) paddock=\(item.paddockId) type=\(item.damageType ?? "nil") deletedAt=\(item.deletedAt?.description ?? "nil")")
+        }
+        #endif
         for item in remote {
             if item.deletedAt != nil {
                 store.applyRemoteDamageRecordDelete(item.id)
@@ -653,11 +659,22 @@ final class DamageRecordSyncService {
             }
             if let pendingAt = metadata.pendingUpserts[item.id] {
                 let remoteAt = item.clientUpdatedAt ?? item.updatedAt ?? .distantPast
-                if pendingAt > remoteAt { continue }
+                if pendingAt > remoteAt {
+                    #if DEBUG
+                    print("[DamageRecordSync]   skip id=\(item.id) — local pending newer than remote")
+                    #endif
+                    continue
+                }
             }
             store.applyRemoteDamageRecordUpsert(item.toDamageRecord())
             metadata.clearDirty([item.id])
+            #if DEBUG
+            print("[DamageRecordSync]   upsert local id=\(item.id)")
+            #endif
         }
+        #if DEBUG
+        print("[DamageRecordSync] local store now has \(store.damageRecords.filter { $0.vineyardId == vineyardId }.count) damage record(s) for vineyard")
+        #endif
     }
 }
 

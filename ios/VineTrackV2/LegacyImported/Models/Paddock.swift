@@ -124,6 +124,17 @@ nonisolated struct CoordinatePoint: Codable, Identifiable, Sendable, Hashable {
         self.latitude = coordinate.latitude
         self.longitude = coordinate.longitude
     }
+
+    enum CodingKeys: String, CodingKey { case id, latitude, longitude }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Tolerate polygon points written by external systems (e.g. the
+        // Lovable web portal) that omit the synthetic `id` field.
+        self.id = (try? c.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        self.latitude = try c.decode(Double.self, forKey: .latitude)
+        self.longitude = try c.decode(Double.self, forKey: .longitude)
+    }
 }
 
 extension Paddock {

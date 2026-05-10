@@ -399,6 +399,63 @@ nonisolated struct BackendDamageRecord: Codable, Sendable, Identifiable {
         case deletedAt = "deleted_at"
         case clientUpdatedAt = "client_updated_at"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.vineyardId = try c.decode(UUID.self, forKey: .vineyardId)
+        self.paddockId = try c.decode(UUID.self, forKey: .paddockId)
+        self.date = Self.flexibleDate(c, .date)
+        self.damageType = try c.decodeIfPresent(String.self, forKey: .damageType)
+        self.damagePercent = try c.decodeIfPresent(Double.self, forKey: .damagePercent)
+        self.polygonPoints = (try? c.decodeIfPresent([CoordinatePoint].self, forKey: .polygonPoints)) ?? nil
+        self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        self.rowNumber = try c.decodeIfPresent(Int.self, forKey: .rowNumber)
+        self.side = try c.decodeIfPresent(String.self, forKey: .side)
+        self.severity = try c.decodeIfPresent(String.self, forKey: .severity)
+        self.status = try c.decodeIfPresent(String.self, forKey: .status)
+        self.dateObserved = Self.flexibleDate(c, .dateObserved)
+        self.operatorName = try c.decodeIfPresent(String.self, forKey: .operatorName)
+        self.latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        self.longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        self.pinId = try c.decodeIfPresent(UUID.self, forKey: .pinId)
+        self.tripId = try c.decodeIfPresent(UUID.self, forKey: .tripId)
+        self.photoUrls = try c.decodeIfPresent([String].self, forKey: .photoUrls)
+        self.createdBy = try c.decodeIfPresent(UUID.self, forKey: .createdBy)
+        self.createdAt = Self.flexibleDate(c, .createdAt)
+        self.updatedAt = Self.flexibleDate(c, .updatedAt)
+        self.deletedAt = Self.flexibleDate(c, .deletedAt)
+        self.clientUpdatedAt = Self.flexibleDate(c, .clientUpdatedAt)
+    }
+
+    private static func flexibleDate(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Date? {
+        if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+        guard let s = try? c.decodeIfPresent(String.self, forKey: key), !s.isEmpty else { return nil }
+        return BackendDamageRecordDateParser.parse(s)
+    }
+}
+
+nonisolated enum BackendDamageRecordDateParser {
+    static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+    static let isoBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime]; return f
+    }()
+    static let dateOnly: DateFormatter = {
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .iso8601); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(secondsFromGMT: 0); f.dateFormat = "yyyy-MM-dd"; return f
+    }()
+    static let timestampNoTZ: DateFormatter = {
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .iso8601); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(secondsFromGMT: 0); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"; return f
+    }()
+
+    static func parse(_ s: String) -> Date? {
+        if let d = isoFractional.date(from: s) { return d }
+        if let d = isoBasic.date(from: s) { return d }
+        if let d = dateOnly.date(from: s) { return d }
+        if let d = timestampNoTZ.date(from: s) { return d }
+        return nil
+    }
 }
 
 nonisolated struct BackendDamageRecordUpsert: Encodable, Sendable {
@@ -477,6 +534,23 @@ nonisolated struct BackendDamageRecordUpsert: Encodable, Sendable {
 }
 
 extension BackendDamageRecord {
+    /// Map portal/iOS damage_type strings (any case, including new portal-only
+    /// labels) to the closest local DamageType so a row never fails to render.
+    static func normalizeDamageType(_ raw: String?) -> DamageType {
+        guard let raw, !raw.isEmpty else { return .other }
+        if let exact = DamageType(rawValue: raw) { return exact }
+        let key = raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        switch key {
+        case "frost": return .frost
+        case "hail": return .hail
+        case "wind": return .wind
+        case "heat", "sunburn", "heat / sunburn", "heat/sunburn": return .heat
+        case "disease": return .disease
+        case "pest", "animal / bird damage", "animal/bird damage", "animal damage", "bird damage": return .pest
+        default: return .other
+        }
+    }
+
     static func upsert(from d: DamageRecord, createdBy: UUID?, clientUpdatedAt: Date) -> BackendDamageRecordUpsert {
         BackendDamageRecordUpsert(
             id: d.id,
@@ -509,8 +583,8 @@ extension BackendDamageRecord {
             vineyardId: vineyardId,
             paddockId: paddockId,
             polygonPoints: polygonPoints ?? [],
-            date: date ?? Date(),
-            damageType: damageType.flatMap { DamageType(rawValue: $0) } ?? .frost,
+            date: date ?? dateObserved ?? Date(),
+            damageType: BackendDamageRecord.normalizeDamageType(damageType),
             damagePercent: damagePercent ?? 0,
             notes: notes ?? "",
             rowNumber: rowNumber,
