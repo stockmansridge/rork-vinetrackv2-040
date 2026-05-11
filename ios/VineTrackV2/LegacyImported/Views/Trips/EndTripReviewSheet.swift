@@ -17,6 +17,11 @@ struct EndTripReviewSheet: View {
     @State private var completionNotes: String = ""
     @FocusState private var notesFocused: Bool
 
+    // Collapsible sections (secondary detail). Row completion stays
+    // expanded by default — it's the main purpose of this sheet.
+    @State private var pinsExpanded: Bool = false
+    @State private var seedingExpanded: Bool = false
+
     private struct DisplayRow: Identifiable {
         let id: Int
         let result: RowCompletionResult
@@ -54,31 +59,34 @@ struct EndTripReviewSheet: View {
     private var partialCount: Int { rows.filter { $0.status == .partial }.count }
     private var missedCount: Int { rows.filter { $0.status == .notComplete }.count }
 
+    private var tripPins: [VinePin] {
+        let ids = Set(liveTrip.pinIds)
+        return store.pins.filter { ids.contains($0.id) }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Review rows before saving")
-                            .font(.headline)
-                        Text("Tick any rows you completed in the field that GPS did not detect. Manual changes will be included in the trip report.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
+                summarySection
 
-                Section {
-                    HStack(spacing: 0) {
-                        statCell(value: "\(rows.count)", label: "Planned", tint: .primary)
-                        Divider().frame(height: 36)
-                        statCell(value: "\(completedCount)", label: "Complete", tint: .green)
-                        Divider().frame(height: 36)
-                        statCell(value: "\(partialCount)", label: "Partial", tint: .orange)
-                        Divider().frame(height: 36)
-                        statCell(value: "\(missedCount)", label: "Not done", tint: .red)
+                if missedCount > 0 {
+                    Section {
+                        Button {
+                            let live = liveTrip
+                            let completed = Set(live.completedPaths)
+                            let skipped = Set(live.skippedPaths)
+                            for r in rows where r.status == .notComplete {
+                                if !completed.contains(r.path) && !skipped.contains(r.path) {
+                                    manualCompletes.insert(r.path)
+                                }
+                            }
+                        } label: {
+                            Label("Tick all \(missedCount) missed rows as complete", systemImage: "checkmark.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    } footer: {
+                        Text("Use this if GPS missed rows you actually drove.")
                     }
-                    .padding(.vertical, 4)
                 }
 
                 if rows.isEmpty {
@@ -88,27 +96,7 @@ struct EndTripReviewSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    if missedCount > 0 {
-                        Section {
-                            Button {
-                                let live = liveTrip
-                                let completed = Set(live.completedPaths)
-                                let skipped = Set(live.skippedPaths)
-                                for r in rows where r.status == .notComplete {
-                                    if !completed.contains(r.path) && !skipped.contains(r.path) {
-                                        manualCompletes.insert(r.path)
-                                    }
-                                }
-                            } label: {
-                                Label("Tick all \(missedCount) not-done rows as complete", systemImage: "checkmark.circle.fill")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                        } footer: {
-                            Text("Use this if GPS missed rows you actually drove. The trip won't be marked failed — your manual ticks are saved in the report.")
-                        }
-                    }
-
-                    Section("Planned rows") {
+                    Section("Row completion") {
                         ForEach(rows) { row in
                             rowItem(row)
                         }
@@ -134,10 +122,29 @@ struct EndTripReviewSheet: View {
                     Text("Optional notes for this completed job. These will appear in reports.")
                 }
 
-                Section {
-                    Text("Manual completions are recorded in the trip's audit log so the report shows exactly what was driven vs. ticked off after the fact.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !tripPins.isEmpty {
+                    Section {
+                        DisclosureGroup(isExpanded: $pinsExpanded) {
+                            ForEach(tripPins) { pin in
+                                pinRow(pin)
+                            }
+                        } label: {
+                            Label("Pins recorded (\(tripPins.count))", systemImage: "mappin.and.ellipse")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+
+                if liveTrip.tripFunction == TripFunction.seeding.rawValue,
+                   let seeding = liveTrip.seedingDetails {
+                    Section {
+                        DisclosureGroup(isExpanded: $seedingExpanded) {
+                            seedingSummary(seeding)
+                        } label: {
+                            Label("Seeding details", systemImage: "leaf")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
                 }
             }
             .navigationTitle("Review & Finish Trip")
@@ -171,6 +178,80 @@ struct EndTripReviewSheet: View {
             }
         }
     }
+
+    // MARK: - Trip Summary
+
+    @ViewBuilder
+    private var summarySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(liveTrip.displayFunctionLabel)
+                    .font(.title3.weight(.semibold))
+
+                if !liveTrip.paddockName.isEmpty {
+                    Label(liveTrip.paddockName, systemImage: "square.grid.2x2")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Time / distance row
+                HStack(spacing: 0) {
+                    summaryStat(value: formattedDuration(liveTrip.activeDuration), label: "Duration")
+                    Divider().frame(height: 36)
+                    summaryStat(value: formattedDistance(liveTrip.totalDistance), label: "Distance")
+                    Divider().frame(height: 36)
+                    summaryStat(value: "\(liveTrip.pinIds.count)", label: "Pins")
+                }
+
+                // Row counts
+                HStack(spacing: 0) {
+                    summaryStat(value: "\(completedCount)", label: "Complete", tint: .green)
+                    Divider().frame(height: 36)
+                    summaryStat(value: "\(partialCount)", label: "Partial", tint: .orange)
+                    Divider().frame(height: 36)
+                    summaryStat(value: "\(missedCount)", label: "Missed", tint: missedCount > 0 ? .red : .secondary)
+                    Divider().frame(height: 36)
+                    summaryStat(value: "\(rows.count)", label: "Planned")
+                }
+            }
+            .padding(.vertical, 4)
+        } footer: {
+            Text("Review the rows below and tick any GPS missed before finalising.")
+        }
+    }
+
+    private func summaryStat(value: String, label: String, tint: Color = .primary) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.headline)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func formattedDuration(_ interval: TimeInterval) -> String {
+        let total = max(0, Int(interval))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        if h > 0 { return "\(h)h \(m)m" }
+        let s = total % 60
+        if m > 0 { return "\(m)m \(s)s" }
+        return "\(s)s"
+    }
+
+    private func formattedDistance(_ metres: Double) -> String {
+        if metres >= 1000 {
+            return String(format: "%.2f km", metres / 1000)
+        }
+        return String(format: "%.0f m", metres)
+    }
+
+    // MARK: - Row item
 
     @ViewBuilder
     private func rowItem(_ row: DisplayRow) -> some View {
@@ -219,18 +300,6 @@ struct EndTripReviewSheet: View {
         )
     }
 
-    private func statCell(value: String, label: String, tint: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.title3.bold())
-                .foregroundStyle(tint)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
     private func tint(for status: RowCompletionStatus) -> Color {
         switch status {
         case .complete: return .green
@@ -249,6 +318,49 @@ struct EndTripReviewSheet: View {
             return "Partial — Auto"
         case .notComplete:
             return "Not complete — not detected by GPS"
+        }
+    }
+
+    // MARK: - Pins / Seeding (collapsible)
+
+    @ViewBuilder
+    private func pinRow(_ pin: VinePin) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mappin.circle.fill")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pin.buttonName.isEmpty ? pin.mode.rawValue : pin.buttonName)
+                    .font(.subheadline)
+                if let row = pin.pinRowNumber {
+                    Text("On Row \(row)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let row = pin.rowNumber {
+                    Text("Row \(row)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func seedingSummary(_ seeding: SeedingDetails) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let depth = seeding.sowingDepthCm {
+                Text(String(format: "Sowing depth: %.1f cm", depth))
+                    .font(.subheadline)
+            }
+            if let lines = seeding.mixLines, !lines.isEmpty {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    if let name = line.name, !name.isEmpty {
+                        Text("• \(name)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
     }
 
