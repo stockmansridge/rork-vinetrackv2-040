@@ -3,6 +3,7 @@ import SwiftUI
 struct AddEditWorkTaskView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(\.accessControl) private var accessControl
     @Environment(\.dismiss) private var dismiss
 
@@ -222,6 +223,7 @@ struct AddEditWorkTaskView: View {
                 Button("Delete", role: .destructive) {
                     if let t = existingTask {
                         store.deleteWorkTask(t.id)
+                        Task { await workTaskSync.syncForSelectedVineyard() }
                     }
                     dismiss()
                 }
@@ -331,6 +333,7 @@ struct AddEditWorkTaskView: View {
         } else {
             store.addWorkTask(task)
         }
+        Task { await workTaskSync.syncForSelectedVineyard() }
         dismiss()
     }
 }

@@ -148,14 +148,35 @@ final class WorkTaskSyncService {
                 metadata.clearDirty(pushed)
             }
         }
-        for (id, _) in metadata.pendingDeletes {
+        let pendingDeletes = metadata.pendingDeletes
+        if !pendingDeletes.isEmpty {
+            #if DEBUG
+            print("[WorkTaskSync] push: \(pendingDeletes.count) pending delete(s) for vineyard \(vineyardId.uuidString)")
+            #endif
+        }
+        var firstDeleteError: Error?
+        for (id, _) in pendingDeletes {
             do {
                 try await repository.softDelete(id: id)
                 metadata.clearDeleted([id])
+                #if DEBUG
+                print("[WorkTaskSync] push: soft-deleted id=\(id) on server")
+                #endif
             } catch {
-                if isOperationsMissingRowError(error) { metadata.clearDeleted([id]) }
+                if isOperationsMissingRowError(error) {
+                    metadata.clearDeleted([id])
+                    #if DEBUG
+                    print("[WorkTaskSync] push: id=\(id) missing on server — clearing pending delete")
+                    #endif
+                } else {
+                    #if DEBUG
+                    print("[WorkTaskSync] push: soft-delete FAILED id=\(id) error=\(error.localizedDescription) raw=\(String(describing: error))")
+                    #endif
+                    if firstDeleteError == nil { firstDeleteError = error }
+                }
             }
         }
+        if let firstDeleteError { throw firstDeleteError }
     }
 
     private func pull(vineyardId: UUID) async throws {
