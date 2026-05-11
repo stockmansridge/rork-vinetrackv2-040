@@ -527,6 +527,7 @@ struct SyncSettingsView: View {
     @Environment(TractorSyncService.self) private var tractorSync
     @Environment(FuelPurchaseSyncService.self) private var fuelPurchaseSync
     @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
+    @Environment(WorkTaskTypeSyncService.self) private var workTaskTypeSync
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
@@ -630,6 +631,14 @@ struct SyncSettingsView: View {
                 }
                 .disabled(isSyncingMgmt(operatorCategorySync.syncStatus))
                 VineyardSyncStatusRow(label: "operator categories", state: mgmtStateFrom(operatorCategorySync.syncStatus, lastSync: operatorCategorySync.lastSyncDate))
+
+                Button {
+                    Task { await workTaskTypeSync.syncForSelectedVineyard() }
+                } label: {
+                    syncButtonLabel(title: "Sync Work Task Types", icon: "tag.fill", isSyncing: isSyncingMgmt(workTaskTypeSync.syncStatus))
+                }
+                .disabled(isSyncingMgmt(workTaskTypeSync.syncStatus))
+                VineyardSyncStatusRow(label: "work task types", state: mgmtStateFrom(workTaskTypeSync.syncStatus, lastSync: workTaskTypeSync.lastSyncDate))
             } header: {
                 Text("Spray Management")
             } footer: {

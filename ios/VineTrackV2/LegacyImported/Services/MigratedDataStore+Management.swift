@@ -234,6 +234,69 @@ extension MigratedDataStore {
         persistenceStore.save(all, key: MgmtKeys.operatorCategories)
     }
 
+    // MARK: - Work Task Types
+
+    func addWorkTaskType(_ type: WorkTaskType) {
+        guard let vineyardId = selectedVineyardId else { return }
+        var entry = type
+        entry.vineyardId = vineyardId
+        // Case-insensitive de-dupe within the current vineyard.
+        let trimmed = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if workTaskTypes.contains(where: {
+            $0.vineyardId == vineyardId &&
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trimmed.lowercased()
+        }) { return }
+        workTaskTypes.append(entry)
+        workTaskTypeRepo.saveSlice(workTaskTypes, for: vineyardId)
+        onWorkTaskTypeChanged?(entry.id)
+    }
+
+    func updateWorkTaskType(_ type: WorkTaskType) {
+        guard let vineyardId = selectedVineyardId else { return }
+        guard let idx = workTaskTypes.firstIndex(where: { $0.id == type.id }) else { return }
+        workTaskTypes[idx] = type
+        workTaskTypeRepo.saveSlice(workTaskTypes, for: vineyardId)
+        onWorkTaskTypeChanged?(type.id)
+    }
+
+    func deleteWorkTaskType(_ type: WorkTaskType) {
+        guard let vineyardId = selectedVineyardId else { return }
+        workTaskTypes.removeAll { $0.id == type.id }
+        workTaskTypeRepo.saveSlice(workTaskTypes, for: vineyardId)
+        onWorkTaskTypeDeleted?(type.id)
+    }
+
+    func applyRemoteWorkTaskTypeUpsert(_ type: WorkTaskType) {
+        if selectedVineyardId == type.vineyardId {
+            if let idx = workTaskTypes.firstIndex(where: { $0.id == type.id }) {
+                workTaskTypes[idx] = type
+            } else {
+                workTaskTypes.append(type)
+            }
+            workTaskTypeRepo.saveSlice(workTaskTypes, for: type.vineyardId)
+        } else {
+            var all = workTaskTypeRepo.loadAll()
+            if let idx = all.firstIndex(where: { $0.id == type.id }) {
+                all[idx] = type
+            } else {
+                all.append(type)
+            }
+            workTaskTypeRepo.saveSlice(all.filter { $0.vineyardId == type.vineyardId }, for: type.vineyardId)
+        }
+    }
+
+    func applyRemoteWorkTaskTypeDelete(_ id: UUID) {
+        if selectedVineyardId != nil {
+            workTaskTypes.removeAll { $0.id == id }
+        }
+        var all = workTaskTypeRepo.loadAll()
+        if let removed = all.first(where: { $0.id == id }) {
+            all.removeAll { $0.id == id }
+            workTaskTypeRepo.saveSlice(all.filter { $0.vineyardId == removed.vineyardId }, for: removed.vineyardId)
+        }
+    }
+
     @discardableResult
     func deduplicateOperatorCategories() -> Int {
         guard let vineyardId = selectedVineyardId else { return 0 }

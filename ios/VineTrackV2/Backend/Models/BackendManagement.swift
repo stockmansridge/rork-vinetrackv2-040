@@ -497,3 +497,109 @@ extension BackendOperatorCategory {
         )
     }
 }
+
+// MARK: - Work Task Types
+
+nonisolated struct BackendWorkTaskType: Codable, Sendable, Identifiable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String?
+    let isDefault: Bool?
+    let sortOrder: Int?
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+    let clientUpdatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case name
+        case isDefault = "is_default"
+        case sortOrder = "sort_order"
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    // Per-row resilient decode: tolerate missing optional fields and
+    // string-encoded dates from PostgREST so one malformed row does not
+    // break sync for the rest of the vineyard's catalog.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.vineyardId = try c.decode(UUID.self, forKey: .vineyardId)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
+        self.isDefault = try c.decodeIfPresent(Bool.self, forKey: .isDefault)
+        self.sortOrder = try c.decodeIfPresent(Int.self, forKey: .sortOrder)
+        self.createdBy = try c.decodeIfPresent(UUID.self, forKey: .createdBy)
+        self.updatedBy = try c.decodeIfPresent(UUID.self, forKey: .updatedBy)
+        self.createdAt = Self.flexibleDate(c, .createdAt)
+        self.updatedAt = Self.flexibleDate(c, .updatedAt)
+        self.deletedAt = Self.flexibleDate(c, .deletedAt)
+        self.clientUpdatedAt = Self.flexibleDate(c, .clientUpdatedAt)
+    }
+
+    private static func flexibleDate(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Date? {
+        if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+        guard let s = try? c.decodeIfPresent(String.self, forKey: key), !s.isEmpty else { return nil }
+        return BackendDamageRecordDateParser.parse(s)
+    }
+}
+
+nonisolated struct BackendWorkTaskTypeUpsert: Encodable, Sendable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String
+    let isDefault: Bool
+    let sortOrder: Int
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case name
+        case isDefault = "is_default"
+        case sortOrder = "sort_order"
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case clientUpdatedAt = "client_updated_at"
+    }
+}
+
+extension BackendWorkTaskType {
+    static func upsert(
+        from t: WorkTaskType,
+        createdBy: UUID?,
+        updatedBy: UUID?,
+        clientUpdatedAt: Date
+    ) -> BackendWorkTaskTypeUpsert {
+        BackendWorkTaskTypeUpsert(
+            id: t.id,
+            vineyardId: t.vineyardId,
+            name: t.name,
+            isDefault: t.isDefault,
+            sortOrder: t.sortOrder,
+            createdBy: createdBy,
+            updatedBy: updatedBy,
+            clientUpdatedAt: clientUpdatedAt
+        )
+    }
+
+    func toWorkTaskType() -> WorkTaskType {
+        WorkTaskType(
+            id: id,
+            vineyardId: vineyardId,
+            name: name ?? "",
+            isDefault: isDefault ?? false,
+            sortOrder: sortOrder ?? 0
+        )
+    }
+}

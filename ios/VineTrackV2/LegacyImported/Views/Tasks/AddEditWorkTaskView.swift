@@ -4,6 +4,7 @@ struct AddEditWorkTaskView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskTypeSyncService.self) private var workTaskTypeSync
     @Environment(\.accessControl) private var accessControl
     @Environment(\.dismiss) private var dismiss
 
@@ -38,6 +39,15 @@ struct AddEditWorkTaskView: View {
 
     private var totalPeople: Int { resources.reduce(0) { $0 + $1.count } }
 
+    /// Vineyard-scoped catalog merged with the built-in defaults. Drives the
+    /// Task Type picker so Lovable-created custom types appear alongside the
+    /// existing iOS defaults.
+    private var mergedTaskTypeNames: [String] {
+        let vineyardId = store.selectedVineyardId
+        let scoped = store.workTaskTypes.filter { vineyardId == nil || $0.vineyardId == vineyardId }
+        return WorkTaskTypeCatalog.merged(with: scoped)
+    }
+
     private var totalCost: Double {
         resources.reduce(0.0) { $0 + ($1.hourlyRate * durationHours * Double($1.count)) }
     }
@@ -54,7 +64,7 @@ struct AddEditWorkTaskView: View {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
 
                     Menu {
-                        ForEach(WorkTaskTypeCatalog.defaults, id: \.self) { t in
+                        ForEach(mergedTaskTypeNames, id: \.self) { t in
                             Button(t) {
                                 taskType = t
                                 showCustomTaskField = false
@@ -301,7 +311,7 @@ struct AddEditWorkTaskView: View {
         if let t = existingTask {
             date = t.date
             taskType = t.taskType
-            if !WorkTaskTypeCatalog.defaults.contains(t.taskType) && !t.taskType.isEmpty {
+            if !mergedTaskTypeNames.contains(t.taskType) && !t.taskType.isEmpty {
                 showCustomTaskField = true
                 customTaskType = t.taskType
             }
@@ -316,6 +326,20 @@ struct AddEditWorkTaskView: View {
     private func saveTask() {
         let trimmed = taskType.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+
+        // If the user entered a custom task type that is not in the merged
+        // catalog yet, persist it to work_task_types so it syncs to other
+        // devices and Lovable.
+        let lower = trimmed.lowercased()
+        let knownLower = Set(mergedTaskTypeNames.map { $0.lowercased() })
+        if !knownLower.contains(lower), let vineyardId = store.selectedVineyardId {
+            store.addWorkTaskType(WorkTaskType(
+                vineyardId: vineyardId,
+                name: trimmed,
+                isDefault: false,
+                sortOrder: 0
+            ))
+        }
 
         var task = existingTask ?? WorkTask()
         task.date = date
@@ -333,7 +357,10 @@ struct AddEditWorkTaskView: View {
         } else {
             store.addWorkTask(task)
         }
-        Task { await workTaskSync.syncForSelectedVineyard() }
+        Task {
+            await workTaskTypeSync.syncForSelectedVineyard()
+            await workTaskSync.syncForSelectedVineyard()
+        }
         dismiss()
     }
 }

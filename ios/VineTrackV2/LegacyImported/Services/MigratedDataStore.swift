@@ -34,6 +34,7 @@ final class MigratedDataStore {
     var tractors: [Tractor] = []
     var fuelPurchases: [FuelPurchase] = []
     var operatorCategories: [OperatorCategory] = []
+    var workTaskTypes: [WorkTaskType] = []
     var buttonTemplates: [ButtonTemplate] = []
 
     var yieldSessions: [YieldEstimationSession] = []
@@ -111,6 +112,8 @@ final class MigratedDataStore {
     var onFuelPurchaseDeleted: ((UUID) -> Void)?
     var onOperatorCategoryChanged: ((UUID) -> Void)?
     var onOperatorCategoryDeleted: ((UUID) -> Void)?
+    var onWorkTaskTypeChanged: ((UUID) -> Void)?
+    var onWorkTaskTypeDeleted: ((UUID) -> Void)?
 
     // Phase 15G: operations sync hooks (work tasks, maintenance, yield, damage, historical).
     var onWorkTaskChanged: ((UUID) -> Void)?
@@ -143,6 +146,7 @@ final class MigratedDataStore {
     let workTaskRepo: WorkTaskRepository
     let workTaskLabourLineRepo: WorkTaskLabourLineRepository
     let workTaskPaddockRepo: WorkTaskPaddockRepository
+    let workTaskTypeRepo: WorkTaskTypeRepository
     let maintenanceLogRepo: MaintenanceLogRepository
     let sprayRepo: SprayRepository
     let settingsRepo: SettingsRepository
@@ -178,6 +182,7 @@ final class MigratedDataStore {
         self.workTaskRepo = WorkTaskRepository(persistence: persistence)
         self.workTaskLabourLineRepo = WorkTaskLabourLineRepository(persistence: persistence)
         self.workTaskPaddockRepo = WorkTaskPaddockRepository(persistence: persistence)
+        self.workTaskTypeRepo = WorkTaskTypeRepository(persistence: persistence)
         self.maintenanceLogRepo = MaintenanceLogRepository(persistence: persistence)
         self.sprayRepo = SprayRepository(persistence: persistence)
         self.settingsRepo = SettingsRepository(persistence: persistence)
@@ -339,6 +344,7 @@ final class MigratedDataStore {
             workTasks = []
             workTaskLabourLines = []
             workTaskPaddocks = []
+            workTaskTypes = []
             settings = AppSettings()
             return
         }
@@ -348,6 +354,7 @@ final class MigratedDataStore {
         workTasks = workTaskRepo.load(for: vineyardId)
         workTaskLabourLines = workTaskLabourLineRepo.load(for: vineyardId)
         workTaskPaddocks = workTaskPaddockRepo.load(for: vineyardId)
+        workTaskTypes = workTaskTypeRepo.load(for: vineyardId)
         maintenanceLogs = maintenanceLogRepo.load(for: vineyardId)
 
         sprayRecords = sprayRepo.loadRecords(for: vineyardId)
@@ -397,6 +404,7 @@ final class MigratedDataStore {
         workTasks = []
         workTaskLabourLines = []
         workTaskPaddocks = []
+        workTaskTypes = []
         grapeVarieties = []
         selectedTab = 0
     }
@@ -415,6 +423,7 @@ final class MigratedDataStore {
             WorkTaskRepository.storageKey,
             WorkTaskLabourLineRepository.storageKey,
             WorkTaskPaddockRepository.storageKey,
+            WorkTaskTypeRepository.storageKey,
             MaintenanceLogRepository.storageKey,
             SprayRepository.recordsKey,
             SprayRepository.savedChemicalsKey,

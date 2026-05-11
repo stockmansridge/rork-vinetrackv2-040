@@ -171,4 +171,26 @@ nonisolated enum WorkTaskTypeCatalog {
         "Bird Netting",
         "Other"
     ]
+
+    /// Merge vineyard-scoped custom task types (from work_task_types) with the
+    /// built-in defaults. Custom types appear first (sorted by sortOrder then
+    /// name); defaults fill in the rest. Case-insensitive de-duplication so a
+    /// vineyard rename of a default name does not double-list.
+    static func merged(with customTypes: [WorkTaskType]) -> [String] {
+        let sortedCustom = customTypes
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { lhs, rhs in
+                if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            .map { $0.name }
+        var seen = Set<String>()
+        var result: [String] = []
+        for name in sortedCustom + defaults {
+            let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if key.isEmpty { continue }
+            if seen.insert(key).inserted { result.append(name) }
+        }
+        return result
+    }
 }
