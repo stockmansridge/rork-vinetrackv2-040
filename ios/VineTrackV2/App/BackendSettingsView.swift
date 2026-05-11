@@ -529,6 +529,7 @@ struct SyncSettingsView: View {
     @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
     @Environment(MaintenanceLogSyncService.self) private var maintenanceLogSync
     @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
@@ -642,6 +643,14 @@ struct SyncSettingsView: View {
                 }
                 .disabled(isSyncingOps(workTaskSync.syncStatus))
                 VineyardSyncStatusRow(label: "work tasks", state: opsStateFrom(workTaskSync.syncStatus, lastSync: workTaskSync.lastSyncDate))
+
+                Button {
+                    Task { await workTaskLabourLineSync.syncForSelectedVineyard() }
+                } label: {
+                    syncButtonLabel(title: "Sync Work Task Labour Lines", icon: "clock.badge.checkmark.fill", isSyncing: isSyncingOps(workTaskLabourLineSync.syncStatus))
+                }
+                .disabled(isSyncingOps(workTaskLabourLineSync.syncStatus))
+                VineyardSyncStatusRow(label: "work task labour lines", state: opsStateFrom(workTaskLabourLineSync.syncStatus, lastSync: workTaskLabourLineSync.lastSyncDate))
 
                 Button {
                     Task { await maintenanceLogSync.syncForSelectedVineyard() }

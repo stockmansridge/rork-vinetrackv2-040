@@ -53,6 +53,14 @@ nonisolated struct WorkTask: Codable, Identifiable, Sendable {
     var finalizedAt: Date?
     var finalizedBy: String?
 
+    // Phase 16 additive multi-day / costing parent fields. All optional —
+    // existing simple work tasks continue to work without these.
+    var startDate: Date?
+    var endDate: Date?
+    var areaHa: Double?
+    var taskDescription: String?
+    var status: String?
+
     init(
         id: UUID = UUID(),
         vineyardId: UUID = UUID(),
@@ -69,7 +77,12 @@ nonisolated struct WorkTask: Codable, Identifiable, Sendable {
         archivedBy: String? = nil,
         isFinalized: Bool = false,
         finalizedAt: Date? = nil,
-        finalizedBy: String? = nil
+        finalizedBy: String? = nil,
+        startDate: Date? = nil,
+        endDate: Date? = nil,
+        areaHa: Double? = nil,
+        taskDescription: String? = nil,
+        status: String? = nil
     ) {
         self.id = id
         self.vineyardId = vineyardId
@@ -87,6 +100,11 @@ nonisolated struct WorkTask: Codable, Identifiable, Sendable {
         self.isFinalized = isFinalized
         self.finalizedAt = finalizedAt
         self.finalizedBy = finalizedBy
+        self.startDate = startDate
+        self.endDate = endDate
+        self.areaHa = areaHa
+        self.taskDescription = taskDescription
+        self.status = status
     }
 
     var totalPeople: Int { resources.reduce(0) { $0 + $1.count } }
@@ -106,6 +124,7 @@ nonisolated struct WorkTask: Codable, Identifiable, Sendable {
     nonisolated enum CodingKeys: String, CodingKey {
         case id, vineyardId, date, taskType, paddockId, paddockName, durationHours, resources, notes, createdBy
         case isArchived, archivedAt, archivedBy, isFinalized, finalizedAt, finalizedBy
+        case startDate, endDate, areaHa, taskDescription, status
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -126,6 +145,11 @@ nonisolated struct WorkTask: Codable, Identifiable, Sendable {
         isFinalized = try c.decodeIfPresent(Bool.self, forKey: .isFinalized) ?? false
         finalizedAt = try c.decodeIfPresent(Date.self, forKey: .finalizedAt)
         finalizedBy = try c.decodeIfPresent(String.self, forKey: .finalizedBy)
+        startDate = try c.decodeIfPresent(Date.self, forKey: .startDate)
+        endDate = try c.decodeIfPresent(Date.self, forKey: .endDate)
+        areaHa = try c.decodeIfPresent(Double.self, forKey: .areaHa)
+        taskDescription = try c.decodeIfPresent(String.self, forKey: .taskDescription)
+        status = try c.decodeIfPresent(String.self, forKey: .status)
     }
 }
 

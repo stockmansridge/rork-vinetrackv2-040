@@ -13,6 +13,7 @@ struct SyncDiagnosticsView: View {
     @Environment(SavedSprayPresetSyncService.self) private var savedSprayPresetSync
     @Environment(SavedChemicalSyncService.self) private var savedChemicalSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
 
     @State private var copyConfirmation: String?
     @State private var isSyncingAll: Bool = false
@@ -524,6 +525,17 @@ struct SyncDiagnosticsView: View {
                 errorMessage: workTaskSync.errorMessage
             ),
             DiagnosticRow(
+                id: "work_task_labour_lines",
+                title: "Work Task Labour Lines",
+                icon: "clock.badge.checkmark.fill",
+                localCount: filteredCount(store.workTaskLabourLines, vineyardId: vineyardId) { $0.vineyardId },
+                pendingUpserts: workTaskLabourLineSync.pendingUpsertCount,
+                pendingDeletes: workTaskLabourLineSync.pendingDeleteCount,
+                lastSync: workTaskLabourLineSync.lastSyncDate,
+                status: statusOps(workTaskLabourLineSync.syncStatus),
+                errorMessage: workTaskLabourLineSync.errorMessage
+            ),
+            DiagnosticRow(
                 id: "chemicals",
                 title: "Chemicals",
                 icon: "flask.fill",
@@ -570,6 +582,7 @@ struct SyncDiagnosticsView: View {
         await savedSprayPresetSync.syncForSelectedVineyard()
         await savedChemicalSync.syncForSelectedVineyard()
         await workTaskSync.syncForSelectedVineyard()
+        await workTaskLabourLineSync.syncForSelectedVineyard()
     }
 
     private func copyDiagnostics() {

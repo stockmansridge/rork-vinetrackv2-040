@@ -219,6 +219,156 @@ final class WorkTaskSyncService {
     }
 }
 
+// MARK: - WorkTaskLabourLineSyncService
+
+@Observable
+@MainActor
+final class WorkTaskLabourLineSyncService {
+    typealias Status = OperationsSyncStatus
+
+    var syncStatus: Status = .idle
+    var lastSyncDate: Date?
+    var errorMessage: String?
+
+    var pendingUpsertCount: Int { metadata.pendingUpserts.count }
+    var pendingDeleteCount: Int { metadata.pendingDeletes.count }
+
+    private weak var store: MigratedDataStore?
+    private weak var auth: NewBackendAuthService?
+    private let repository: any WorkTaskLabourLineSyncRepositoryProtocol
+    private let metadata: OperationsSyncMetadata
+    private var isConfigured: Bool = false
+
+    init(repository: (any WorkTaskLabourLineSyncRepositoryProtocol)? = nil) {
+        self.repository = repository ?? SupabaseWorkTaskLabourLineSyncRepository()
+        self.metadata = OperationsSyncMetadata(key: "vinetrack_work_task_labour_line_sync_metadata")
+    }
+
+    func configure(store: MigratedDataStore, auth: NewBackendAuthService) {
+        self.store = store
+        self.auth = auth
+        guard !isConfigured else { return }
+        isConfigured = true
+        store.onWorkTaskLabourLineChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
+        store.onWorkTaskLabourLineDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+    }
+
+    func syncForSelectedVineyard() async {
+        guard let store, let auth, auth.isSignedIn,
+              let vineyardId = store.selectedVineyardId else { return }
+        await sync(vineyardId: vineyardId)
+    }
+
+    func sync(vineyardId: UUID) async {
+        guard SupabaseClientProvider.shared.isConfigured else {
+            errorMessage = "Supabase not configured"; syncStatus = .failure("Supabase not configured"); return
+        }
+        syncStatus = .syncing; errorMessage = nil
+        do {
+            try await push(vineyardId: vineyardId)
+            try await pull(vineyardId: vineyardId)
+            metadata.setLastSync(Date(), for: vineyardId)
+            lastSyncDate = Date()
+            syncStatus = .success
+        } catch {
+            errorMessage = error.localizedDescription
+            syncStatus = .failure(error.localizedDescription)
+        }
+    }
+
+    private func push(vineyardId: UUID) async throws {
+        guard let store else { return }
+        let userId = auth?.userId
+        let dirty = metadata.pendingUpserts
+        if !dirty.isEmpty {
+            let byId = Dictionary(store.workTaskLabourLines.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            var payloads: [BackendWorkTaskLabourLineUpsert] = []
+            var pushed: [UUID] = []
+            for (id, ts) in dirty {
+                guard let item = byId[id], item.vineyardId == vineyardId else { continue }
+                payloads.append(BackendWorkTaskLabourLine.upsert(
+                    from: item, createdBy: userId, updatedBy: userId, clientUpdatedAt: ts
+                ))
+                pushed.append(id)
+            }
+            if !payloads.isEmpty {
+                try await repository.upsertMany(payloads)
+                metadata.clearDirty(pushed)
+            }
+        }
+        let pendingDeletes = metadata.pendingDeletes
+        if !pendingDeletes.isEmpty {
+            #if DEBUG
+            print("[WorkTaskLabourLineSync] push: \(pendingDeletes.count) pending delete(s) for vineyard \(vineyardId.uuidString)")
+            #endif
+        }
+        var firstDeleteError: Error?
+        for (id, _) in pendingDeletes {
+            do {
+                try await repository.softDelete(id: id)
+                metadata.clearDeleted([id])
+                #if DEBUG
+                print("[WorkTaskLabourLineSync] push: soft-deleted id=\(id) on server")
+                #endif
+            } catch {
+                if isOperationsMissingRowError(error) {
+                    metadata.clearDeleted([id])
+                    #if DEBUG
+                    print("[WorkTaskLabourLineSync] push: id=\(id) missing on server — clearing pending delete")
+                    #endif
+                } else {
+                    #if DEBUG
+                    print("[WorkTaskLabourLineSync] push: soft-delete FAILED id=\(id) error=\(error.localizedDescription) raw=\(String(describing: error))")
+                    #endif
+                    if firstDeleteError == nil { firstDeleteError = error }
+                }
+            }
+        }
+        if let firstDeleteError { throw firstDeleteError }
+    }
+
+    private func pull(vineyardId: UUID) async throws {
+        guard let store else { return }
+        let lastSync = metadata.lastSync(for: vineyardId)
+        let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
+        if lastSync == nil {
+            let remoteIds = Set(remote.map { $0.id })
+            let local = store.workTaskLabourLines.filter { $0.vineyardId == vineyardId }
+            let missing = local.filter { !remoteIds.contains($0.id) }
+            if !missing.isEmpty {
+                let now = Date()
+                let userId = auth?.userId
+                let payloads = missing.map {
+                    BackendWorkTaskLabourLine.upsert(from: $0, createdBy: userId, updatedBy: userId, clientUpdatedAt: now)
+                }
+                do {
+                    try await repository.upsertMany(payloads)
+                    #if DEBUG
+                    print("[WorkTaskLabourLineSync] initial seed pushed \(payloads.count) local row(s) missing remotely")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[WorkTaskLabourLineSync] initial seed push failed: \(error.localizedDescription)")
+                    #endif
+                }
+            }
+            if remote.isEmpty { return }
+        }
+        for item in remote {
+            if item.deletedAt != nil {
+                store.applyRemoteWorkTaskLabourLineDelete(item.id)
+                metadata.clearDirty([item.id]); metadata.clearDeleted([item.id]); continue
+            }
+            if let pendingAt = metadata.pendingUpserts[item.id] {
+                let remoteAt = item.clientUpdatedAt ?? item.updatedAt ?? .distantPast
+                if pendingAt > remoteAt { continue }
+            }
+            store.applyRemoteWorkTaskLabourLineUpsert(item.toWorkTaskLabourLine())
+            metadata.clearDirty([item.id])
+        }
+    }
+}
+
 // MARK: - MaintenanceLogSyncService
 
 @Observable

@@ -20,6 +20,7 @@ struct NewMainTabView: View {
     @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
     @Environment(MaintenanceLogSyncService.self) private var maintenanceLogSync
     @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
@@ -83,6 +84,7 @@ struct NewMainTabView: View {
             operatorCategorySync.configure(store: store, auth: auth)
             growthStageImageSync.configure(store: store, auth: auth)
             workTaskSync.configure(store: store, auth: auth)
+            workTaskLabourLineSync.configure(store: store, auth: auth)
             maintenanceLogSync.configure(store: store, auth: auth)
             yieldSessionSync.configure(store: store, auth: auth)
             damageRecordSync.configure(store: store, auth: auth)
@@ -104,6 +106,7 @@ struct NewMainTabView: View {
             await operatorCategorySync.syncForSelectedVineyard()
             await growthStageImageSync.syncForSelectedVineyard()
             await workTaskSync.syncForSelectedVineyard()
+            await workTaskLabourLineSync.syncForSelectedVineyard()
             await maintenanceLogSync.syncForSelectedVineyard()
             await yieldSessionSync.syncForSelectedVineyard()
             await damageRecordSync.syncForSelectedVineyard()
@@ -139,6 +142,7 @@ struct NewMainTabView: View {
                     await operatorCategorySync.syncForSelectedVineyard()
                     await growthStageImageSync.syncForSelectedVineyard()
                     await workTaskSync.syncForSelectedVineyard()
+                    await workTaskLabourLineSync.syncForSelectedVineyard()
                     await maintenanceLogSync.syncForSelectedVineyard()
                     await yieldSessionSync.syncForSelectedVineyard()
                     await damageRecordSync.syncForSelectedVineyard()

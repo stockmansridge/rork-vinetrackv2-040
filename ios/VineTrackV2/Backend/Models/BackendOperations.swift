@@ -18,6 +18,12 @@ nonisolated struct BackendWorkTask: Codable, Sendable, Identifiable {
     let isFinalized: Bool?
     let finalizedAt: Date?
     let finalizedBy: String?
+    // Phase 16 additive parent fields (sql/050).
+    let startDate: Date?
+    let endDate: Date?
+    let areaHa: Double?
+    let taskDescription: String?
+    let status: String?
     let createdBy: UUID?
     let createdAt: Date?
     let updatedAt: Date?
@@ -40,6 +46,11 @@ nonisolated struct BackendWorkTask: Codable, Sendable, Identifiable {
         case isFinalized = "is_finalized"
         case finalizedAt = "finalized_at"
         case finalizedBy = "finalized_by"
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case areaHa = "area_ha"
+        case taskDescription = "description"
+        case status
         case createdBy = "created_by"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -64,6 +75,13 @@ nonisolated struct BackendWorkTaskUpsert: Encodable, Sendable {
     let isFinalized: Bool
     let finalizedAt: Date?
     let finalizedBy: String?
+    // Phase 16 additive parent fields. Encoded only when non-nil so iOS
+    // writes never overwrite portal-set values with NULL.
+    let startDate: Date?
+    let endDate: Date?
+    let areaHa: Double?
+    let taskDescription: String?
+    let status: String?
     let createdBy: UUID?
     let clientUpdatedAt: Date
 
@@ -83,8 +101,39 @@ nonisolated struct BackendWorkTaskUpsert: Encodable, Sendable {
         case isFinalized = "is_finalized"
         case finalizedAt = "finalized_at"
         case finalizedBy = "finalized_by"
+        case startDate = "start_date"
+        case endDate = "end_date"
+        case areaHa = "area_ha"
+        case taskDescription = "description"
+        case status
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(vineyardId, forKey: .vineyardId)
+        try c.encodeIfPresent(paddockId, forKey: .paddockId)
+        try c.encode(paddockName, forKey: .paddockName)
+        try c.encode(date, forKey: .date)
+        try c.encode(taskType, forKey: .taskType)
+        try c.encode(durationHours, forKey: .durationHours)
+        try c.encode(resources, forKey: .resources)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(isArchived, forKey: .isArchived)
+        try c.encodeIfPresent(archivedAt, forKey: .archivedAt)
+        try c.encodeIfPresent(archivedBy, forKey: .archivedBy)
+        try c.encode(isFinalized, forKey: .isFinalized)
+        try c.encodeIfPresent(finalizedAt, forKey: .finalizedAt)
+        try c.encodeIfPresent(finalizedBy, forKey: .finalizedBy)
+        try c.encodeIfPresent(startDate, forKey: .startDate)
+        try c.encodeIfPresent(endDate, forKey: .endDate)
+        try c.encodeIfPresent(areaHa, forKey: .areaHa)
+        try c.encodeIfPresent(taskDescription, forKey: .taskDescription)
+        try c.encodeIfPresent(status, forKey: .status)
+        try c.encodeIfPresent(createdBy, forKey: .createdBy)
+        try c.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
     }
 }
 
@@ -106,6 +155,11 @@ extension BackendWorkTask {
             isFinalized: t.isFinalized,
             finalizedAt: t.finalizedAt,
             finalizedBy: t.finalizedBy,
+            startDate: t.startDate,
+            endDate: t.endDate,
+            areaHa: t.areaHa,
+            taskDescription: t.taskDescription,
+            status: t.status,
             createdBy: createdBy,
             clientUpdatedAt: clientUpdatedAt
         )
@@ -128,7 +182,186 @@ extension BackendWorkTask {
             archivedBy: archivedBy,
             isFinalized: isFinalized ?? false,
             finalizedAt: finalizedAt,
-            finalizedBy: finalizedBy
+            finalizedBy: finalizedBy,
+            startDate: startDate,
+            endDate: endDate,
+            areaHa: areaHa,
+            taskDescription: taskDescription,
+            status: status
+        )
+    }
+}
+
+// MARK: - Work Task Labour Lines (Phase 16)
+
+nonisolated struct BackendWorkTaskLabourLine: Codable, Sendable, Identifiable {
+    let id: UUID
+    let workTaskId: UUID
+    let vineyardId: UUID
+    let workDate: Date?
+    let operatorCategoryId: UUID?
+    let workerType: String?
+    let workerCount: Int?
+    let hoursPerWorker: Double?
+    let hourlyRate: Double?
+    let totalHours: Double?
+    let totalCost: Double?
+    let notes: String?
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+    let clientUpdatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workTaskId = "work_task_id"
+        case vineyardId = "vineyard_id"
+        case workDate = "work_date"
+        case operatorCategoryId = "operator_category_id"
+        case workerType = "worker_type"
+        case workerCount = "worker_count"
+        case hoursPerWorker = "hours_per_worker"
+        case hourlyRate = "hourly_rate"
+        case totalHours = "total_hours"
+        case totalCost = "total_cost"
+        case notes
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    // Per-row resilient decode: tolerate missing optional fields and
+    // string-encoded dates from PostgREST so one malformed row does not
+    // break sync for the rest of the vineyard's labour lines.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.workTaskId = try c.decode(UUID.self, forKey: .workTaskId)
+        self.vineyardId = try c.decode(UUID.self, forKey: .vineyardId)
+        self.workDate = Self.flexibleDate(c, .workDate)
+        self.operatorCategoryId = try c.decodeIfPresent(UUID.self, forKey: .operatorCategoryId)
+        self.workerType = try c.decodeIfPresent(String.self, forKey: .workerType)
+        self.workerCount = try c.decodeIfPresent(Int.self, forKey: .workerCount)
+        self.hoursPerWorker = try c.decodeIfPresent(Double.self, forKey: .hoursPerWorker)
+        self.hourlyRate = try c.decodeIfPresent(Double.self, forKey: .hourlyRate)
+        self.totalHours = try c.decodeIfPresent(Double.self, forKey: .totalHours)
+        self.totalCost = try c.decodeIfPresent(Double.self, forKey: .totalCost)
+        self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        self.createdBy = try c.decodeIfPresent(UUID.self, forKey: .createdBy)
+        self.updatedBy = try c.decodeIfPresent(UUID.self, forKey: .updatedBy)
+        self.createdAt = Self.flexibleDate(c, .createdAt)
+        self.updatedAt = Self.flexibleDate(c, .updatedAt)
+        self.deletedAt = Self.flexibleDate(c, .deletedAt)
+        self.clientUpdatedAt = Self.flexibleDate(c, .clientUpdatedAt)
+    }
+
+    private static func flexibleDate(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Date? {
+        if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+        guard let s = try? c.decodeIfPresent(String.self, forKey: key), !s.isEmpty else { return nil }
+        return BackendDamageRecordDateParser.parse(s)
+    }
+}
+
+nonisolated struct BackendWorkTaskLabourLineUpsert: Encodable, Sendable {
+    let id: UUID
+    let workTaskId: UUID
+    let vineyardId: UUID
+    let workDate: Date
+    let operatorCategoryId: UUID?
+    let workerType: String
+    let workerCount: Int
+    let hoursPerWorker: Double
+    let hourlyRate: Double?
+    let notes: String
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workTaskId = "work_task_id"
+        case vineyardId = "vineyard_id"
+        case workDate = "work_date"
+        case operatorCategoryId = "operator_category_id"
+        case workerType = "worker_type"
+        case workerCount = "worker_count"
+        case hoursPerWorker = "hours_per_worker"
+        case hourlyRate = "hourly_rate"
+        case notes
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    // work_date is encoded as `yyyy-MM-dd` to match the SQL `date` column.
+    private static let workDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .iso8601)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(workTaskId, forKey: .workTaskId)
+        try c.encode(vineyardId, forKey: .vineyardId)
+        try c.encode(Self.workDateFormatter.string(from: workDate), forKey: .workDate)
+        try c.encodeIfPresent(operatorCategoryId, forKey: .operatorCategoryId)
+        try c.encode(workerType, forKey: .workerType)
+        try c.encode(workerCount, forKey: .workerCount)
+        try c.encode(hoursPerWorker, forKey: .hoursPerWorker)
+        try c.encodeIfPresent(hourlyRate, forKey: .hourlyRate)
+        try c.encode(notes, forKey: .notes)
+        try c.encodeIfPresent(createdBy, forKey: .createdBy)
+        try c.encodeIfPresent(updatedBy, forKey: .updatedBy)
+        try c.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
+    }
+}
+
+extension BackendWorkTaskLabourLine {
+    static func upsert(
+        from l: WorkTaskLabourLine,
+        createdBy: UUID?,
+        updatedBy: UUID?,
+        clientUpdatedAt: Date
+    ) -> BackendWorkTaskLabourLineUpsert {
+        BackendWorkTaskLabourLineUpsert(
+            id: l.id,
+            workTaskId: l.workTaskId,
+            vineyardId: l.vineyardId,
+            workDate: l.workDate,
+            operatorCategoryId: l.operatorCategoryId,
+            workerType: l.workerType,
+            workerCount: l.workerCount,
+            hoursPerWorker: l.hoursPerWorker,
+            hourlyRate: l.hourlyRate,
+            notes: l.notes,
+            createdBy: createdBy,
+            updatedBy: updatedBy,
+            clientUpdatedAt: clientUpdatedAt
+        )
+    }
+
+    func toWorkTaskLabourLine() -> WorkTaskLabourLine {
+        WorkTaskLabourLine(
+            id: id,
+            workTaskId: workTaskId,
+            vineyardId: vineyardId,
+            workDate: workDate ?? Date(),
+            operatorCategoryId: operatorCategoryId,
+            workerType: workerType ?? "",
+            workerCount: workerCount ?? 1,
+            hoursPerWorker: hoursPerWorker ?? 0,
+            hourlyRate: hourlyRate,
+            notes: notes ?? ""
         )
     }
 }

@@ -40,6 +40,39 @@ extension MigratedDataStore {
         }
     }
 
+    // MARK: - Work Task Labour Lines
+
+    func applyRemoteWorkTaskLabourLineUpsert(_ line: WorkTaskLabourLine) {
+        if selectedVineyardId == line.vineyardId {
+            if let idx = workTaskLabourLines.firstIndex(where: { $0.id == line.id }) {
+                workTaskLabourLines[idx] = line
+            } else {
+                workTaskLabourLines.append(line)
+            }
+            workTaskLabourLineRepo.saveSlice(workTaskLabourLines, for: line.vineyardId)
+        } else {
+            var all = workTaskLabourLineRepo.loadAll()
+            if let idx = all.firstIndex(where: { $0.id == line.id }) {
+                all[idx] = line
+            } else {
+                all.append(line)
+            }
+            workTaskLabourLineRepo.replace(all.filter { $0.vineyardId == line.vineyardId }, for: line.vineyardId)
+        }
+    }
+
+    func applyRemoteWorkTaskLabourLineDelete(_ id: UUID) {
+        if let vineyardId = selectedVineyardId {
+            workTaskLabourLines.removeAll { $0.id == id }
+            workTaskLabourLineRepo.saveSlice(workTaskLabourLines, for: vineyardId)
+        }
+        var all = workTaskLabourLineRepo.loadAll()
+        if let removed = all.first(where: { $0.id == id }) {
+            all.removeAll { $0.id == id }
+            workTaskLabourLineRepo.replace(all.filter { $0.vineyardId == removed.vineyardId }, for: removed.vineyardId)
+        }
+    }
+
     // MARK: - Maintenance Logs
 
     func applyRemoteMaintenanceLogUpsert(_ log: MaintenanceLog) {

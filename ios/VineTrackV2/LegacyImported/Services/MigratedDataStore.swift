@@ -43,6 +43,7 @@ final class MigratedDataStore {
 
     var maintenanceLogs: [MaintenanceLog] = []
     var workTasks: [WorkTask] = []
+    var workTaskLabourLines: [WorkTaskLabourLine] = []
 
     var grapeVarieties: [GrapeVariety] = []
 
@@ -113,6 +114,8 @@ final class MigratedDataStore {
     // Phase 15G: operations sync hooks (work tasks, maintenance, yield, damage, historical).
     var onWorkTaskChanged: ((UUID) -> Void)?
     var onWorkTaskDeleted: ((UUID) -> Void)?
+    var onWorkTaskLabourLineChanged: ((UUID) -> Void)?
+    var onWorkTaskLabourLineDeleted: ((UUID) -> Void)?
     var onMaintenanceLogChanged: ((UUID) -> Void)?
     var onMaintenanceLogDeleted: ((UUID) -> Void)?
     var onYieldSessionChanged: ((UUID) -> Void)?
@@ -135,6 +138,7 @@ final class MigratedDataStore {
     let pinRepo: PinRepository
     let tripRepo: TripRepository
     let workTaskRepo: WorkTaskRepository
+    let workTaskLabourLineRepo: WorkTaskLabourLineRepository
     let maintenanceLogRepo: MaintenanceLogRepository
     let sprayRepo: SprayRepository
     let settingsRepo: SettingsRepository
@@ -168,6 +172,7 @@ final class MigratedDataStore {
         self.pinRepo = PinRepository(persistence: persistence)
         self.tripRepo = TripRepository(persistence: persistence)
         self.workTaskRepo = WorkTaskRepository(persistence: persistence)
+        self.workTaskLabourLineRepo = WorkTaskLabourLineRepository(persistence: persistence)
         self.maintenanceLogRepo = MaintenanceLogRepository(persistence: persistence)
         self.sprayRepo = SprayRepository(persistence: persistence)
         self.settingsRepo = SettingsRepository(persistence: persistence)
@@ -327,6 +332,7 @@ final class MigratedDataStore {
             yieldDeterminationResults = []
             maintenanceLogs = []
             workTasks = []
+            workTaskLabourLines = []
             settings = AppSettings()
             return
         }
@@ -334,6 +340,7 @@ final class MigratedDataStore {
         pins = pinRepo.load(for: vineyardId)
         trips = tripRepo.load(for: vineyardId)
         workTasks = workTaskRepo.load(for: vineyardId)
+        workTaskLabourLines = workTaskLabourLineRepo.load(for: vineyardId)
         maintenanceLogs = maintenanceLogRepo.load(for: vineyardId)
 
         sprayRecords = sprayRepo.loadRecords(for: vineyardId)
@@ -381,6 +388,7 @@ final class MigratedDataStore {
         yieldDeterminationResults = []
         maintenanceLogs = []
         workTasks = []
+        workTaskLabourLines = []
         grapeVarieties = []
         selectedTab = 0
     }
@@ -397,6 +405,7 @@ final class MigratedDataStore {
             PinRepository.storageKey,
             TripRepository.storageKey,
             WorkTaskRepository.storageKey,
+            WorkTaskLabourLineRepository.storageKey,
             MaintenanceLogRepository.storageKey,
             SprayRepository.recordsKey,
             SprayRepository.savedChemicalsKey,
@@ -973,6 +982,32 @@ final class MigratedDataStore {
         workTasks.removeAll { $0.id == taskId }
         workTaskRepo.saveSlice(workTasks, for: vineyardId)
         onWorkTaskDeleted?(taskId)
+    }
+
+    // MARK: - WorkTaskLabourLine CRUD
+
+    func addWorkTaskLabourLine(_ line: WorkTaskLabourLine) {
+        guard let vineyardId = selectedVineyardId else { return }
+        var item = line
+        item.vineyardId = vineyardId
+        workTaskLabourLines.append(item)
+        workTaskLabourLineRepo.saveSlice(workTaskLabourLines, for: vineyardId)
+        onWorkTaskLabourLineChanged?(item.id)
+    }
+
+    func updateWorkTaskLabourLine(_ line: WorkTaskLabourLine) {
+        guard let vineyardId = selectedVineyardId else { return }
+        guard let index = workTaskLabourLines.firstIndex(where: { $0.id == line.id }) else { return }
+        workTaskLabourLines[index] = line
+        workTaskLabourLineRepo.saveSlice(workTaskLabourLines, for: vineyardId)
+        onWorkTaskLabourLineChanged?(line.id)
+    }
+
+    func deleteWorkTaskLabourLine(_ lineId: UUID) {
+        guard let vineyardId = selectedVineyardId else { return }
+        workTaskLabourLines.removeAll { $0.id == lineId }
+        workTaskLabourLineRepo.saveSlice(workTaskLabourLines, for: vineyardId)
+        onWorkTaskLabourLineDeleted?(lineId)
     }
 
     // MARK: - Settings
