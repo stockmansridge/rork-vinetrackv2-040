@@ -396,7 +396,7 @@ struct RepairsGrowthView: View {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return
         }
-        let subtitle = PinAttachmentFormatter.toastSubtitle(attachment: attachment, fallbackSide: side)
+        let subtitle = PinAttachmentFormatter.toastSubtitle(attachment: attachment, fallbackSide: side, heading: heading)
         showPinToast(title: "\(button.name) pin dropped", subtitle: subtitle)
         if store.settings.autoPhotoPrompt {
             pendingPhotoPinId = createdPin.id
@@ -464,7 +464,7 @@ struct RepairsGrowthView: View {
             showError("Could not create pin \u{2014} no vineyard selected.")
             return
         }
-        let attached = PinAttachmentFormatter.attachmentSubtitle(attachment: attachment)
+        let attached = PinAttachmentFormatter.attachmentSubtitle(attachment: attachment, heading: heading)
         let subtitle: String = {
             if let attached {
                 return "EL \(stage.code) \u{2022} \(attached)"

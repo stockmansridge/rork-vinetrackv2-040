@@ -792,12 +792,13 @@ struct PinRowView: View {
                 }()
                 let sideLabel = (pin.pinSide ?? pin.side).rawValue
 
+                let fullFacing = PinAttachmentFormatter.fullCompassName(degrees: pin.heading)
                 if let drivingPathText {
-                    Text("Row \(drivingPathText) \(sideLabel) hand side facing \(headingText)")
+                    Text("Row \(drivingPathText) — \(sideLabel) hand side facing \(fullFacing)")
                         .font(.subheadline)
                         .foregroundStyle(.primary)
                 } else {
-                    Text("\(sideLabel) hand side facing \(headingText)")
+                    Text("\(sideLabel) hand side facing \(fullFacing)")
                         .font(.subheadline)
                         .foregroundStyle(.primary)
                 }
@@ -1141,7 +1142,7 @@ struct PinDetailSheet: View {
                             Text(pin.buttonName)
                                 .font(.title3.weight(.semibold))
                             if let attached = PinAttachmentFormatter.attachmentLine(pin) {
-                                Text("Attached to \(attached)")
+                                Text("On \(attached)")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(VineyardTheme.olive)
                             }
@@ -1217,19 +1218,20 @@ struct PinDetailSheet: View {
                     // Side belongs with the driving path, not the attached vine row.
                     if pin.pinRowNumber != nil || pin.drivingRowNumber != nil {
                         if let pinRow = pin.pinRowNumber {
-                            LabeledContent("Attached row", value: "Row \(pinRow)")
+                            LabeledContent("On Row", value: "Row \(pinRow)")
                         }
                         if let drivingPath = pin.drivingRowNumber {
                             let side = (pin.pinSide ?? pin.side).rawValue
+                            let facing = PinAttachmentFormatter.fullCompassName(degrees: pin.heading)
                             LabeledContent(
                                 "Driving path",
-                                value: "\(String(format: "%.1f", drivingPath)) — \(side) hand"
+                                value: "Row \(String(format: "%.1f", drivingPath)) — \(side) hand side facing \(facing)"
                             )
                         }
                     } else if let rowNumber = pin.rowNumber {
                         // Legacy fallback only when neither new field is set.
                         LabeledContent("Row", value: "\(rowNumber).5")
-                        LabeledContent("Side", value: "\(pin.side.rawValue) hand")
+                        LabeledContent("Side", value: "\(pin.side.rawValue) hand side")
                     }
                     LabeledContent("Facing", value: "\(compassDirection) (\(Int(pin.heading))\u{00B0})")
                     if let createdByName = resolveDisplayName(userId: pin.createdByUserId, fallbackText: pin.createdBy) {

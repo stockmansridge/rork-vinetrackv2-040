@@ -80,17 +80,7 @@ struct PinsPDFService {
             }
 
             func headingText(for heading: Double) -> String {
-                switch heading {
-                case 337.5..<360, 0..<22.5: return "N"
-                case 22.5..<67.5: return "NE"
-                case 67.5..<112.5: return "E"
-                case 112.5..<157.5: return "SE"
-                case 157.5..<202.5: return "S"
-                case 202.5..<247.5: return "SW"
-                case 247.5..<292.5: return "W"
-                case 292.5..<337.5: return "NW"
-                default: return "N"
-                }
+                PinAttachmentFormatter.fullCompassName(degrees: heading)
             }
 
             PDFHeaderHelper.drawHeader(
@@ -195,7 +185,8 @@ struct PinsPDFService {
                 let rowStr = pin.rowNumber != nil ? "\(pin.rowNumber!).5" : "—"
                 (rowStr as NSString).draw(at: CGPoint(x: colRow, y: y), withAttributes: cellAttrs)
 
-                (pin.side.rawValue as NSString).draw(at: CGPoint(x: colSide, y: y), withAttributes: cellAttrs)
+                let sideStr = "\(pin.side.rawValue) hand side"
+                (sideStr as NSString).draw(in: CGRect(x: colSide, y: y, width: 60, height: 12), withAttributes: cellAttrs)
 
                 let statusStr = pin.isCompleted ? "Done" : "Active"
                 let statusColor = pin.isCompleted ? UIColor.systemGreen : UIColor.systemOrange
@@ -207,7 +198,7 @@ struct PinsPDFService {
 
                 let detailY = y + 13
                 let heading = headingText(for: pin.heading)
-                var detail = "\(pin.side.rawValue) side facing \(heading)"
+                var detail = "\(pin.side.rawValue) hand side facing \(heading)"
                 if let createdBy = pin.createdBy, !createdBy.isEmpty {
                     detail += " • by \(createdBy)"
                 }
@@ -336,7 +327,7 @@ struct PinsPDFService {
                 escapeCSV(pin.buttonName),
                 escapeCSV(report.paddockName),
                 escapeCSV(rowStr),
-                escapeCSV(pin.side.rawValue),
+                escapeCSV("\(pin.side.rawValue) hand side"),
                 escapeCSV("\(heading) (\(Int(pin.heading))°)"),
                 escapeCSV(statusStr),
                 escapeCSV(createdBy),
@@ -364,17 +355,7 @@ struct PinsPDFService {
     }
 
     private static func headingText(for heading: Double) -> String {
-        switch heading {
-        case 337.5..<360, 0..<22.5: return "N"
-        case 22.5..<67.5: return "NE"
-        case 67.5..<112.5: return "E"
-        case 112.5..<157.5: return "SE"
-        case 157.5..<202.5: return "S"
-        case 202.5..<247.5: return "SW"
-        case 247.5..<292.5: return "W"
-        case 292.5..<337.5: return "NW"
-        default: return "N"
-        }
+        PinAttachmentFormatter.fullCompassName(degrees: heading)
     }
 
     private static func escapeCSV(_ value: String) -> String {

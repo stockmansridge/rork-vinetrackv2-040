@@ -42,6 +42,10 @@ struct PinDuplicateWarningSheet: View {
         return "Possible duplicate pin nearby"
     }
 
+    private var fullFacing: String {
+        PinAttachmentFormatter.fullCompassName(degrees: existingPin.heading)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -56,7 +60,7 @@ struct PinDuplicateWarningSheet: View {
                         .multilineTextAlignment(.center)
 
                     if let attachmentLabel {
-                        Text("Attached to \(attachmentLabel)")
+                        Text("On \(attachmentLabel)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -99,18 +103,18 @@ struct PinDuplicateWarningSheet: View {
                         LabeledContent("Block", value: paddockName)
                         if existingPin.pinRowNumber != nil || existingPin.drivingRowNumber != nil {
                             if let pinRow = existingPin.pinRowNumber {
-                                LabeledContent("Attached row", value: "Row \(pinRow)")
+                                LabeledContent("On Row", value: "Row \(pinRow)")
                             }
                             if let drivingPath = existingPin.drivingRowNumber {
                                 let side = (existingPin.pinSide ?? existingPin.side).rawValue
                                 LabeledContent(
                                     "Driving path",
-                                    value: "\(String(format: "%.1f", drivingPath)) — \(side) hand"
+                                    value: "Row \(String(format: "%.1f", drivingPath)) — \(side) hand side facing \(fullFacing)"
                                 )
                             }
                         } else if let row = existingPin.rowNumber {
                             LabeledContent("Row", value: "\(row).5")
-                            LabeledContent("Side", value: "\(existingPin.side.rawValue) hand")
+                            LabeledContent("Side", value: "\(existingPin.side.rawValue) hand side")
                         }
                         LabeledContent(
                             "Created",
