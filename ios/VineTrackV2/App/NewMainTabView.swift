@@ -201,6 +201,8 @@ private struct NewHomeTabView: View {
                         .padding(.horizontal)
                     }
                     todaySection
+                    rainWeatherSection
+                    alertsWatchlistSection
                     vineyardOverviewSection
                     if accessControl.canCreateOperationalRecords {
                         quickActionsSection
@@ -387,39 +389,26 @@ private struct NewHomeTabView: View {
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             plainSectionHeader("Today")
+            HomeTodayItemsCard(selectedTab: $selectedTab)
+        }
+    }
+
+    // MARK: Rain & Weather
+
+    private var rainWeatherSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            plainSectionHeader("Rain & Weather")
             HomeRainSummaryCard()
-            HomeAlertsCard()
+        }
+    }
+
+    // MARK: Alerts & Watchlist
+
+    private var alertsWatchlistSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            plainSectionHeader("Alerts & Watchlist")
             RipenessWatchTile()
-            NavigationLink {
-                PinsView(initialViewMode: .list)
-            } label: {
-                VineyardCard {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.orange.opacity(0.15))
-                                .frame(width: 48, height: 48)
-                            Image(systemName: "mappin.and.ellipse")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.orange)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(pinsNeedingAttention) pin\(pinsNeedingAttention == 1 ? "" : "s") need attention")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            Text(pinsNeedingAttention == 0 ? "All caught up" : "Open the Pins tab to review")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal)
+            HomeWatchlistCard(selectedTab: $selectedTab)
         }
     }
 
