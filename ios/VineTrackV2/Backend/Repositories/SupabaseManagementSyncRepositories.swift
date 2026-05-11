@@ -264,3 +264,60 @@ final class SupabaseWorkTaskTypeSyncRepository: WorkTaskTypeSyncRepositoryProtoc
         try await provider.client.rpc("soft_delete_work_task_type", params: SoftDeleteByIdRequest(id: id)).execute()
     }
 }
+
+// MARK: - Equipment Items ("Other")
+
+final class SupabaseEquipmentItemSyncRepository: EquipmentItemSyncRepositoryProtocol {
+    private let provider: SupabaseClientProvider
+    init(provider: SupabaseClientProvider = .shared) { self.provider = provider }
+
+    func fetch(vineyardId: UUID, since: Date?) async throws -> [BackendEquipmentItem] {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        let q = provider.client.from("equipment_items").select().eq("vineyard_id", value: vineyardId.uuidString)
+        let data: Data
+        if let since {
+            data = try await q.gte("updated_at", value: iso(since)).order("updated_at", ascending: true).execute().data
+        } else {
+            data = try await q.order("updated_at", ascending: true).execute().data
+        }
+        let decoder = JSONDecoder()
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            #if DEBUG
+            print("[EquipmentItemSync] fetch: unexpected payload shape, falling back to typed decode")
+            #endif
+            if let since {
+                return try await q.gte("updated_at", value: iso(since)).order("updated_at", ascending: true).execute().value
+            }
+            return try await q.order("updated_at", ascending: true).execute().value
+        }
+        var records: [BackendEquipmentItem] = []
+        records.reserveCapacity(array.count)
+        for row in array {
+            let id = (row["id"] as? String) ?? "<unknown-id>"
+            do {
+                let rowData = try JSONSerialization.data(withJSONObject: row)
+                let record = try decoder.decode(BackendEquipmentItem.self, from: rowData)
+                records.append(record)
+            } catch {
+                #if DEBUG
+                print("[EquipmentItemSync] decode failed id=\(id) error=\(error)")
+                #endif
+            }
+        }
+        #if DEBUG
+        print("[EquipmentItemSync] fetched \(array.count) row(s), decoded \(records.count) for vineyard \(vineyardId.uuidString)")
+        #endif
+        return records
+    }
+
+    func upsertMany(_ items: [BackendEquipmentItemUpsert]) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        guard !items.isEmpty else { return }
+        try await provider.client.from("equipment_items").upsert(items, onConflict: "id").execute()
+    }
+
+    func softDelete(id: UUID) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        try await provider.client.rpc("soft_delete_equipment_item", params: SoftDeleteByIdRequest(id: id)).execute()
+    }
+}

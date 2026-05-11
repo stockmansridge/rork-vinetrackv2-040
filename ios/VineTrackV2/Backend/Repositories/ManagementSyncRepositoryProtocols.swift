@@ -41,3 +41,9 @@ protocol WorkTaskTypeSyncRepositoryProtocol: Sendable {
     func upsertMany(_ items: [BackendWorkTaskTypeUpsert]) async throws
     func softDelete(id: UUID) async throws
 }
+
+protocol EquipmentItemSyncRepositoryProtocol: Sendable {
+    func fetch(vineyardId: UUID, since: Date?) async throws -> [BackendEquipmentItem]
+    func upsertMany(_ items: [BackendEquipmentItemUpsert]) async throws
+    func softDelete(id: UUID) async throws
+}

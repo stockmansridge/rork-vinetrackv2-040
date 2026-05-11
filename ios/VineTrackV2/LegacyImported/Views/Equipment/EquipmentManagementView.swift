@@ -12,6 +12,17 @@ struct EquipmentManagementView: View {
 
     private var canManageSetup: Bool { accessControl?.canManageSetup ?? false }
 
+    private var otherItemsCount: Int {
+        guard let vid = store.selectedVineyardId else { return 0 }
+        return store.equipmentItems.filter { $0.vineyardId == vid }.count
+    }
+
+    private var otherItemsSubtitle: String {
+        let count = otherItemsCount
+        if count == 0 { return "Add quad bikes, utes, pumps, generators…" }
+        return "\(count) item\(count == 1 ? "" : "s")"
+    }
+
     var body: some View {
         List {
             Section {
@@ -52,6 +63,32 @@ struct EquipmentManagementView: View {
                 if !canManageSetup {
                     Text("Setup data is managed by vineyard owners and managers.")
                 }
+            }
+
+            Section {
+                NavigationLink {
+                    OtherEquipmentManagementView()
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Manage Other Items")
+                                .font(.body.weight(.medium))
+                            Text(otherItemsSubtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
+            } header: {
+                HStack {
+                    Label("Other", systemImage: "shippingbox.fill")
+                        .font(.caption.weight(.semibold))
+                        .textCase(.uppercase)
+                    Spacer()
+                }
+            } footer: {
+                Text("Quad bikes, utes, trailers, pumps, generators, slashers, mulchers, irrigation pumps, workshop tools, and other vineyard assets you maintain.")
             }
 
             Section {

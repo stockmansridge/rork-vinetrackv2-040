@@ -297,6 +297,68 @@ extension MigratedDataStore {
         }
     }
 
+    // MARK: - Equipment Items ("Other" maintenance assets)
+
+    func addEquipmentItem(_ item: EquipmentItem) {
+        guard let vineyardId = selectedVineyardId else { return }
+        var entry = item
+        entry.vineyardId = vineyardId
+        let trimmed = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if equipmentItems.contains(where: {
+            $0.vineyardId == vineyardId &&
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == trimmed.lowercased()
+        }) { return }
+        equipmentItems.append(entry)
+        equipmentItemRepo.saveSlice(equipmentItems, for: vineyardId)
+        onEquipmentItemChanged?(entry.id)
+    }
+
+    func updateEquipmentItem(_ item: EquipmentItem) {
+        guard let vineyardId = selectedVineyardId else { return }
+        guard let idx = equipmentItems.firstIndex(where: { $0.id == item.id }) else { return }
+        equipmentItems[idx] = item
+        equipmentItemRepo.saveSlice(equipmentItems, for: vineyardId)
+        onEquipmentItemChanged?(item.id)
+    }
+
+    func deleteEquipmentItem(_ item: EquipmentItem) {
+        guard let vineyardId = selectedVineyardId else { return }
+        equipmentItems.removeAll { $0.id == item.id }
+        equipmentItemRepo.saveSlice(equipmentItems, for: vineyardId)
+        onEquipmentItemDeleted?(item.id)
+    }
+
+    func applyRemoteEquipmentItemUpsert(_ item: EquipmentItem) {
+        if selectedVineyardId == item.vineyardId {
+            if let idx = equipmentItems.firstIndex(where: { $0.id == item.id }) {
+                equipmentItems[idx] = item
+            } else {
+                equipmentItems.append(item)
+            }
+            equipmentItemRepo.saveSlice(equipmentItems, for: item.vineyardId)
+        } else {
+            var all = equipmentItemRepo.loadAll()
+            if let idx = all.firstIndex(where: { $0.id == item.id }) {
+                all[idx] = item
+            } else {
+                all.append(item)
+            }
+            equipmentItemRepo.saveSlice(all.filter { $0.vineyardId == item.vineyardId }, for: item.vineyardId)
+        }
+    }
+
+    func applyRemoteEquipmentItemDelete(_ id: UUID) {
+        if selectedVineyardId != nil {
+            equipmentItems.removeAll { $0.id == id }
+        }
+        var all = equipmentItemRepo.loadAll()
+        if let removed = all.first(where: { $0.id == id }) {
+            all.removeAll { $0.id == id }
+            equipmentItemRepo.saveSlice(all.filter { $0.vineyardId == removed.vineyardId }, for: removed.vineyardId)
+        }
+    }
+
     @discardableResult
     func deduplicateOperatorCategories() -> Int {
         guard let vineyardId = selectedVineyardId else { return 0 }

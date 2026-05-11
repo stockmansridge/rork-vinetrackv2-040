@@ -9,8 +9,7 @@ struct AddEditMaintenanceLogView: View {
     let existingLog: MaintenanceLog?
 
     @State private var itemName: String = ""
-    @State private var showCustomItem: Bool = false
-    @State private var customItemName: String = ""
+    @State private var showAddOther: Bool = false
     @State private var hours: String = ""
     @State private var workCompleted: String = ""
     @State private var partsUsed: String = ""
@@ -24,6 +23,13 @@ struct AddEditMaintenanceLogView: View {
     @State private var showDeleteAlert: Bool = false
 
     private var isEditing: Bool { existingLog != nil }
+
+    private var otherEquipmentItems: [EquipmentItem] {
+        guard let vid = store.selectedVineyardId else { return [] }
+        return store.equipmentItems
+            .filter { $0.vineyardId == vid }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
     private var canViewFinancials: Bool { accessControl?.canViewFinancials ?? false }
     private var canDelete: Bool { accessControl?.canDelete ?? false }
 
@@ -35,49 +41,62 @@ struct AddEditMaintenanceLogView: View {
         NavigationStack {
             Form {
                 Section("Item / Machine") {
-                    Menu {
-                        if !store.tractors.isEmpty {
-                            Section("Tractors") {
-                                ForEach(store.tractors) { tractor in
-                                    Button(tractor.displayName) {
-                                        itemName = tractor.displayName
-                                        showCustomItem = false
+                    HStack(spacing: 8) {
+                        Menu {
+                            if !store.tractors.isEmpty {
+                                Section("Tractors") {
+                                    ForEach(store.tractors) { tractor in
+                                        Button(tractor.displayName) {
+                                            itemName = tractor.displayName
+                                        }
                                     }
                                 }
                             }
-                        }
-                        if !store.sprayEquipment.isEmpty {
-                            Section("Equipment") {
-                                ForEach(store.sprayEquipment) { eq in
-                                    Button(eq.name) {
-                                        itemName = eq.name
-                                        showCustomItem = false
+                            if !store.sprayEquipment.isEmpty {
+                                Section("Spray Equipment") {
+                                    ForEach(store.sprayEquipment) { eq in
+                                        Button(eq.name) {
+                                            itemName = eq.name
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Divider()
-                        Button {
-                            showCustomItem = true
-                            itemName = customItemName
+                            if !otherEquipmentItems.isEmpty {
+                                Section("Other") {
+                                    ForEach(otherEquipmentItems) { item in
+                                        Button(item.displayName) {
+                                            itemName = item.displayName
+                                        }
+                                    }
+                                }
+                            }
                         } label: {
-                            Label("Custom…", systemImage: "pencil")
+                            HStack {
+                                Text(itemName.isEmpty ? "Select item" : itemName)
+                                    .foregroundStyle(itemName.isEmpty ? .secondary : .primary)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
                         }
-                    } label: {
-                        HStack {
-                            Text(itemName.isEmpty ? "Select item" : itemName)
-                                .foregroundStyle(itemName.isEmpty ? .secondary : .primary)
-                            Spacer()
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        if accessControl?.canManageSetup ?? false {
+                            Button {
+                                showAddOther = true
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(VineyardTheme.earthBrown)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Add item")
                         }
                     }
-                    if showCustomItem {
-                        TextField("e.g. Water Pump", text: $customItemName)
-                            .onChange(of: customItemName) { _, newValue in
-                                itemName = newValue
-                            }
+                    if store.tractors.isEmpty && store.sprayEquipment.isEmpty && otherEquipmentItems.isEmpty {
+                        Text("No tractors, spray equipment, or Other items yet. Tap + to add an Other item, or visit Equipment in Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -248,15 +267,14 @@ struct AddEditMaintenanceLogView: View {
             } message: {
                 Text("Are you sure you want to delete this maintenance record?")
             }
+            .sheet(isPresented: $showAddOther) {
+                NavigationStack {
+                    OtherEquipmentManagementView()
+                }
+            }
             .onAppear {
                 if let log = existingLog {
                     itemName = log.itemName
-                    let matchesTractor = store.tractors.contains { $0.displayName == log.itemName }
-                    let matchesEquipment = store.sprayEquipment.contains { $0.name == log.itemName }
-                    if !matchesTractor && !matchesEquipment && !log.itemName.isEmpty {
-                        showCustomItem = true
-                        customItemName = log.itemName
-                    }
                     hours = log.hours > 0 ? String(format: "%.1f", log.hours) : ""
                     workCompleted = log.workCompleted
                     partsUsed = log.partsUsed

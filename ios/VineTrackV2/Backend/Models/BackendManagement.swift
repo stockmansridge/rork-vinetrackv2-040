@@ -603,3 +603,127 @@ extension BackendWorkTaskType {
         )
     }
 }
+
+// MARK: - Equipment Items ("Other")
+
+nonisolated struct BackendEquipmentItem: Codable, Sendable, Identifiable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String?
+    let category: String?
+    let make: String?
+    let model: String?
+    let serialNumber: String?
+    let notes: String?
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+    let clientUpdatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case name
+        case category
+        case make
+        case model
+        case serialNumber = "serial_number"
+        case notes
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.vineyardId = try c.decode(UUID.self, forKey: .vineyardId)
+        self.name = try c.decodeIfPresent(String.self, forKey: .name)
+        self.category = try c.decodeIfPresent(String.self, forKey: .category)
+        self.make = try c.decodeIfPresent(String.self, forKey: .make)
+        self.model = try c.decodeIfPresent(String.self, forKey: .model)
+        self.serialNumber = try c.decodeIfPresent(String.self, forKey: .serialNumber)
+        self.notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        self.createdBy = try c.decodeIfPresent(UUID.self, forKey: .createdBy)
+        self.updatedBy = try c.decodeIfPresent(UUID.self, forKey: .updatedBy)
+        self.createdAt = Self.flexibleDate(c, .createdAt)
+        self.updatedAt = Self.flexibleDate(c, .updatedAt)
+        self.deletedAt = Self.flexibleDate(c, .deletedAt)
+        self.clientUpdatedAt = Self.flexibleDate(c, .clientUpdatedAt)
+    }
+
+    private static func flexibleDate(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Date? {
+        if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+        guard let s = try? c.decodeIfPresent(String.self, forKey: key), !s.isEmpty else { return nil }
+        return BackendDamageRecordDateParser.parse(s)
+    }
+}
+
+nonisolated struct BackendEquipmentItemUpsert: Encodable, Sendable {
+    let id: UUID
+    let vineyardId: UUID
+    let name: String
+    let category: String
+    let make: String?
+    let model: String?
+    let serialNumber: String?
+    let notes: String
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case vineyardId = "vineyard_id"
+        case name
+        case category
+        case make
+        case model
+        case serialNumber = "serial_number"
+        case notes
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case clientUpdatedAt = "client_updated_at"
+    }
+}
+
+extension BackendEquipmentItem {
+    static func upsert(
+        from item: EquipmentItem,
+        createdBy: UUID?,
+        updatedBy: UUID?,
+        clientUpdatedAt: Date
+    ) -> BackendEquipmentItemUpsert {
+        BackendEquipmentItemUpsert(
+            id: item.id,
+            vineyardId: item.vineyardId,
+            name: item.name,
+            category: item.category.isEmpty ? "other" : item.category,
+            make: item.make,
+            model: item.model,
+            serialNumber: item.serialNumber,
+            notes: item.notes,
+            createdBy: createdBy,
+            updatedBy: updatedBy,
+            clientUpdatedAt: clientUpdatedAt
+        )
+    }
+
+    func toEquipmentItem() -> EquipmentItem {
+        EquipmentItem(
+            id: id,
+            vineyardId: vineyardId,
+            name: name ?? "",
+            category: category ?? "other",
+            make: make,
+            model: model,
+            serialNumber: serialNumber,
+            notes: notes ?? ""
+        )
+    }
+}
