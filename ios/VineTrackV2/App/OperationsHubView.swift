@@ -72,6 +72,17 @@ struct OperationsHubView: View {
 
             Section {
                 NavigationLink {
+                    OptimalRipenessHubView()
+                } label: {
+                    operationRow(
+                        title: "Optimal Ripeness",
+                        subtitle: "GDD progress & harvest window",
+                        icon: "thermometer.sun.fill",
+                        tint: .orange,
+                        count: nil
+                    )
+                }
+                NavigationLink {
                     GrowthStageReportView()
                 } label: {
                     operationRow(
