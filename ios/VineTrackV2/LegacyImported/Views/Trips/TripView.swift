@@ -241,9 +241,12 @@ struct TripView: View {
                         Button {
                             withAnimation(.snappy(duration: 0.2)) {
                                 tripTypeFilter = filter
+                                if filter != .all {
+                                    tripFunctionFilter = nil
+                                }
                             }
                         } label: {
-                            Text(filter.rawValue)
+                            Text(filter == .all ? "All trips" : filter.rawValue)
                                 .font(.subheadline.weight(tripTypeFilter == filter ? .semibold : .regular))
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 7)
@@ -251,6 +254,39 @@ struct TripView: View {
                                 .foregroundStyle(tripTypeFilter == filter ? .white : .primary)
                                 .clipShape(Capsule())
                         }
+                    }
+                }
+            }
+            .contentMargins(.horizontal, 16)
+            .padding(.top, 8)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(functionChipOptions) { function in
+                        let isSelected = tripFunctionFilter == function
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                tripFunctionFilter = isSelected ? nil : function
+                                if function == .spraying {
+                                    tripTypeFilter = .all
+                                } else if tripTypeFilter == .spray {
+                                    tripTypeFilter = .all
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: function.icon)
+                                    .font(.caption2)
+                                Text(function.displayName)
+                                    .font(.caption.weight(isSelected ? .semibold : .regular))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isSelected ? Color.accentColor.opacity(0.85) : Color(.secondarySystemGroupedBackground))
+                            .foregroundStyle(isSelected ? .white : .primary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -313,6 +349,29 @@ struct TripView: View {
             }
         }
         .searchable(text: $tripSearchText, prompt: "Search trips")
+    }
+
+    private var functionChipOptions: [TripFunction] {
+        // Customer-facing order; show all known functions as chips.
+        let order: [TripFunction] = [
+            .spraying,
+            .mowing,
+            .slashing,
+            .mulching,
+            .harrowing,
+            .seeding,
+            .spreading,
+            .fertilising,
+            .undervineWeeding,
+            .interRowCultivation,
+            .pruning,
+            .shootThinning,
+            .canopyWork,
+            .irrigationCheck,
+            .repairs,
+            .other
+        ]
+        return order
     }
 
     private var availableYears: [Int] {
