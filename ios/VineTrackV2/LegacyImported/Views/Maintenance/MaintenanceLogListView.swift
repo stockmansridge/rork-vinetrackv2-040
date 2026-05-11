@@ -208,6 +208,15 @@ struct MaintenanceLogListView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
 
+                        if let mh = log.machineHours {
+                            Text("•")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                            Label(String(format: "%.0f mh", mh), systemImage: "gauge.with.dots.needle.67percent")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
                         if log.totalCost > 0 && (accessControl?.canViewFinancials ?? false) {
                             Text("•")
                                 .font(.caption2)

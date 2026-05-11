@@ -11,6 +11,7 @@ struct AddEditMaintenanceLogView: View {
     @State private var itemName: String = ""
     @State private var showAddOther: Bool = false
     @State private var hours: String = ""
+    @State private var machineHours: String = ""
     @State private var workCompleted: String = ""
     @State private var partsUsed: String = ""
     @State private var partsCost: String = ""
@@ -109,6 +110,19 @@ struct AddEditMaintenanceLogView: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 100)
+                    }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Machine Hours")
+                            Text("Optional")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        TextField("e.g. 1250.5", text: $machineHours)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 120)
                     }
                 }
 
@@ -276,6 +290,9 @@ struct AddEditMaintenanceLogView: View {
                 if let log = existingLog {
                     itemName = log.itemName
                     hours = log.hours > 0 ? String(format: "%.1f", log.hours) : ""
+                    if let mh = log.machineHours {
+                        machineHours = String(format: "%.1f", mh)
+                    }
                     workCompleted = log.workCompleted
                     partsUsed = log.partsUsed
                     partsCost = log.partsCost > 0 ? String(format: "%.2f", log.partsCost) : ""
@@ -306,6 +323,8 @@ struct AddEditMaintenanceLogView: View {
         var log = existingLog ?? MaintenanceLog()
         log.itemName = trimmedName
         log.hours = Double(hours) ?? 0
+        let trimmedMH = machineHours.trimmingCharacters(in: .whitespaces)
+        log.machineHours = trimmedMH.isEmpty ? nil : Double(trimmedMH)
         log.workCompleted = workCompleted.trimmingCharacters(in: .whitespacesAndNewlines)
         log.partsUsed = partsUsed.trimmingCharacters(in: .whitespacesAndNewlines)
         log.partsCost = Double(partsCost) ?? 0

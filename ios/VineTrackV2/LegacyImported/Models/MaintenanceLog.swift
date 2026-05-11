@@ -5,6 +5,7 @@ nonisolated struct MaintenanceLog: Codable, Identifiable, Sendable {
     var vineyardId: UUID
     var itemName: String
     var hours: Double
+    var machineHours: Double?
     var workCompleted: String
     var partsUsed: String
     var partsCost: Double
@@ -25,6 +26,7 @@ nonisolated struct MaintenanceLog: Codable, Identifiable, Sendable {
         vineyardId: UUID = UUID(),
         itemName: String = "",
         hours: Double = 0,
+        machineHours: Double? = nil,
         workCompleted: String = "",
         partsUsed: String = "",
         partsCost: Double = 0,
@@ -44,6 +46,7 @@ nonisolated struct MaintenanceLog: Codable, Identifiable, Sendable {
         self.vineyardId = vineyardId
         self.itemName = itemName
         self.hours = hours
+        self.machineHours = machineHours
         self.workCompleted = workCompleted
         self.partsUsed = partsUsed
         self.partsCost = partsCost
@@ -63,7 +66,7 @@ nonisolated struct MaintenanceLog: Codable, Identifiable, Sendable {
     var totalCost: Double { partsCost + labourCost }
 
     nonisolated enum CodingKeys: String, CodingKey {
-        case id, vineyardId, itemName, hours, workCompleted, partsUsed, partsCost, labourCost, date, invoicePhotoData, photoPath, createdBy
+        case id, vineyardId, itemName, hours, machineHours, workCompleted, partsUsed, partsCost, labourCost, date, invoicePhotoData, photoPath, createdBy
         case isArchived, archivedAt, archivedBy, isFinalized, finalizedAt, finalizedBy
     }
 
@@ -73,6 +76,7 @@ nonisolated struct MaintenanceLog: Codable, Identifiable, Sendable {
         vineyardId = try container.decode(UUID.self, forKey: .vineyardId)
         itemName = try container.decodeIfPresent(String.self, forKey: .itemName) ?? ""
         hours = try container.decodeIfPresent(Double.self, forKey: .hours) ?? 0
+        machineHours = try container.decodeIfPresent(Double.self, forKey: .machineHours)
         workCompleted = try container.decodeIfPresent(String.self, forKey: .workCompleted) ?? ""
         partsUsed = try container.decodeIfPresent(String.self, forKey: .partsUsed) ?? ""
         partsCost = try container.decodeIfPresent(Double.self, forKey: .partsCost) ?? 0

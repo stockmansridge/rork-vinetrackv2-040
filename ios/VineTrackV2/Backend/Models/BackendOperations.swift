@@ -491,6 +491,7 @@ nonisolated struct BackendMaintenanceLog: Codable, Sendable, Identifiable {
     let vineyardId: UUID
     let itemName: String?
     let hours: Double?
+    let machineHours: Double?
     let workCompleted: String?
     let partsUsed: String?
     let partsCost: Double?
@@ -514,6 +515,7 @@ nonisolated struct BackendMaintenanceLog: Codable, Sendable, Identifiable {
         case vineyardId = "vineyard_id"
         case itemName = "item_name"
         case hours
+        case machineHours = "machine_hours"
         case workCompleted = "work_completed"
         case partsUsed = "parts_used"
         case partsCost = "parts_cost"
@@ -539,6 +541,7 @@ nonisolated struct BackendMaintenanceLogUpsert: Encodable, Sendable {
     let vineyardId: UUID
     let itemName: String
     let hours: Double
+    let machineHours: Double?
     let workCompleted: String
     let partsUsed: String
     let partsCost: Double
@@ -559,6 +562,7 @@ nonisolated struct BackendMaintenanceLogUpsert: Encodable, Sendable {
         case vineyardId = "vineyard_id"
         case itemName = "item_name"
         case hours
+        case machineHours = "machine_hours"
         case workCompleted = "work_completed"
         case partsUsed = "parts_used"
         case partsCost = "parts_cost"
@@ -574,6 +578,29 @@ nonisolated struct BackendMaintenanceLogUpsert: Encodable, Sendable {
         case createdBy = "created_by"
         case clientUpdatedAt = "client_updated_at"
     }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(vineyardId, forKey: .vineyardId)
+        try c.encode(itemName, forKey: .itemName)
+        try c.encode(hours, forKey: .hours)
+        try c.encodeIfPresent(machineHours, forKey: .machineHours)
+        try c.encode(workCompleted, forKey: .workCompleted)
+        try c.encode(partsUsed, forKey: .partsUsed)
+        try c.encode(partsCost, forKey: .partsCost)
+        try c.encode(labourCost, forKey: .labourCost)
+        try c.encode(date, forKey: .date)
+        try c.encodeIfPresent(photoPath, forKey: .photoPath)
+        try c.encode(isArchived, forKey: .isArchived)
+        try c.encodeIfPresent(archivedAt, forKey: .archivedAt)
+        try c.encodeIfPresent(archivedBy, forKey: .archivedBy)
+        try c.encode(isFinalized, forKey: .isFinalized)
+        try c.encodeIfPresent(finalizedAt, forKey: .finalizedAt)
+        try c.encodeIfPresent(finalizedBy, forKey: .finalizedBy)
+        try c.encodeIfPresent(createdBy, forKey: .createdBy)
+        try c.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
+    }
 }
 
 extension BackendMaintenanceLog {
@@ -583,6 +610,7 @@ extension BackendMaintenanceLog {
             vineyardId: m.vineyardId,
             itemName: m.itemName,
             hours: m.hours,
+            machineHours: m.machineHours,
             workCompleted: m.workCompleted,
             partsUsed: m.partsUsed,
             partsCost: m.partsCost,
@@ -606,6 +634,7 @@ extension BackendMaintenanceLog {
             vineyardId: vineyardId,
             itemName: itemName ?? "",
             hours: hours ?? 0,
+            machineHours: machineHours,
             workCompleted: workCompleted ?? "",
             partsUsed: partsUsed ?? "",
             partsCost: partsCost ?? 0,
