@@ -46,7 +46,7 @@ struct HomeAlertsCard: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, minHeight: hasAlerts ? 64 : 48, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Color(.secondarySystemBackground))

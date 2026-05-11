@@ -23,41 +23,49 @@ struct HomeRainSummaryCard: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.blue.opacity(0.15))
-                    .frame(width: 30, height: 30)
-                Image(systemName: "cloud.rain.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.blue)
+        NavigationLink {
+            RainfallCalendarView()
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.blue.opacity(0.15))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "cloud.rain.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.blue)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(todayLine)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(forecastLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(todayLine)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(forecastLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-            if isLoading {
-                ProgressView().controlSize(.small)
-            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.blue.opacity(0.18), lineWidth: 1)
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.blue.opacity(0.18), lineWidth: 1)
-        )
+        .buttonStyle(.plain)
         .padding(.horizontal)
         .task(id: store.selectedVineyardId) { await load() }
     }

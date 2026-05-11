@@ -393,34 +393,44 @@ private struct NewHomeTabView: View {
             plainSectionHeader("Today")
             HomeRainSummaryCard()
             HomeAlertsCard()
-            RipenessWatchTile()
             NavigationLink {
                 PinsView(initialViewMode: .list)
             } label: {
-                VineyardCard {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 12)
-                                .fill(Color.orange.opacity(0.15))
-                                .frame(width: 48, height: 48)
-                            Image(systemName: "mappin.and.ellipse")
-                                .font(.title3.weight(.semibold))
-                                .foregroundStyle(.orange)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(pinsNeedingAttention) pin\(pinsNeedingAttention == 1 ? "" : "s") need attention")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            Text(pinsNeedingAttention == 0 ? "All caught up" : "Open the Pins tab to review")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.orange.opacity(0.15))
+                            .frame(width: 30, height: 30)
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.orange)
                     }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(pinsNeedingAttention) pin\(pinsNeedingAttention == 1 ? "" : "s") need attention")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(pinsNeedingAttention == 0 ? "All caught up" : "Open the Pins tab to review")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.orange.opacity(0.18), lineWidth: 1)
+                )
             }
             .buttonStyle(.plain)
             .padding(.horizontal)
@@ -613,6 +623,12 @@ private struct NewHomeTabView: View {
                     iconTile(title: "Growth Stage Report", icon: "chart.line.uptrend.xyaxis", tint: VineyardTheme.leafGreen)
                 }
                 .buttonStyle(.plain)
+                NavigationLink {
+                    OptimalRipenessHubView()
+                } label: {
+                    iconTile(title: "Optimal Ripeness", icon: "thermometer.sun.fill", tint: .pink)
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal)
         }
@@ -626,6 +642,7 @@ private struct NewHomeTabView: View {
         switch title {
         case "Work Tasks": return "Log & calculate"
         case "Maintenance Log": return "Repairs & jobs"
+        case "Optimal Ripeness": return "GDD & harvest window"
         case "Growth Stage Report": return "E-L tracking"
         case "Yield Forecasting": return "Potential, samples & reports"
         case "Yield Estimation": return "Forecast crop"
