@@ -18,6 +18,7 @@ struct YieldSamplingNavigationView: View {
     @State private var recorderName: String = ""
     @State private var mapPosition: MapCameraPosition = .automatic
     @State private var showCompleteConfirmation: Bool = false
+    @State private var showInsufficientSamplesConfirmation: Bool = false
     @State private var showReport: Bool = false
     @State private var showSiteList: Bool = false
     @AppStorage("yieldSamplingTipDismissed_v1") private var tipDismissed: Bool = false
@@ -92,7 +93,31 @@ struct YieldSamplingNavigationView: View {
                 } label: {
                     Image(systemName: "list.bullet")
                 }
+                .accessibilityLabel("All samples")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                if !viewModel.isCompleted {
+                    Button {
+                        attemptFinish()
+                    } label: {
+                        Text("Finish")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .disabled(recordedCount == 0)
+                }
+            }
+        }
+        .confirmationDialog(
+            "Finish with \(recordedCount) of \(totalCount) samples?",
+            isPresented: $showInsufficientSamplesConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Finish Anyway") {
+                showCompleteConfirmation = true
+            }
+            Button("Keep Sampling", role: .cancel) {}
+        } message: {
+            Text("You haven't recorded every sample site yet. You can still finish and lock the estimate using the samples you've collected.")
         }
         .sheet(isPresented: $showSiteList) {
             siteListSheet
@@ -299,7 +324,7 @@ struct YieldSamplingNavigationView: View {
             guidancePanel
             entryPanel
             actionRow
-            if recordedCount == totalCount && totalCount > 0 && !viewModel.isCompleted {
+            if !viewModel.isCompleted && recordedCount > 0 {
                 completeButton
             }
             if viewModel.isCompleted {
@@ -442,15 +467,31 @@ struct YieldSamplingNavigationView: View {
 
     private var completeButton: some View {
         Button {
-            showCompleteConfirmation = true
+            attemptFinish()
         } label: {
-            Label("Complete Sampling", systemImage: "checkmark.seal.fill")
+            Label(finishButtonTitle, systemImage: "checkmark.seal.fill")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
         }
         .buttonStyle(.borderedProminent)
         .tint(.green)
+    }
+
+    private var finishButtonTitle: String {
+        if recordedCount < totalCount {
+            return "Finish Sampling (\(recordedCount)/\(totalCount))"
+        }
+        return "Finish Sampling"
+    }
+
+    private func attemptFinish() {
+        bunchesFocused = false
+        if recordedCount < totalCount {
+            showInsufficientSamplesConfirmation = true
+        } else {
+            showCompleteConfirmation = true
+        }
     }
 
     private var viewReportButton: some View {
