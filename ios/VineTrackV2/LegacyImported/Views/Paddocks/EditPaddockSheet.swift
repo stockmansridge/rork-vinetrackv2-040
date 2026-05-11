@@ -521,33 +521,38 @@ struct EditPaddockSheet: View {
     private var varietiesSection: some View {
         Section {
             ForEach(varietyAllocations) { allocation in
-                let variety = store.grapeVariety(for: allocation.varietyId)
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(variety?.name ?? "Unknown")
-                            .font(.subheadline.weight(.semibold))
-                        if let v = variety {
-                            Text("Optimal: \(Int(v.optimalGDD)) GDD")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    let variety = store.grapeVariety(for: allocation.varietyId)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(variety?.name ?? "Unknown")
+                                .font(.subheadline.weight(.semibold))
+                            if let v = variety {
+                                Text("Optimal: \(Int(v.optimalGDD)) GDD")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer()
+                        TextField("0", value: binding(for: allocation.id), format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                            .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                        Text("%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button {
+                            varietyAllocations.removeAll { $0.id == allocation.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    Spacer()
-                    TextField("0", value: binding(for: allocation.id), format: .number)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 60)
-                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                    Text("%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button {
-                        varietyAllocations.removeAll { $0.id == allocation.id }
-                    } label: {
-                        Image(systemName: "minus.circle.fill")
-                            .foregroundStyle(.red)
+                    if let paddock {
+                        BlockRipenessChip(paddockId: paddock.id, varietyId: allocation.varietyId)
                     }
-                    .buttonStyle(.plain)
                 }
             }
 

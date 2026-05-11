@@ -381,6 +381,7 @@ private struct NewHomeTabView: View {
             plainSectionHeader("Today")
             HomeRainSummaryCard()
             HomeAlertsCard()
+            RipenessWatchTile()
             NavigationLink {
                 PinsView(initialViewMode: .list)
             } label: {
