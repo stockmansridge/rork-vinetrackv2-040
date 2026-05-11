@@ -14,6 +14,7 @@ struct SyncDiagnosticsView: View {
     @Environment(SavedChemicalSyncService.self) private var savedChemicalSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
+    @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
 
     @State private var copyConfirmation: String?
     @State private var isSyncingAll: Bool = false
@@ -536,6 +537,17 @@ struct SyncDiagnosticsView: View {
                 errorMessage: workTaskLabourLineSync.errorMessage
             ),
             DiagnosticRow(
+                id: "work_task_paddocks",
+                title: "Work Task Paddocks",
+                icon: "square.grid.2x2",
+                localCount: filteredCount(store.workTaskPaddocks, vineyardId: vineyardId) { $0.vineyardId },
+                pendingUpserts: workTaskPaddockSync.pendingUpsertCount,
+                pendingDeletes: workTaskPaddockSync.pendingDeleteCount,
+                lastSync: workTaskPaddockSync.lastSyncDate,
+                status: statusOps(workTaskPaddockSync.syncStatus),
+                errorMessage: workTaskPaddockSync.errorMessage
+            ),
+            DiagnosticRow(
                 id: "chemicals",
                 title: "Chemicals",
                 icon: "flask.fill",
@@ -583,6 +595,7 @@ struct SyncDiagnosticsView: View {
         await savedChemicalSync.syncForSelectedVineyard()
         await workTaskSync.syncForSelectedVineyard()
         await workTaskLabourLineSync.syncForSelectedVineyard()
+        await workTaskPaddockSync.syncForSelectedVineyard()
     }
 
     private func copyDiagnostics() {

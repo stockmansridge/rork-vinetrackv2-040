@@ -530,6 +530,7 @@ struct SyncSettingsView: View {
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
+    @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
     @Environment(MaintenanceLogSyncService.self) private var maintenanceLogSync
     @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
@@ -651,6 +652,14 @@ struct SyncSettingsView: View {
                 }
                 .disabled(isSyncingOps(workTaskLabourLineSync.syncStatus))
                 VineyardSyncStatusRow(label: "work task labour lines", state: opsStateFrom(workTaskLabourLineSync.syncStatus, lastSync: workTaskLabourLineSync.lastSyncDate))
+
+                Button {
+                    Task { await workTaskPaddockSync.syncForSelectedVineyard() }
+                } label: {
+                    syncButtonLabel(title: "Sync Work Task Paddocks", icon: "square.grid.2x2", isSyncing: isSyncingOps(workTaskPaddockSync.syncStatus))
+                }
+                .disabled(isSyncingOps(workTaskPaddockSync.syncStatus))
+                VineyardSyncStatusRow(label: "work task paddocks", state: opsStateFrom(workTaskPaddockSync.syncStatus, lastSync: workTaskPaddockSync.lastSyncDate))
 
                 Button {
                     Task { await maintenanceLogSync.syncForSelectedVineyard() }

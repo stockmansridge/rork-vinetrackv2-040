@@ -366,6 +366,124 @@ extension BackendWorkTaskLabourLine {
     }
 }
 
+// MARK: - Work Task Paddocks (Phase 17)
+
+nonisolated struct BackendWorkTaskPaddock: Codable, Sendable, Identifiable {
+    let id: UUID
+    let workTaskId: UUID
+    let vineyardId: UUID
+    let paddockId: UUID
+    let areaHa: Double?
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let deletedAt: Date?
+    let clientUpdatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workTaskId = "work_task_id"
+        case vineyardId = "vineyard_id"
+        case paddockId = "paddock_id"
+        case areaHa = "area_ha"
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case deletedAt = "deleted_at"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    // Per-row resilient decode: tolerate missing optional fields and
+    // string-encoded dates from PostgREST so one malformed row does not
+    // break sync for the rest of the vineyard's join rows.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.workTaskId = try c.decode(UUID.self, forKey: .workTaskId)
+        self.vineyardId = try c.decode(UUID.self, forKey: .vineyardId)
+        self.paddockId = try c.decode(UUID.self, forKey: .paddockId)
+        self.areaHa = try c.decodeIfPresent(Double.self, forKey: .areaHa)
+        self.createdBy = try c.decodeIfPresent(UUID.self, forKey: .createdBy)
+        self.updatedBy = try c.decodeIfPresent(UUID.self, forKey: .updatedBy)
+        self.createdAt = Self.flexibleDate(c, .createdAt)
+        self.updatedAt = Self.flexibleDate(c, .updatedAt)
+        self.deletedAt = Self.flexibleDate(c, .deletedAt)
+        self.clientUpdatedAt = Self.flexibleDate(c, .clientUpdatedAt)
+    }
+
+    private static func flexibleDate(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> Date? {
+        if let d = try? c.decodeIfPresent(Date.self, forKey: key) { return d }
+        guard let s = try? c.decodeIfPresent(String.self, forKey: key), !s.isEmpty else { return nil }
+        return BackendDamageRecordDateParser.parse(s)
+    }
+}
+
+nonisolated struct BackendWorkTaskPaddockUpsert: Encodable, Sendable {
+    let id: UUID
+    let workTaskId: UUID
+    let vineyardId: UUID
+    let paddockId: UUID
+    let areaHa: Double?
+    let createdBy: UUID?
+    let updatedBy: UUID?
+    let clientUpdatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case workTaskId = "work_task_id"
+        case vineyardId = "vineyard_id"
+        case paddockId = "paddock_id"
+        case areaHa = "area_ha"
+        case createdBy = "created_by"
+        case updatedBy = "updated_by"
+        case clientUpdatedAt = "client_updated_at"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(workTaskId, forKey: .workTaskId)
+        try c.encode(vineyardId, forKey: .vineyardId)
+        try c.encode(paddockId, forKey: .paddockId)
+        try c.encodeIfPresent(areaHa, forKey: .areaHa)
+        try c.encodeIfPresent(createdBy, forKey: .createdBy)
+        try c.encodeIfPresent(updatedBy, forKey: .updatedBy)
+        try c.encode(clientUpdatedAt, forKey: .clientUpdatedAt)
+    }
+}
+
+extension BackendWorkTaskPaddock {
+    static func upsert(
+        from p: WorkTaskPaddock,
+        createdBy: UUID?,
+        updatedBy: UUID?,
+        clientUpdatedAt: Date
+    ) -> BackendWorkTaskPaddockUpsert {
+        BackendWorkTaskPaddockUpsert(
+            id: p.id,
+            workTaskId: p.workTaskId,
+            vineyardId: p.vineyardId,
+            paddockId: p.paddockId,
+            areaHa: p.areaHa,
+            createdBy: createdBy,
+            updatedBy: updatedBy,
+            clientUpdatedAt: clientUpdatedAt
+        )
+    }
+
+    func toWorkTaskPaddock() -> WorkTaskPaddock {
+        WorkTaskPaddock(
+            id: id,
+            workTaskId: workTaskId,
+            vineyardId: vineyardId,
+            paddockId: paddockId,
+            areaHa: areaHa
+        )
+    }
+}
+
 // MARK: - Maintenance Logs
 
 nonisolated struct BackendMaintenanceLog: Codable, Sendable, Identifiable {

@@ -73,6 +73,39 @@ extension MigratedDataStore {
         }
     }
 
+    // MARK: - Work Task Paddocks
+
+    func applyRemoteWorkTaskPaddockUpsert(_ paddock: WorkTaskPaddock) {
+        if selectedVineyardId == paddock.vineyardId {
+            if let idx = workTaskPaddocks.firstIndex(where: { $0.id == paddock.id }) {
+                workTaskPaddocks[idx] = paddock
+            } else {
+                workTaskPaddocks.append(paddock)
+            }
+            workTaskPaddockRepo.saveSlice(workTaskPaddocks, for: paddock.vineyardId)
+        } else {
+            var all = workTaskPaddockRepo.loadAll()
+            if let idx = all.firstIndex(where: { $0.id == paddock.id }) {
+                all[idx] = paddock
+            } else {
+                all.append(paddock)
+            }
+            workTaskPaddockRepo.replace(all.filter { $0.vineyardId == paddock.vineyardId }, for: paddock.vineyardId)
+        }
+    }
+
+    func applyRemoteWorkTaskPaddockDelete(_ id: UUID) {
+        if let vineyardId = selectedVineyardId {
+            workTaskPaddocks.removeAll { $0.id == id }
+            workTaskPaddockRepo.saveSlice(workTaskPaddocks, for: vineyardId)
+        }
+        var all = workTaskPaddockRepo.loadAll()
+        if let removed = all.first(where: { $0.id == id }) {
+            all.removeAll { $0.id == id }
+            workTaskPaddockRepo.replace(all.filter { $0.vineyardId == removed.vineyardId }, for: removed.vineyardId)
+        }
+    }
+
     // MARK: - Maintenance Logs
 
     func applyRemoteMaintenanceLogUpsert(_ log: MaintenanceLog) {
