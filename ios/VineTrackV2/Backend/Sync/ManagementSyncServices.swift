@@ -785,6 +785,9 @@ final class OperatorCategorySyncService {
     var lastSyncDate: Date?
     var errorMessage: String?
 
+    var pendingUpsertCount: Int { metadata.pendingUpserts.count }
+    var pendingDeleteCount: Int { metadata.pendingDeletes.count }
+
     private weak var store: MigratedDataStore?
     private weak var auth: NewBackendAuthService?
     private let repository: any OperatorCategorySyncRepositoryProtocol
@@ -815,6 +818,30 @@ final class OperatorCategorySyncService {
         guard let store, let auth, auth.isSignedIn,
               let vineyardId = store.selectedVineyardId else { return }
         await sync(vineyardId: vineyardId)
+    }
+
+    /// Diagnostics helper: re-mark every local operator category for the selected
+    /// vineyard as pending upsert and push immediately. Use when iOS-created
+    /// categories never reached Supabase (e.g. created before sync wiring or
+    /// after a metadata reset).
+    func forceRepushLocalForSelectedVineyard() async -> String {
+        guard let store, let auth, auth.isSignedIn else {
+            return "Not signed in"
+        }
+        guard let vineyardId = store.selectedVineyardId else {
+            return "No selected vineyard"
+        }
+        let now = Date()
+        let locals = store.operatorCategories.filter { $0.vineyardId == vineyardId }
+        for cat in locals { metadata.markDirty(cat.id, at: now) }
+        await sync(vineyardId: vineyardId)
+        return "Re-marked \(locals.count) local categor\(locals.count == 1 ? "y" : "ies") dirty; status=\(syncStatus); error=\(errorMessage ?? "none")"
+    }
+
+    /// Diagnostics helper: fetch raw remote rows for the selected vineyard.
+    func fetchRemoteForSelectedVineyard() async throws -> [BackendOperatorCategory] {
+        guard let store, let vineyardId = store.selectedVineyardId else { return [] }
+        return try await repository.fetch(vineyardId: vineyardId, since: nil)
     }
 
     func sync(vineyardId: UUID) async {

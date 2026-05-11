@@ -12,6 +12,9 @@ struct BackendDiagnosticView: View {
     private let teamRepository = SupabaseTeamRepository()
     private let auditRepository = SupabaseAuditRepository()
 
+    @Environment(MigratedDataStore.self) private var migratedStore
+    @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
+
     @State private var name: String = ""
     @State private var email: String = ""
     @State private var password: String = ""
@@ -52,6 +55,7 @@ struct BackendDiagnosticView: View {
             disclaimerSection
             auditSection
             pinSyncDiagnosticsSection
+            operatorCategoryDiagnosticsSection
             outputSection
         }
         .navigationTitle("Backend Diagnostic")
@@ -300,6 +304,92 @@ struct BackendDiagnosticView: View {
                 appendLog("INFO Copied last pin sync diagnostics to clipboard")
             }
             .disabled(diag.last == nil)
+        }
+    }
+
+    private var operatorCategoryDiagnosticsSection: some View {
+        Section("Operator Categories Diagnostics") {
+            LabeledContent("Selected Vineyard ID", value: migratedStore.selectedVineyardId?.uuidString ?? "none")
+            LabeledContent("Local count (this vineyard)", value: "\(localOperatorCategoriesForSelectedVineyard.count)")
+            LabeledContent("Local count (all vineyards)", value: "\(migratedStore.operatorCategories.count)")
+            LabeledContent("Pending upserts", value: "\(operatorCategorySync.pendingUpsertCount)")
+            LabeledContent("Pending deletes", value: "\(operatorCategorySync.pendingDeleteCount)")
+            LabeledContent("Sync status", value: describe(operatorCategorySync.syncStatus))
+            LabeledContent("Last sync", value: operatorCategorySync.lastSyncDate?.formatted(.dateTime.hour().minute().second()) ?? "never")
+            if let err = operatorCategorySync.errorMessage, !err.isEmpty {
+                Text(err)
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            if !localOperatorCategoriesForSelectedVineyard.isEmpty {
+                DisclosureGroup("Local rows") {
+                    ForEach(localOperatorCategoriesForSelectedVineyard) { cat in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(cat.name).font(.subheadline.weight(.semibold))
+                            Text("id=\(cat.id.uuidString)")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                            Text("vineyard=\(cat.vineyardId.uuidString) • $\(String(format: "%.2f", cat.costPerHour))/hr")
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            Button("Sync Operator Categories Now", systemImage: "arrow.triangle.2.circlepath") {
+                Task { await runOperatorCategorySync() }
+            }
+            Button("Fetch Remote Operator Categories", systemImage: "icloud.and.arrow.down") {
+                Task { await fetchRemoteOperatorCategories() }
+            }
+            Button("Force Re-push Local → Supabase", systemImage: "icloud.and.arrow.up") {
+                Task { await forceRepushOperatorCategories() }
+            }
+        }
+        .disabled(isRunning)
+    }
+
+    private var localOperatorCategoriesForSelectedVineyard: [OperatorCategory] {
+        guard let vid = migratedStore.selectedVineyardId else { return [] }
+        return migratedStore.operatorCategories.filter { $0.vineyardId == vid }
+    }
+
+    private func describe(_ status: ManagementSyncStatus) -> String {
+        switch status {
+        case .idle: return "idle"
+        case .syncing: return "syncing"
+        case .success: return "success"
+        case .failure(let message): return "failure: \(message)"
+        }
+    }
+
+    private func runOperatorCategorySync() async {
+        await perform("Sync Operator Categories") {
+            await operatorCategorySync.syncForSelectedVineyard()
+            return "status=\(describe(operatorCategorySync.syncStatus)); last=\(operatorCategorySync.lastSyncDate?.description ?? "nil"); pendingUpserts=\(operatorCategorySync.pendingUpsertCount); pendingDeletes=\(operatorCategorySync.pendingDeleteCount)"
+        }
+    }
+
+    private func fetchRemoteOperatorCategories() async {
+        await perform("Fetch Remote Operator Categories") {
+            let remote = try await operatorCategorySync.fetchRemoteForSelectedVineyard()
+            let vid = migratedStore.selectedVineyardId?.uuidString ?? "none"
+            if remote.isEmpty {
+                return "remote=0 rows for vineyard \(vid)"
+            }
+            var lines: [String] = ["remote=\(remote.count) row(s) for vineyard \(vid)"]
+            for r in remote {
+                lines.append(" • \(r.name ?? "(no name)") | id=\(r.id.uuidString) | vineyard=\(r.vineyardId.uuidString) | deletedAt=\(r.deletedAt?.description ?? "nil") | cost=\(r.costPerHour ?? 0)")
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    private func forceRepushOperatorCategories() async {
+        await perform("Force Re-push Operator Categories") {
+            let result = await operatorCategorySync.forceRepushLocalForSelectedVineyard()
+            return result
         }
     }
 
