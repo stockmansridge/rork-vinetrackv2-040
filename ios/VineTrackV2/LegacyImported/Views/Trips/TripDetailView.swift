@@ -11,6 +11,11 @@ struct TripDetailView: View {
     @State private var position: MapCameraPosition = .automatic
     @State private var isExporting: Bool = false
     @State private var displayTrailSegments: [TrailSegment] = []
+    @State private var showRowCompletion: Bool = false
+    @State private var showPathMap: Bool = false
+    @State private var showSprayDetails: Bool = false
+    @State private var showSeedingDetails: Bool = false
+    @State private var showPinsSection: Bool = false
 
     private static let maxDisplayTrailPoints: Int = 500
     private static let maxTrailBuckets: Int = 5
@@ -56,7 +61,7 @@ struct TripDetailView: View {
                 .padding(.vertical, 4)
             }
 
-            Section("Stats") {
+            Section("Trip Summary") {
                 if let raw = trip.tripFunction, !raw.isEmpty {
                     if let function = TripFunction(rawValue: raw) {
                         statRow("Function", value: function.displayName, icon: function.icon)
@@ -99,49 +104,68 @@ struct TripDetailView: View {
             }
 
             if let record = sprayRecord {
-                Section("Spray Record") {
-                    if !record.sprayReference.isEmpty {
-                        statRow("Reference", value: record.sprayReference, icon: "drop.fill")
-                    }
-                    statRow("Date", value: record.date.formattedTZ(date: .abbreviated, time: .omitted, in: tz), icon: "calendar")
-                    if record.tanks.count > 0 {
-                        statRow("Tanks", value: "\(record.tanks.count)", icon: "cylinder")
+                Section {
+                    DisclosureGroup(isExpanded: $showSprayDetails) {
+                        if !record.sprayReference.isEmpty {
+                            statRow("Reference", value: record.sprayReference, icon: "drop.fill")
+                        }
+                        statRow("Date", value: record.date.formattedTZ(date: .abbreviated, time: .omitted, in: tz), icon: "calendar")
+                        if record.tanks.count > 0 {
+                            statRow("Tanks", value: "\(record.tanks.count)", icon: "cylinder")
+                        }
+                    } label: {
+                        Label("Spray Record", systemImage: "drop.fill")
+                            .font(.subheadline.weight(.semibold))
                     }
                 }
             }
 
             if !rowCompletionResults.isEmpty {
-                Section("Rows / Paths") {
-                    if let paddockName = coverageSourcePaddockName {
-                        statRow("Paddock", value: paddockName, icon: "leaf")
-                    }
-                    ForEach(rowCompletionResults) { result in
-                        rowCompletionRow(result)
+                Section {
+                    DisclosureGroup(isExpanded: $showRowCompletion) {
+                        if let paddockName = coverageSourcePaddockName {
+                            statRow("Paddock", value: paddockName, icon: "leaf")
+                        }
+                        ForEach(rowCompletionResults) { result in
+                            rowCompletionRow(result)
+                        }
+                    } label: {
+                        Label("Row Completion", systemImage: "checklist")
+                            .font(.subheadline.weight(.semibold))
                     }
                 }
             } else if !coveredRowSummary.isEmpty {
-                Section("Row Coverage") {
-                    statRow("Rows covered", value: "\(coveredRowNumbers.count)", icon: "checkmark.circle")
-                    if let paddockName = coverageSourcePaddockName {
-                        statRow("Paddock", value: paddockName, icon: "leaf")
+                Section {
+                    DisclosureGroup(isExpanded: $showRowCompletion) {
+                        statRow("Rows covered", value: "\(coveredRowNumbers.count)", icon: "checkmark.circle")
+                        if let paddockName = coverageSourcePaddockName {
+                            statRow("Paddock", value: paddockName, icon: "leaf")
+                        }
+                        Text(coveredRowSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } label: {
+                        Label("Row Coverage", systemImage: "checklist")
+                            .font(.subheadline.weight(.semibold))
                     }
-                    Text(coveredRowSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 
             if trip.pathPoints.count > 1 {
-                Section("Path") {
-                    Map(position: $position) {
-                        ForEach(displayTrailSegments) { segment in
-                            MapPolyline(coordinates: segment.coordinates)
-                                .stroke(segment.color, lineWidth: 4)
+                Section {
+                    DisclosureGroup(isExpanded: $showPathMap) {
+                        Map(position: $position) {
+                            ForEach(displayTrailSegments) { segment in
+                                MapPolyline(coordinates: segment.coordinates)
+                                    .stroke(segment.color, lineWidth: 4)
+                            }
                         }
+                        .mapStyle(.hybrid)
+                        .frame(height: 240)
+                    } label: {
+                        Label("Path Map", systemImage: "map")
+                            .font(.subheadline.weight(.semibold))
                     }
-                    .mapStyle(.hybrid)
-                    .frame(height: 240)
-                    .listRowInsets(EdgeInsets())
                 }
             }
 
@@ -156,7 +180,14 @@ struct TripDetailView: View {
             }
 
             if let details = trip.seedingDetails, details.hasAnyValue {
-                seedingDetailsSection(details)
+                Section {
+                    DisclosureGroup(isExpanded: $showSeedingDetails) {
+                        seedingDetailsBody(details)
+                    } label: {
+                        Label("Seeding Details", systemImage: "leaf.arrow.circlepath")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
             }
 
             if let notes = trip.completionNotes?
@@ -170,26 +201,14 @@ struct TripDetailView: View {
                 }
             }
 
-            if !trip.manualCorrectionEvents.isEmpty {
-                Section("Manual Corrections") {
-                    ForEach(Array(trip.manualCorrectionEvents.enumerated()), id: \.offset) { _, event in
-                        let line = TripPDFService.formatCorrectionEvent(event, timeZone: tz)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(line.description)
-                                .font(.subheadline)
-                                .foregroundStyle(.primary)
-                            Text(line.time)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 2)
-                    }
-                }
-            }
+            // Manual Corrections intentionally hidden from the normal Trip
+            // Review UI. Events are still stored on the trip and included
+            // in audit/debug surfaces and exports as required.
 
             if !pinsForTrip.isEmpty {
-                Section("Pins") {
-                    ForEach(pinsForTrip) { pin in
+                Section {
+                    DisclosureGroup(isExpanded: $showPinsSection) {
+                        ForEach(pinsForTrip) { pin in
                         HStack {
                             Group {
                                 if pin.mode == .growth {
@@ -213,6 +232,10 @@ struct TripDetailView: View {
                                     .foregroundStyle(.green)
                             }
                         }
+                    }
+                    } label: {
+                        Label("Pins (\(pinsForTrip.count))", systemImage: "mappin.and.ellipse")
+                            .font(.subheadline.weight(.semibold))
                     }
                 }
             }
@@ -379,8 +402,8 @@ struct TripDetailView: View {
     }
 
     @ViewBuilder
-    private func seedingDetailsSection(_ details: SeedingDetails) -> some View {
-        Section("Seeding Details") {
+    private func seedingDetailsBody(_ details: SeedingDetails) -> some View {
+        Group {
             if let depth = details.sowingDepthCm {
                 statRow("Sowing depth", value: "\(formatNumber(depth)) cm", icon: "ruler")
             }
