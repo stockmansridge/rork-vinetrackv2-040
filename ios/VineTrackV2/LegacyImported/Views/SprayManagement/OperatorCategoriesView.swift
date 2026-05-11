@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OperatorCategoriesView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
     @Environment(\.accessControl) private var accessControl
     @State private var showAddSheet: Bool = false
     @State private var editingCategory: OperatorCategory?
@@ -10,10 +11,15 @@ struct OperatorCategoriesView: View {
 
     private var canManageSetup: Bool { accessControl?.canManageSetup ?? false }
 
+    private var vineyardCategories: [OperatorCategory] {
+        guard let vid = store.selectedVineyardId else { return [] }
+        return store.operatorCategories.filter { $0.vineyardId == vid }
+    }
+
     var body: some View {
         List {
             Section {
-                ForEach(store.operatorCategories) { category in
+                ForEach(vineyardCategories) { category in
                     Group {
                         if canManageSetup {
                             Button {
@@ -29,6 +35,7 @@ struct OperatorCategoriesView: View {
                         if canManageSetup {
                             Button(role: .destructive) {
                                 store.deleteOperatorCategory(category)
+                                Task { await operatorCategorySync.syncForSelectedVineyard() }
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -68,10 +75,14 @@ struct OperatorCategoriesView: View {
         } message: {
             Text("Removed \(removedDuplicateCount) duplicate operator \(removedDuplicateCount == 1 ? "category" : "categories").")
         }
-        .sheet(isPresented: $showAddSheet) {
+        .sheet(isPresented: $showAddSheet, onDismiss: {
+            Task { await operatorCategorySync.syncForSelectedVineyard() }
+        }) {
             OperatorCategoryFormSheet(category: nil)
         }
-        .sheet(item: $editingCategory) { category in
+        .sheet(item: $editingCategory, onDismiss: {
+            Task { await operatorCategorySync.syncForSelectedVineyard() }
+        }) { category in
             OperatorCategoryFormSheet(category: category)
         }
     }

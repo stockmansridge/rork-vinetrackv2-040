@@ -851,24 +851,54 @@ final class OperatorCategorySyncService {
                 pushed.append(id)
             }
             if !payloads.isEmpty {
+                #if DEBUG
+                print("[OperatorCategorySync] push: upserting \(payloads.count) row(s) for vineyard \(vineyardId.uuidString)")
+                #endif
                 try await repository.upsertMany(payloads)
                 metadata.clearDirty(pushed)
             }
         }
-        for (id, _) in metadata.pendingDeletes {
+        let pendingDeletes = metadata.pendingDeletes
+        if !pendingDeletes.isEmpty {
+            #if DEBUG
+            print("[OperatorCategorySync] push: \(pendingDeletes.count) pending delete(s) for vineyard \(vineyardId.uuidString)")
+            #endif
+        }
+        var firstDeleteError: Error?
+        for (id, _) in pendingDeletes {
             do {
                 try await repository.softDelete(id: id)
                 metadata.clearDeleted([id])
+                #if DEBUG
+                print("[OperatorCategorySync] push: soft-deleted id=\(id) on server")
+                #endif
             } catch {
-                if isMissingRowError(error) { metadata.clearDeleted([id]) }
+                if isMissingRowError(error) {
+                    metadata.clearDeleted([id])
+                    #if DEBUG
+                    print("[OperatorCategorySync] push: id=\(id) missing on server — clearing pending delete")
+                    #endif
+                } else {
+                    #if DEBUG
+                    print("[OperatorCategorySync] push: soft-delete FAILED id=\(id) error=\(error.localizedDescription) raw=\(String(describing: error))")
+                    #endif
+                    if firstDeleteError == nil { firstDeleteError = error }
+                }
             }
         }
+        if let firstDeleteError { throw firstDeleteError }
     }
 
     private func pull(vineyardId: UUID) async throws {
         guard let store else { return }
         let lastSync = metadata.lastSync(for: vineyardId)
         let remote = try await repository.fetch(vineyardId: vineyardId, since: lastSync)
+        #if DEBUG
+        print("[OperatorCategorySync] pull vineyard=\(vineyardId.uuidString) since=\(lastSync.map { ISO8601DateFormatter().string(from: $0) } ?? "nil") remote.count=\(remote.count)")
+        for item in remote {
+            print("[OperatorCategorySync]   remote id=\(item.id) name=\(item.name ?? "nil") cost=\(item.costPerHour ?? 0) deletedAt=\(item.deletedAt?.description ?? "nil")")
+        }
+        #endif
         if lastSync == nil {
             let remoteIds = Set(remote.map { $0.id })
             let local = store.operatorCategories.filter { $0.vineyardId == vineyardId }
@@ -899,7 +929,12 @@ final class OperatorCategorySyncService {
             }
             if let pendingAt = metadata.pendingUpserts[item.id] {
                 let remoteAt = item.clientUpdatedAt ?? item.updatedAt ?? .distantPast
-                if pendingAt > remoteAt { continue }
+                if pendingAt > remoteAt {
+                    #if DEBUG
+                    print("[OperatorCategorySync]   skip id=\(item.id) — local pending newer than remote")
+                    #endif
+                    continue
+                }
             }
             store.applyRemoteOperatorCategoryUpsert(item.toOperatorCategory())
             metadata.clearDirty([item.id])
@@ -907,5 +942,8 @@ final class OperatorCategorySyncService {
         // After applying remote upserts, collapse any duplicate operator categories
         // (same vineyard, same name) so the next push will soft-delete the losers.
         _ = store.deduplicateOperatorCategories()
+        #if DEBUG
+        print("[OperatorCategorySync] local store now has \(store.operatorCategories.filter { $0.vineyardId == vineyardId }.count) operator categor(ies) for vineyard")
+        #endif
     }
 }

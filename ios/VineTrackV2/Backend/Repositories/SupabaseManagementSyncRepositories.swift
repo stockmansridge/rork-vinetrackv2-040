@@ -156,10 +156,42 @@ final class SupabaseOperatorCategorySyncRepository: OperatorCategorySyncReposito
     func fetch(vineyardId: UUID, since: Date?) async throws -> [BackendOperatorCategory] {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         let q = provider.client.from("operator_categories").select().eq("vineyard_id", value: vineyardId.uuidString)
+        let data: Data
         if let since {
-            return try await q.gte("updated_at", value: iso(since)).order("updated_at", ascending: true).execute().value
+            data = try await q.gte("updated_at", value: iso(since)).order("updated_at", ascending: true).execute().data
+        } else {
+            data = try await q.order("updated_at", ascending: true).execute().data
         }
-        return try await q.order("updated_at", ascending: true).execute().value
+        // Per-row resilient decode so a single bad row created in Lovable does
+        // not hide the entire vineyard's operator categories from iOS.
+        let decoder = JSONDecoder()
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            #if DEBUG
+            print("[OperatorCategorySync] fetch: unexpected payload shape, falling back to typed decode")
+            #endif
+            if let since {
+                return try await q.gte("updated_at", value: iso(since)).order("updated_at", ascending: true).execute().value
+            }
+            return try await q.order("updated_at", ascending: true).execute().value
+        }
+        var records: [BackendOperatorCategory] = []
+        records.reserveCapacity(array.count)
+        for row in array {
+            let id = (row["id"] as? String) ?? "<unknown-id>"
+            do {
+                let rowData = try JSONSerialization.data(withJSONObject: row)
+                let record = try decoder.decode(BackendOperatorCategory.self, from: rowData)
+                records.append(record)
+            } catch {
+                #if DEBUG
+                print("[OperatorCategorySync] decode failed id=\(id) error=\(error)")
+                #endif
+            }
+        }
+        #if DEBUG
+        print("[OperatorCategorySync] fetched \(array.count) row(s), decoded \(records.count) for vineyard \(vineyardId.uuidString)")
+        #endif
+        return records
     }
 
     func upsertMany(_ items: [BackendOperatorCategoryUpsert]) async throws {
