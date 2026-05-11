@@ -912,7 +912,7 @@ private struct VineyardBlocksMiniMap: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack(alignment: .topLeading) {
             Map(position: $position) {
                 ForEach(paddocks) { paddock in
                     if paddock.polygonPoints.count > 2 {
