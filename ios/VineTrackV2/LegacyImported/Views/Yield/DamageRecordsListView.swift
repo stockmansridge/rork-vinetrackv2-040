@@ -163,7 +163,15 @@ struct DamageRecordsListView: View {
                 .font(.headline)
 
             ForEach(allDamageRecords) { record in
-                damageRecordCard(record)
+                SwipeToDeleteCard(
+                    actionLabel: "Delete",
+                    isEnabled: canDelete
+                ) {
+                    store.deleteDamageRecord(record)
+                    Task { await damageRecordSync.syncForSelectedVineyard() }
+                } content: {
+                    damageRecordCard(record)
+                }
             }
         }
     }
@@ -187,14 +195,6 @@ struct DamageRecordsListView: View {
                     RecordDamageView(paddock: paddock, editingRecord: record)
                 } label: {
                     Label("Edit Record", systemImage: "pencil")
-                }
-            }
-            if canDelete {
-                Button(role: .destructive) {
-                    store.deleteDamageRecord(record)
-                    Task { await damageRecordSync.syncForSelectedVineyard() }
-                } label: {
-                    Label("Delete Record", systemImage: "trash")
                 }
             }
         }

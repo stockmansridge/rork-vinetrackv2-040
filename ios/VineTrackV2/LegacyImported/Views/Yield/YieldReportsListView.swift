@@ -352,25 +352,14 @@ struct YieldReportsListView: View {
                 .padding(.vertical, 32)
             } else {
                 ForEach(sessions) { session in
-                    sessionCard(session)
-                        .contextMenu {
-                            if accessControl?.canDelete ?? false {
-                                Button(role: .destructive) {
-                                    sessionPendingDeletion = session
-                                } label: {
-                                    Label("Delete Estimation", systemImage: "trash")
-                                }
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if accessControl?.canDelete ?? false {
-                                Button(role: .destructive) {
-                                    sessionPendingDeletion = session
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
+                    SwipeToDeleteCard(
+                        actionLabel: "Delete",
+                        isEnabled: accessControl?.canDelete ?? false
+                    ) {
+                        sessionPendingDeletion = session
+                    } content: {
+                        sessionCard(session)
+                    }
                 }
             }
         }
@@ -536,20 +525,18 @@ struct YieldReportsListView: View {
                 }
 
                 ForEach(filteredHistoricalRecords) { record in
-                    Button {
-                        showHistoricalDetail = record
-                    } label: {
-                        historicalRecordCard(record)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        if accessControl?.canDelete ?? false {
-                            Button(role: .destructive) {
-                                recordPendingDeletion = record
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                    SwipeToDeleteCard(
+                        actionLabel: "Delete",
+                        isEnabled: accessControl?.canDelete ?? false
+                    ) {
+                        recordPendingDeletion = record
+                    } content: {
+                        Button {
+                            showHistoricalDetail = record
+                        } label: {
+                            historicalRecordCard(record)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
