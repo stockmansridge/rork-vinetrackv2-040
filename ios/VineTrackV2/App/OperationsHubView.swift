@@ -94,17 +94,6 @@ struct OperationsHubView: View {
                     )
                 }
                 NavigationLink {
-                    GrowthStageReportView()
-                } label: {
-                    operationRow(
-                        title: "Growth Stage PDF Export",
-                        subtitle: "Vintage × E-L stage PDF",
-                        icon: "square.and.arrow.up",
-                        tint: VineyardTheme.leafGreen,
-                        count: nil
-                    )
-                }
-                NavigationLink {
                     GrowthStageImagesSettingsView()
                 } label: {
                     operationRow(

@@ -7,8 +7,10 @@ import SwiftUI
 struct GrowthStageRecordsListView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
+    @Environment(BackendAccessControl.self) private var accessControl
 
     @State private var searchText: String = ""
+    @State private var showPDFExport: Bool = false
 
     private var vineyardRecords: [GrowthStageRecord] {
         guard let vineyardId = store.selectedVineyardId else { return [] }
@@ -81,6 +83,27 @@ struct GrowthStageRecordsListView: View {
         .searchable(text: $searchText, prompt: "Search variety, block, stage, notes")
         .task { await growthStageRecordSync.syncForSelectedVineyard() }
         .refreshable { await growthStageRecordSync.syncForSelectedVineyard() }
+        .toolbar {
+            if accessControl.canExport {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showPDFExport = true
+                    } label: {
+                        Label("Export PDF", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showPDFExport) {
+            NavigationStack {
+                GrowthStageReportView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Done") { showPDFExport = false }
+                        }
+                    }
+            }
+        }
     }
 
     // MARK: - Summary

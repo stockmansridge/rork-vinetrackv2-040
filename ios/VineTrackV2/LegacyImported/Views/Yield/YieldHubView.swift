@@ -64,18 +64,6 @@ struct YieldHubView: View {
                     }
                     .buttonStyle(.plain)
 
-                    NavigationLink {
-                        GrowthStageRecordsListView()
-                    } label: {
-                        hubOption(
-                            icon: "leaf.fill",
-                            iconGradient: [.green, .mint],
-                            title: "Growth Stage Records",
-                            subtitle: "E-L observations history",
-                            detail: growthStageRecordsDetail
-                        )
-                    }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal)
@@ -199,14 +187,6 @@ struct YieldHubView: View {
         let count = store.damageRecords.count
         guard count > 0 else { return nil }
         return "\(count) damage record\(count == 1 ? "" : "s")"
-    }
-
-    @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
-
-    private var growthStageRecordsDetail: String? {
-        let count = growthStageRecordSync.records.filter { $0.vineyardId == store.selectedVineyardId }.count
-        guard count > 0 else { return nil }
-        return "\(count) record\(count == 1 ? "" : "s") synced"
     }
 
     private var determinationDetail: String? {
