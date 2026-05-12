@@ -64,6 +64,7 @@ struct ResetPasswordView: View {
             Toggle("Show password", isOn: $showPassword)
                 .font(.footnote)
                 .tint(VineyardTheme.leafGreen)
+                .accessibilityLabel(showPassword ? "Hide password" : "Show password")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Password must be at least 8 characters.")
                     .font(.caption)

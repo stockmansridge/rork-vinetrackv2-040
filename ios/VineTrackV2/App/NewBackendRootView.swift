@@ -4,9 +4,12 @@ struct NewBackendRootView: View {
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(MigratedDataStore.self) private var store
     @Environment(SubscriptionService.self) private var subscription
+    @Environment(BiometricAuthService.self) private var biometric
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var didAttemptRestore: Bool = false
+    @State private var showBiometricEnrollment: Bool = false
+    @State private var lastSignedInState: Bool = false
     @State private var onboardingCompleted: Bool = OnboardingState.isCompleted
     @State private var disclaimerAccepted: Bool = false
     @State private var didCheckDisclaimer: Bool = false
@@ -22,6 +25,8 @@ struct NewBackendRootView: View {
         Group {
             if !didAttemptRestore {
                 loadingView
+            } else if auth.isSignedIn && biometric.requiresUnlock {
+                BiometricLockView()
             } else if !auth.isSignedIn {
                 NewBackendLoginView()
             } else if !onboardingCompleted {
@@ -52,8 +57,19 @@ struct NewBackendRootView: View {
         .task {
             if !didAttemptRestore {
                 await auth.restoreSession()
+                if auth.isSignedIn {
+                    biometric.lockIfEnabled()
+                    biometric.updateSavedEmailIfEnabled(auth.userEmail)
+                }
+                lastSignedInState = auth.isSignedIn
                 didAttemptRestore = true
             }
+        }
+        .onChange(of: auth.isSignedIn) { _, newValue in
+            handleSignedInChange(newValue: newValue)
+        }
+        .sheet(isPresented: $showBiometricEnrollment) {
+            BiometricEnrollmentSheet()
         }
         .task(id: auth.isSignedIn) {
             if auth.isSignedIn {
@@ -87,6 +103,31 @@ struct NewBackendRootView: View {
             if newPhase == .active && auth.isSignedIn {
                 Task { await auth.loadPendingInvitations() }
             }
+        }
+    }
+
+    private func handleSignedInChange(newValue: Bool) {
+        defer { lastSignedInState = newValue }
+        // Only react on transitions, not initial value.
+        guard newValue != lastSignedInState else { return }
+        if newValue {
+            // User just signed in.
+            biometric.updateSavedEmailIfEnabled(auth.userEmail)
+            // Offer biometric enrollment once if supported and not enabled.
+            if (biometric.deviceSupportsBiometrics || biometric.deviceSupportsAnyAuth),
+               !biometric.isEnabled,
+               !biometric.hasShownEnrollmentPrompt {
+                // Defer slightly so the login screen dismiss animation completes.
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(450))
+                    if auth.isSignedIn && !biometric.isEnabled {
+                        showBiometricEnrollment = true
+                    }
+                }
+            }
+        } else {
+            // Signed out — clear the unlock gate so a future sign-in starts fresh.
+            biometric.markUnlocked()
         }
     }
 

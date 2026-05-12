@@ -3,6 +3,7 @@ import AuthenticationServices
 
 struct NewBackendLoginView: View {
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(BiometricAuthService.self) private var biometric
 
     private enum Mode: String, CaseIterable, Identifiable {
         case signIn = "Sign In"
@@ -42,6 +43,9 @@ struct NewBackendLoginView: View {
                     modePicker
                     formCard(isCompactHeight: isCompactHeight)
                     actionButton
+                    if showBiometricQuickButton {
+                        biometricQuickButton
+                    }
                     dividerWithOr
                     appleSignInButton
                     footerLinks
@@ -167,6 +171,44 @@ struct NewBackendLoginView: View {
                 .stroke(.white.opacity(0.65), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.20), radius: 18, x: 0, y: 10)
+    }
+
+    private var showBiometricQuickButton: Bool {
+        mode == .signIn
+        && biometric.isEnabled
+        && (biometric.deviceSupportsBiometrics || biometric.deviceSupportsAnyAuth)
+    }
+
+    private var biometricQuickButton: some View {
+        Button {
+            Task {
+                let ok = await biometric.authenticate(reason: "Sign in to VineTrack")
+                if ok {
+                    // If a Supabase session is already persisted we are
+                    // effectively signed in — flag unlocked so the root
+                    // view advances. Otherwise the user still needs to
+                    // type their password (we never store it).
+                    biometric.markUnlocked()
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: biometric.iconSystemName)
+                    .font(.title3.weight(.semibold))
+                Text("Sign in with \(biometric.displayName)")
+                    .font(.headline.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 46)
+            .background(.white.opacity(0.16), in: .rect(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(.white.opacity(0.32), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Sign in with \(biometric.displayName)")
     }
 
     private var actionButton: some View {
@@ -588,6 +630,9 @@ private struct LoginField: View {
     var autocapitalize: Bool = true
     var isSecure: Bool = false
 
+    @State private var isRevealed: Bool = false
+    @FocusState private var isFocused: Bool
+
     private var fieldPrompt: Text {
         Text(title)
             .foregroundStyle(Color(red: 0.30, green: 0.36, blue: 0.32))
@@ -602,10 +647,12 @@ private struct LoginField: View {
                 .background(Color(red: 0.93, green: 0.97, blue: 0.91), in: .rect(cornerRadius: 10))
 
             Group {
-                if isSecure {
+                if isSecure && !isRevealed {
                     SecureField(title, text: $text, prompt: fieldPrompt)
+                        .focused($isFocused)
                 } else {
                     TextField(title, text: $text, prompt: fieldPrompt)
+                        .focused($isFocused)
                 }
             }
             .font(.body)
@@ -615,6 +662,20 @@ private struct LoginField: View {
             .keyboardType(keyboard)
             .textInputAutocapitalization(autocapitalize ? .sentences : .never)
             .autocorrectionDisabled(!autocapitalize)
+
+            if isSecure {
+                Button {
+                    isRevealed.toggle()
+                } label: {
+                    Image(systemName: isRevealed ? "eye.slash.fill" : "eye.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.02, green: 0.32, blue: 0.14).opacity(0.72))
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isRevealed ? "Hide password" : "Show password")
+            }
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 12)

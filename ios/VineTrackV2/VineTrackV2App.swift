@@ -13,6 +13,7 @@ import SwiftData
 @main
 struct VineTrackV2App: App {
     @State private var auth = NewBackendAuthService()
+    @State private var biometric = BiometricAuthService()
     @State private var migratedStore = MigratedDataStore()
     @State private var locationService = LocationService()
     @State private var degreeDayService = DegreeDayService()
@@ -64,6 +65,7 @@ struct VineTrackV2App: App {
                 if AppFeatureFlags.useNewBackendShell {
                     NewBackendRootView()
                         .environment(auth)
+                        .environment(biometric)
                         .environment(migratedStore)
                         .environment(locationService)
                         .environment(degreeDayService)

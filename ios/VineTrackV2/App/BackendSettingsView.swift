@@ -2,6 +2,7 @@ import SwiftUI
 
 struct BackendSettingsView: View {
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(BiometricAuthService.self) private var biometric
     @Environment(MigratedDataStore.self) private var store
     @Environment(BackendAccessControl.self) private var accessControl
     @Environment(SubscriptionService.self) private var subscription
@@ -183,8 +184,34 @@ struct BackendSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            NavigationLink {
+                BiometricSettingsView()
+            } label: {
+                SettingsRow(
+                    title: "Face ID / Touch ID",
+                    subtitle: biometricSubtitle,
+                    symbol: biometricSymbol,
+                    color: VineyardTheme.leafGreen
+                )
+            }
         } header: {
             SettingsSectionHeader(title: "Account", symbol: "person.fill", color: .gray)
+        }
+    }
+
+    private var biometricSubtitle: String {
+        if !(biometric.deviceSupportsBiometrics || biometric.deviceSupportsAnyAuth) {
+            return "Not available on this device"
+        }
+        return biometric.isEnabled ? "\(biometric.displayName) sign-in enabled" : "Sign in faster with \(biometric.displayName)"
+    }
+
+    private var biometricSymbol: String {
+        switch biometric.biometry {
+        case .faceID: return "faceid"
+        case .touchID: return "touchid"
+        case .opticID: return "opticid"
+        case .none: return "lock.shield.fill"
         }
     }
 
