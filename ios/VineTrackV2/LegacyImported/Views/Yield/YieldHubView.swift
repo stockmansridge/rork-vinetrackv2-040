@@ -71,7 +71,7 @@ struct YieldHubView: View {
                             icon: "leaf.fill",
                             iconGradient: [.green, .mint],
                             title: "Growth Stage Records",
-                            subtitle: "Read-only sync validation",
+                            subtitle: "E-L observations history",
                             detail: growthStageRecordsDetail
                         )
                     }

@@ -624,7 +624,7 @@ private struct NewHomeTabView: View {
                 NavigationLink {
                     GrowthStageReportView()
                 } label: {
-                    iconTile(title: "Growth Stage Report", icon: "chart.line.uptrend.xyaxis", tint: VineyardTheme.leafGreen)
+                    iconTile(title: "Growth Stage PDF", icon: "square.and.arrow.up", tint: VineyardTheme.leafGreen)
                 }
                 .buttonStyle(.plain)
                 NavigationLink {
@@ -647,7 +647,7 @@ private struct NewHomeTabView: View {
         case "Work Tasks": return "Log & calculate"
         case "Maintenance Log": return "Repairs & jobs"
         case "Optimal Ripeness": return "GDD & harvest window"
-        case "Growth Stage Report": return "E-L tracking"
+        case "Growth Stage PDF": return "Vintage × E-L export"
         case "Yield Forecasting": return "Potential, samples & reports"
         case "Yield Estimation": return "Forecast crop"
         case "Irrigation Advisor": return "Water planning"

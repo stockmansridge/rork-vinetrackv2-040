@@ -83,12 +83,23 @@ struct OperationsHubView: View {
                     )
                 }
                 NavigationLink {
+                    GrowthStageRecordsListView()
+                } label: {
+                    operationRow(
+                        title: "Growth Stage Records",
+                        subtitle: "Observations history & sync",
+                        icon: "leaf.fill",
+                        tint: VineyardTheme.leafGreen,
+                        count: nil
+                    )
+                }
+                NavigationLink {
                     GrowthStageReportView()
                 } label: {
                     operationRow(
-                        title: "Growth Stage Report",
-                        subtitle: "Phenology & E-L stages",
-                        icon: "leaf.arrow.triangle.circlepath",
+                        title: "Growth Stage PDF Export",
+                        subtitle: "Vintage × E-L stage PDF",
+                        icon: "square.and.arrow.up",
                         tint: VineyardTheme.leafGreen,
                         count: nil
                     )

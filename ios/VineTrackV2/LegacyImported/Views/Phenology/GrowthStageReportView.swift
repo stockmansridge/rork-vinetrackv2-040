@@ -130,7 +130,7 @@ struct GrowthStageReportView: View {
                 .listStyle(.insetGrouped)
             }
         }
-        .navigationTitle("Growth Stage Report")
+        .navigationTitle("Growth Stage PDF Export")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if accessControl.canExport {
