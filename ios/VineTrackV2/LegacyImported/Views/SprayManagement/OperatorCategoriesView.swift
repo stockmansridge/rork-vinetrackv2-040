@@ -62,6 +62,9 @@ struct OperatorCategoriesView: View {
         }
         .navigationTitle("Operator Categories")
         .navigationBarTitleDisplayMode(.inline)
+        .refreshable {
+            await operatorCategorySync.syncForSelectedVineyard()
+        }
         .onAppear {
             guard canManageSetup else { return }
             let removed = store.deduplicateOperatorCategories()

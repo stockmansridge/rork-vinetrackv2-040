@@ -793,6 +793,16 @@ final class OperatorCategorySyncService {
     private let repository: any OperatorCategorySyncRepositoryProtocol
     private let metadata: ManagementSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any OperatorCategorySyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseOperatorCategorySyncRepository()
@@ -810,8 +820,12 @@ final class OperatorCategorySyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onOperatorCategoryChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onOperatorCategoryDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onOperatorCategoryChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onOperatorCategoryDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -994,6 +1008,16 @@ final class WorkTaskTypeSyncService {
     private let repository: any WorkTaskTypeSyncRepositoryProtocol
     private let metadata: ManagementSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any WorkTaskTypeSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseWorkTaskTypeSyncRepository()
@@ -1005,8 +1029,12 @@ final class WorkTaskTypeSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onWorkTaskTypeChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onWorkTaskTypeDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onWorkTaskTypeChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onWorkTaskTypeDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -1134,6 +1162,16 @@ final class EquipmentItemSyncService {
     private let repository: any EquipmentItemSyncRepositoryProtocol
     private let metadata: ManagementSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any EquipmentItemSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseEquipmentItemSyncRepository()
@@ -1145,8 +1183,12 @@ final class EquipmentItemSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onEquipmentItemChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onEquipmentItemDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onEquipmentItemChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onEquipmentItemDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MaintenanceLogListView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(MaintenanceLogSyncService.self) private var maintenanceLogSync
     @Environment(\.accessControl) private var accessControl
 
     @State private var showAddLog: Bool = false
@@ -61,6 +62,9 @@ struct MaintenanceLogListView: View {
         }
         .sheet(item: $selectedLog) { log in
             MaintenanceLogDetailView(log: log)
+        }
+        .refreshable {
+            await maintenanceLogSync.syncForSelectedVineyard()
         }
     }
 

@@ -84,6 +84,16 @@ final class WorkTaskSyncService {
     private let repository: any WorkTaskSyncRepositoryProtocol
     private let metadata: OperationsSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any WorkTaskSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseWorkTaskSyncRepository()
@@ -103,8 +113,12 @@ final class WorkTaskSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onWorkTaskChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onWorkTaskDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onWorkTaskChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onWorkTaskDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -238,6 +252,16 @@ final class WorkTaskLabourLineSyncService {
     private let repository: any WorkTaskLabourLineSyncRepositoryProtocol
     private let metadata: OperationsSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any WorkTaskLabourLineSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseWorkTaskLabourLineSyncRepository()
@@ -249,8 +273,12 @@ final class WorkTaskLabourLineSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onWorkTaskLabourLineChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onWorkTaskLabourLineDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onWorkTaskLabourLineChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onWorkTaskLabourLineDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -388,6 +416,16 @@ final class WorkTaskPaddockSyncService {
     private let repository: any WorkTaskPaddockSyncRepositoryProtocol
     private let metadata: OperationsSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any WorkTaskPaddockSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseWorkTaskPaddockSyncRepository()
@@ -399,8 +437,12 @@ final class WorkTaskPaddockSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onWorkTaskPaddockChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onWorkTaskPaddockDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onWorkTaskPaddockChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onWorkTaskPaddockDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -536,6 +578,16 @@ final class MaintenanceLogSyncService {
     private let metadata: OperationsSyncMetadata
     private let photoStorage: MaintenancePhotoStorageService
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(
         repository: (any MaintenanceLogSyncRepositoryProtocol)? = nil,
@@ -557,8 +609,12 @@ final class MaintenanceLogSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onMaintenanceLogChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onMaintenanceLogDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onMaintenanceLogChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onMaintenanceLogDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {
@@ -870,6 +926,16 @@ final class DamageRecordSyncService {
     private let repository: any DamageRecordSyncRepositoryProtocol
     private let metadata: OperationsSyncMetadata
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(repository: (any DamageRecordSyncRepositoryProtocol)? = nil) {
         self.repository = repository ?? SupabaseDamageRecordSyncRepository()
@@ -887,8 +953,12 @@ final class DamageRecordSyncService {
         self.auth = auth
         guard !isConfigured else { return }
         isConfigured = true
-        store.onDamageRecordChanged = { [weak self] id in self?.metadata.markDirty(id, at: Date()) }
-        store.onDamageRecordDeleted = { [weak self] id in self?.metadata.markDeleted(id, at: Date()) }
+        store.onDamageRecordChanged = { [weak self] id in
+            self?.metadata.markDirty(id, at: Date()); self?.scheduleEagerPush()
+        }
+        store.onDamageRecordDeleted = { [weak self] id in
+            self?.metadata.markDeleted(id, at: Date()); self?.scheduleEagerPush()
+        }
     }
 
     func syncForSelectedVineyard() async {

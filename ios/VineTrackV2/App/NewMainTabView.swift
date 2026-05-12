@@ -32,6 +32,7 @@ struct NewMainTabView: View {
     @Environment(AlertService.self) private var alertService
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Int = 0
+    @State private var isSweeping: Bool = false
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -101,29 +102,19 @@ struct NewMainTabView: View {
         }
         .task(id: store.selectedVineyardId) {
             await accessControl.refresh(for: store.selectedVineyardId, auth: auth)
-            await pinSync.syncPinsForSelectedVineyard()
-            await paddockSync.syncPaddocksForSelectedVineyard()
-            await tripSync.syncTripsForSelectedVineyard()
-            await sprayRecordSync.syncSprayRecordsForSelectedVineyard()
-            await buttonConfigSync.syncButtonConfigForSelectedVineyard()
-            await savedChemicalSync.syncForSelectedVineyard()
-            await savedSprayPresetSync.syncForSelectedVineyard()
-            await sprayEquipmentSync.syncForSelectedVineyard()
-            await tractorSync.syncForSelectedVineyard()
-            await fuelPurchaseSync.syncForSelectedVineyard()
-            await operatorCategorySync.syncForSelectedVineyard()
-            await workTaskTypeSync.syncForSelectedVineyard()
-            await equipmentItemSync.syncForSelectedVineyard()
-            await growthStageImageSync.syncForSelectedVineyard()
-            await growthStageRecordSync.syncForSelectedVineyard()
-            await workTaskSync.syncForSelectedVineyard()
-            await workTaskLabourLineSync.syncForSelectedVineyard()
-            await workTaskPaddockSync.syncForSelectedVineyard()
-            await maintenanceLogSync.syncForSelectedVineyard()
-            await yieldSessionSync.syncForSelectedVineyard()
-            await damageRecordSync.syncForSelectedVineyard()
-            await historicalYieldSync.syncForSelectedVineyard()
-            await alertService.generateAndRefresh()
+            await runFullSweep(alertRefresh: .generate)
+        }
+        // Periodic active sync: every 3 minutes while the app is foregrounded
+        // and a vineyard is selected. Task is cancelled automatically when
+        // scenePhase changes (e.g. backgrounded) or the vineyard switches.
+        .task(id: ScenePhaseVineyardKey(scenePhase: scenePhase, vineyardId: store.selectedVineyardId)) {
+            guard scenePhase == .active, store.selectedVineyardId != nil else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(180))
+                if Task.isCancelled { return }
+                if scenePhase != .active { return }
+                await runFullSweep(alertRefresh: .refresh)
+            }
         }
         .onChange(of: alertService.pendingNavigation) { _, action in
             guard let action else { return }
@@ -140,34 +131,53 @@ struct NewMainTabView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                Task {
-                    await pinSync.syncPinsForSelectedVineyard()
-                    await paddockSync.syncPaddocksForSelectedVineyard()
-                    await tripSync.syncTripsForSelectedVineyard()
-                    await sprayRecordSync.syncSprayRecordsForSelectedVineyard()
-                    await buttonConfigSync.syncButtonConfigForSelectedVineyard()
-                    await savedChemicalSync.syncForSelectedVineyard()
-                    await savedSprayPresetSync.syncForSelectedVineyard()
-                    await sprayEquipmentSync.syncForSelectedVineyard()
-                    await tractorSync.syncForSelectedVineyard()
-                    await fuelPurchaseSync.syncForSelectedVineyard()
-                    await operatorCategorySync.syncForSelectedVineyard()
-                    await workTaskTypeSync.syncForSelectedVineyard()
-                    await equipmentItemSync.syncForSelectedVineyard()
-                    await growthStageImageSync.syncForSelectedVineyard()
-                    await growthStageRecordSync.syncForSelectedVineyard()
-                    await workTaskSync.syncForSelectedVineyard()
-                    await workTaskLabourLineSync.syncForSelectedVineyard()
-                    await workTaskPaddockSync.syncForSelectedVineyard()
-                    await maintenanceLogSync.syncForSelectedVineyard()
-                    await yieldSessionSync.syncForSelectedVineyard()
-                    await damageRecordSync.syncForSelectedVineyard()
-                    await historicalYieldSync.syncForSelectedVineyard()
-                    await alertService.refresh()
-                }
+                Task { await runFullSweep(alertRefresh: .refresh) }
             }
         }
     }
+
+    private enum AlertRefreshMode { case generate, refresh, none }
+
+    /// Runs a full sync sweep across every wired service. Overlapping calls
+    /// are coalesced — a second invocation while a sweep is in flight is
+    /// dropped so we never run two sweeps in parallel.
+    private func runFullSweep(alertRefresh: AlertRefreshMode) async {
+        guard !isSweeping else { return }
+        isSweeping = true
+        defer { isSweeping = false }
+        await pinSync.syncPinsForSelectedVineyard()
+        await paddockSync.syncPaddocksForSelectedVineyard()
+        await tripSync.syncTripsForSelectedVineyard()
+        await sprayRecordSync.syncSprayRecordsForSelectedVineyard()
+        await buttonConfigSync.syncButtonConfigForSelectedVineyard()
+        await savedChemicalSync.syncForSelectedVineyard()
+        await savedSprayPresetSync.syncForSelectedVineyard()
+        await sprayEquipmentSync.syncForSelectedVineyard()
+        await tractorSync.syncForSelectedVineyard()
+        await fuelPurchaseSync.syncForSelectedVineyard()
+        await operatorCategorySync.syncForSelectedVineyard()
+        await workTaskTypeSync.syncForSelectedVineyard()
+        await equipmentItemSync.syncForSelectedVineyard()
+        await growthStageImageSync.syncForSelectedVineyard()
+        await growthStageRecordSync.syncForSelectedVineyard()
+        await workTaskSync.syncForSelectedVineyard()
+        await workTaskLabourLineSync.syncForSelectedVineyard()
+        await workTaskPaddockSync.syncForSelectedVineyard()
+        await maintenanceLogSync.syncForSelectedVineyard()
+        await yieldSessionSync.syncForSelectedVineyard()
+        await damageRecordSync.syncForSelectedVineyard()
+        await historicalYieldSync.syncForSelectedVineyard()
+        switch alertRefresh {
+        case .generate: await alertService.generateAndRefresh()
+        case .refresh:  await alertService.refresh()
+        case .none:     break
+        }
+    }
+}
+
+private struct ScenePhaseVineyardKey: Hashable {
+    let scenePhase: ScenePhase
+    let vineyardId: UUID?
 }
 
 // MARK: - Home Tab

@@ -4,6 +4,7 @@ import MapKit
 struct PinsView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(PinSyncService.self) private var pinSync
     @Environment(BackendAccessControl.self) private var accessControl
     private var canDelete: Bool { accessControl.canDeleteOperationalRecords }
     private var canExport: Bool { accessControl.canExport }
@@ -116,6 +117,9 @@ struct PinsView: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
+            .refreshable {
+                await pinSync.syncPinsForSelectedVineyard()
+            }
             .sheet(isPresented: $showFilterSheet) {
                 PinFilterSheet(
                     selectedNames: $selectedNames,

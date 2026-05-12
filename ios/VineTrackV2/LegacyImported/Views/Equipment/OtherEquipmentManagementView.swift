@@ -67,6 +67,9 @@ struct OtherEquipmentManagementView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Other Equipment")
         .navigationBarTitleDisplayMode(.inline)
+        .refreshable {
+            await sync.syncForSelectedVineyard()
+        }
         .toolbar {
             if canManageSetup {
                 ToolbarItem(placement: .topBarTrailing) {

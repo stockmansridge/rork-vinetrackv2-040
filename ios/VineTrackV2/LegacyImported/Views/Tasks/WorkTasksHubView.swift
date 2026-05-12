@@ -2,6 +2,9 @@ import SwiftUI
 
 struct WorkTasksHubView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
+    @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
     @Environment(\.accessControl) private var accessControl
 
     @State private var showLog: Bool = false
@@ -46,6 +49,11 @@ struct WorkTasksHubView: View {
         }
         .sheet(isPresented: $showAddTask) {
             AddEditWorkTaskView()
+        }
+        .refreshable {
+            await workTaskSync.syncForSelectedVineyard()
+            await workTaskLabourLineSync.syncForSelectedVineyard()
+            await workTaskPaddockSync.syncForSelectedVineyard()
         }
     }
 

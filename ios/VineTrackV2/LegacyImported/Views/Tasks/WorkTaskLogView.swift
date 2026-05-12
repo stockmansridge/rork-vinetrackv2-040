@@ -2,6 +2,9 @@ import SwiftUI
 
 struct WorkTaskLogView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(WorkTaskSyncService.self) private var workTaskSync
+    @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
+    @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
     @Environment(\.accessControl) private var accessControl
 
     enum SortOption: String, CaseIterable, Identifiable {
@@ -95,6 +98,11 @@ struct WorkTaskLogView: View {
         }
         .sheet(item: $selectedTask) { task in
             AddEditWorkTaskView(existingTask: task)
+        }
+        .refreshable {
+            await workTaskSync.syncForSelectedVineyard()
+            await workTaskLabourLineSync.syncForSelectedVineyard()
+            await workTaskPaddockSync.syncForSelectedVineyard()
         }
     }
 

@@ -31,6 +31,7 @@ final class PinSyncService {
     private let metadata: PinSyncMetadata
     private let photoStorage: PinPhotoStorageService
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
 
     init(
         repository: (any PinSyncRepositoryProtocol)? = nil,
@@ -55,9 +56,21 @@ final class PinSyncService {
         isConfigured = true
         store.onPinChanged = { [weak self] id in
             self?.markPinDirty(id)
+            self?.scheduleEagerPush()
         }
         store.onPinDeleted = { [weak self] id in
             self?.markPinDeleted(id)
+            self?.scheduleEagerPush()
+        }
+    }
+
+    /// Debounced eager-push. Multiple quick edits coalesce into a single sync.
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncPinsForSelectedVineyard()
         }
     }
 

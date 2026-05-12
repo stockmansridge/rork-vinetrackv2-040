@@ -37,6 +37,17 @@ final class GrowthStageRecordSyncService {
     private let persistence: PersistenceStore
     private let persistenceKey = "vinetrack_growth_stage_records"
     private var isConfigured: Bool = false
+    private var eagerPushTask: Task<Void, Never>?
+
+    /// Debounced eager-push. Multiple quick edits coalesce into a single sync.
+    private func scheduleEagerPush() {
+        eagerPushTask?.cancel()
+        eagerPushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.syncForSelectedVineyard()
+        }
+    }
 
     init(
         repository: (any GrowthStageRecordSyncRepositoryProtocol)? = nil,
@@ -95,9 +106,7 @@ final class GrowthStageRecordSyncService {
         }
         persist()
         // Push the backfilled rows once at the end.
-        Task { [weak self] in
-            await self?.syncForSelectedVineyard()
-        }
+        scheduleEagerPush()
     }
 
     // MARK: - Mirroring
@@ -125,11 +134,9 @@ final class GrowthStageRecordSyncService {
             print("[GrowthStageRecord] auto-set budburstDate=\(pin.timestamp) for paddock=\(paddockId) from EL4 pin=\(pin.id)")
             #endif
         }
-        // Best-effort: push immediately so the record is visible to other
+        // Best-effort: push (debounced) so the record is visible to other
         // devices / Lovable without waiting for the next sync cycle.
-        Task { [weak self] in
-            await self?.syncForSelectedVineyard()
-        }
+        scheduleEagerPush()
     }
 
     /// Core mirror logic without persistence or sync side-effects. Returns
@@ -199,6 +206,7 @@ final class GrowthStageRecordSyncService {
         records.remove(at: idx)
         metadata.markDeleted(recordId, at: Date())
         persist()
+        scheduleEagerPush()
     }
 
     // MARK: - Public sync entry points
