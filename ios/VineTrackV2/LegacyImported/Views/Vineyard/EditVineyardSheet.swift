@@ -135,6 +135,12 @@ struct EditVineyardSheet: View {
                 if let created = store.vineyards.first(where: { $0.id == backend.id }) {
                     store.selectVineyard(created)
                 }
+                // First-vineyard milestone: request the portal-awareness
+                // prompt. The global listener decides whether to actually
+                // present it based on role and previous interactions.
+                if store.vineyards.count <= 1 {
+                    PortalPromptTracker.requestIfUnseen(.firstVineyard)
+                }
             }
             dismiss()
         } catch {

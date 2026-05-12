@@ -111,6 +111,16 @@ struct BackendSettingsView: View {
                             color: .teal
                         )
                     }
+                    if let portalURL = VineTrackPortal.url {
+                        Link(destination: portalURL) {
+                            SettingsRow(
+                                title: "VineTrack Web Portal",
+                                subtitle: "Manage setup, reports and team access from desktop.",
+                                symbol: "laptopcomputer.and.iphone",
+                                color: VineyardTheme.leafGreen
+                            )
+                        }
+                    }
                 } header: {
                     SettingsSectionHeader(title: "Preferences & Data", symbol: "gearshape.fill", color: .indigo)
                 }

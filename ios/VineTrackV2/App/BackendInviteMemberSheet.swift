@@ -116,6 +116,9 @@ struct BackendInviteMemberSheet: View {
             showSuccess = true
             email = ""
             onSent?()
+            // First-invite milestone: surface the web portal prompt for
+            // managers so they discover desktop team management.
+            PortalPromptTracker.requestIfUnseen(.firstInvite)
             try? await Task.sleep(for: .seconds(1.2))
             dismiss()
         } catch {

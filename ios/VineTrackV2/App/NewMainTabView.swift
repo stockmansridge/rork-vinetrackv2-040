@@ -33,6 +33,7 @@ struct NewMainTabView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Int = 0
     @State private var isSweeping: Bool = false
+    @State private var portalPromptTrigger: PortalPromptTrigger?
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -132,6 +133,32 @@ struct NewMainTabView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task { await runFullSweep(alertRefresh: .refresh) }
+            }
+        }
+        .sheet(item: $portalPromptTrigger) { trigger in
+            VineTrackPortalPromptSheet(trigger: trigger, role: accessControl.currentRole)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .vineTrackPortalPromptRequest)) { note in
+            guard
+                let raw = note.userInfo?["trigger"] as? String,
+                let trigger = PortalPromptTrigger(rawValue: raw)
+            else { return }
+            // Only show for managers and supervisors. Operators get the
+            // permanent Settings link instead.
+            switch accessControl.currentRole {
+            case .owner, .manager, .supervisor:
+                break
+            default:
+                PortalPromptTracker.markSeen(trigger)
+                return
+            }
+            guard !PortalPromptTracker.hasSeen(trigger) else { return }
+            // Defer slightly so any presenting sheet has time to dismiss
+            // before we present ours (avoids "already presenting" warning).
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !PortalPromptTracker.hasSeen(trigger) else { return }
+                portalPromptTrigger = trigger
             }
         }
     }
