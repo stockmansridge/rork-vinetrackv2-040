@@ -5,6 +5,7 @@ struct PinsView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(NewBackendAuthService.self) private var auth
     @Environment(PinSyncService.self) private var pinSync
+    @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
     @Environment(BackendAccessControl.self) private var accessControl
     private var canDelete: Bool { accessControl.canDeleteOperationalRecords }
     private var canExport: Bool { accessControl.canExport }
@@ -22,8 +23,56 @@ struct PinsView: View {
     @State private var isExporting: Bool = false
     @State private var showExportOptions: Bool = false
 
+    /// Source pins: real `store.pins` plus a fallback synthesis for any
+    /// `growth_stage_records` rows that don't yet have a matching local pin.
+    /// This guarantees growth-stage observations always appear in the Pins
+    /// view on a second device, even if the originating `pins` row sync was
+    /// missed or delayed (the mirrored growth_stage_records sync runs on a
+    /// separate path).
+    private var sourcePins: [VinePin] {
+        guard let vineyardId = store.selectedVineyardId else { return store.pins }
+        let localIds = Set(store.pins.map { $0.id })
+        let synthesized: [VinePin] = growthStageRecordSync.records.compactMap { record in
+            guard record.vineyardId == vineyardId else { return nil }
+            // Prefer matching against the originating pin id; fall back to
+            // the record id so synthesized rows are still stable.
+            let pinIdCandidate = record.pinId ?? record.id
+            guard !localIds.contains(pinIdCandidate),
+                  let lat = record.latitude, let lon = record.longitude
+            else { return nil }
+            return VinePin(
+                id: pinIdCandidate,
+                vineyardId: record.vineyardId,
+                latitude: lat,
+                longitude: lon,
+                heading: 0,
+                buttonName: "Growth Stage \(record.stageCode)",
+                buttonColor: "darkgreen",
+                side: PinSide(rawValue: record.side ?? "") ?? .right,
+                mode: .growth,
+                paddockId: record.paddockId,
+                rowNumber: record.rowNumber,
+                timestamp: record.observedAt,
+                createdBy: record.recordedByName,
+                createdByUserId: record.createdBy,
+                isCompleted: false,
+                photoPath: record.photoPaths.first,
+                growthStageCode: record.stageCode,
+                notes: record.notes
+            )
+        }
+        #if DEBUG
+        if !synthesized.isEmpty {
+            print("[PinsView] synthesized \(synthesized.count) growth pins from growth_stage_records (no matching local pin)")
+        }
+        let growthLocal = store.pins.filter { $0.mode == .growth }.count
+        print("[PinsView] vineyard=\(vineyardId) local pins=\(store.pins.count) growth(local)=\(growthLocal) growth_records=\(growthStageRecordSync.records.filter { $0.vineyardId == vineyardId }.count) synthesized=\(synthesized.count)")
+        #endif
+        return store.pins + synthesized
+    }
+
     private var filteredPins: [VinePin] {
-        store.pins.filter { pin in
+        sourcePins.filter { pin in
             switch completionFilter {
             case .done:
                 if !pin.isCompleted { return false }
@@ -55,11 +104,11 @@ struct PinsView: View {
     }
 
     private var uniqueNames: [String] {
-        Array(Set(store.pins.map { $0.buttonName })).sorted()
+        Array(Set(sourcePins.map { $0.buttonName })).sorted()
     }
 
     private var uniquePaddocks: [(id: UUID, name: String)] {
-        let paddockIds = Set(store.pins.compactMap { $0.paddockId })
+        let paddockIds = Set(sourcePins.compactMap { $0.paddockId })
         return paddockIds.compactMap { id in
             guard let paddock = store.paddocks.first(where: { $0.id == id }) else { return nil }
             return (id: id, name: paddock.name)
@@ -117,8 +166,15 @@ struct PinsView: View {
                 }
             }
             .background(Color(.systemGroupedBackground))
+            .task {
+                // Force a fresh pull on entry so growth-stage pins created
+                // on other devices appear without requiring a manual Sync.
+                await pinSync.syncPinsForSelectedVineyard()
+                await growthStageRecordSync.syncForSelectedVineyard()
+            }
             .refreshable {
                 await pinSync.syncPinsForSelectedVineyard()
+                await growthStageRecordSync.syncForSelectedVineyard()
             }
             .sheet(isPresented: $showFilterSheet) {
                 PinFilterSheet(
