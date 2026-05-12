@@ -2,13 +2,16 @@ import SwiftUI
 
 struct YieldReportsListView: View {
     @Environment(MigratedDataStore.self) private var store
+    @Environment(YieldEstimationSessionSyncService.self) private var yieldSessionSync
+    @Environment(HistoricalYieldRecordSyncService.self) private var historicalYieldSync
     @Environment(\.accessControl) private var accessControl
     @State private var showArchiveSheet: Bool = false
     @State private var showHistoricalDetail: HistoricalYieldRecord?
     @State private var historicalSortBy: HistoricalSort = .newest
     @State private var historicalFilterPaddock: UUID?
-    @State private var recordPendingDeletion: HistoricalYieldRecord?
-    @State private var sessionPendingDeletion: YieldEstimationSession?
+    @State private var showStartEstimateSheet: Bool = false
+
+    private var canDelete: Bool { accessControl?.canDelete ?? false }
 
     private var paddocks: [Paddock] {
         store.orderedPaddocks.filter { $0.polygonPoints.count >= 3 }
@@ -118,15 +121,13 @@ struct YieldReportsListView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                if !blockSummaries.isEmpty {
-                    vineyardOverview
-
-                    archiveButton
-
-                    blockSummarySection
-                }
+                yieldOverviewSection
 
                 sessionListSection
+
+                if !blockSummaries.isEmpty {
+                    blockSummarySection
+                }
 
                 historicalSection
 
@@ -135,98 +136,96 @@ struct YieldReportsListView: View {
             .padding(.horizontal)
             .padding(.bottom, 32)
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle("Yield Reports")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        showStartEstimateSheet = true
+                    } label: {
+                        Label("New Yield Estimate", systemImage: "plus.circle.fill")
+                    }
+                    if !blockSummaries.isEmpty {
+                        Button {
+                            showArchiveSheet = true
+                        } label: {
+                            Label("Archive Season", systemImage: "archivebox.fill")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         .sheet(isPresented: $showArchiveSheet) {
             ArchiveYieldSheet(blockSummaries: blockSummaries, totalYieldTonnes: totalYieldTonnes, totalArea: totalArea)
+        }
+        .sheet(isPresented: $showStartEstimateSheet) {
+            NavigationStack {
+                YieldEstimationView()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") { showStartEstimateSheet = false }
+                        }
+                    }
+            }
         }
         .sheet(item: $showHistoricalDetail) { record in
             HistoricalYieldDetailSheet(record: record)
         }
-        .alert("Delete Historical Record?", isPresented: Binding(
-            get: { recordPendingDeletion != nil },
-            set: { if !$0 { recordPendingDeletion = nil } }
-        ), presenting: recordPendingDeletion) { record in
-            Button("Delete", role: .destructive) {
-                store.deleteHistoricalYieldRecord(record)
-                recordPendingDeletion = nil
-            }
-            Button("Cancel", role: .cancel) {
-                recordPendingDeletion = nil
-            }
-        } message: { record in
-            let title = record.season.isEmpty ? "\(record.year)" : record.season
-            Text("This will permanently delete the \(title) historical yield record. This cannot be undone.")
-        }
-        .alert("Delete Estimation?", isPresented: Binding(
-            get: { sessionPendingDeletion != nil },
-            set: { if !$0 { sessionPendingDeletion = nil } }
-        ), presenting: sessionPendingDeletion) { session in
-            Button("Delete", role: .destructive) {
-                store.deleteYieldSession(session)
-                sessionPendingDeletion = nil
-            }
-            Button("Cancel", role: .cancel) {
-                sessionPendingDeletion = nil
-            }
-        } message: { _ in
-            Text("Delete this yield estimation? This will remove sample sites and bunch counts for this job. This cannot be undone.")
-        }
     }
 
-    // MARK: - Archive Button
+    // MARK: - Yield Overview (compact stats + primary action)
 
-    private var archiveButton: some View {
-        Button {
-            showArchiveSheet = true
-        } label: {
-            Label("Archive Current Season", systemImage: "archivebox.fill")
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(VineyardTheme.olive)
-    }
+    private var yieldOverviewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Yield Overview", systemImage: "chart.bar.xaxis")
+                .font(.headline)
 
-    // MARK: - Vineyard Overview
-
-    private var vineyardOverview: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 overviewCard(
-                    title: "Total Yield",
-                    value: String(format: "%.2f t", totalYieldTonnes),
-                    icon: "scalemass.fill",
+                    title: "Estimates",
+                    value: "\(sessions.count)",
+                    icon: "list.bullet.clipboard",
                     color: VineyardTheme.leafGreen
                 )
                 overviewCard(
-                    title: "Avg Yield/Ha",
-                    value: totalArea > 0 ? String(format: "%.2f t/Ha", totalYieldTonnes / totalArea) : "—",
-                    icon: "square.dashed",
-                    color: .orange
-                )
-            }
-
-            HStack(spacing: 12) {
-                overviewCard(
-                    title: "Blocks",
+                    title: "Blocks Sampled",
                     value: "\(blockSummaries.count)",
                     icon: "map.fill",
                     color: .purple
                 )
                 overviewCard(
-                    title: "Total Area",
-                    value: String(format: "%.2f Ha", totalArea),
-                    icon: "ruler.fill",
+                    title: "Est. Tonnes",
+                    value: String(format: "%.2f t", totalYieldTonnes),
+                    icon: "scalemass.fill",
+                    color: .orange
+                )
+                overviewCard(
+                    title: "Avg Yield/Ha",
+                    value: totalArea > 0 ? String(format: "%.2f t/Ha", totalYieldTonnes / totalArea) : "—",
+                    icon: "square.dashed",
                     color: .teal
                 )
             }
+
+            Button {
+                showStartEstimateSheet = true
+            } label: {
+                Label("New Yield Estimate", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(VineyardTheme.leafGreen)
         }
     }
 
     private func overviewCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.caption.weight(.semibold))
@@ -236,11 +235,13 @@ struct YieldReportsListView: View {
                     .foregroundStyle(.secondary)
             }
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(.title3.weight(.bold))
                 .foregroundStyle(.primary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
     }
 
@@ -332,31 +333,43 @@ struct YieldReportsListView: View {
 
     private var sessionListSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Estimation Jobs", systemImage: "list.bullet.clipboard")
-                .font(.headline)
+            HStack {
+                Label("Yield Reports", systemImage: "list.bullet.clipboard")
+                    .font(.headline)
+                Spacer()
+                if !sessions.isEmpty {
+                    Text("\(sessions.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color(.secondarySystemFill), in: .capsule)
+                }
+            }
 
             if sessions.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "chart.bar.doc.horizontal")
-                        .font(.largeTitle)
+                        .font(.system(size: 40))
                         .foregroundStyle(.secondary)
-                    Text("No yield estimation jobs yet")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text("Generate sample sites in Yield Estimation to get started.")
+                    Text("No yield estimates yet")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Tap New Yield Estimate to start a guided sampling session.")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 32)
+                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
             } else {
                 ForEach(sessions) { session in
                     SwipeToDeleteCard(
                         actionLabel: "Delete",
-                        isEnabled: accessControl?.canDelete ?? false
+                        isEnabled: canDelete
                     ) {
-                        sessionPendingDeletion = session
+                        store.deleteYieldSession(session)
+                        Task { await yieldSessionSync.syncForSelectedVineyard() }
                     } content: {
                         sessionCard(session)
                     }
@@ -527,9 +540,10 @@ struct YieldReportsListView: View {
                 ForEach(filteredHistoricalRecords) { record in
                     SwipeToDeleteCard(
                         actionLabel: "Delete",
-                        isEnabled: accessControl?.canDelete ?? false
+                        isEnabled: canDelete
                     ) {
-                        recordPendingDeletion = record
+                        store.deleteHistoricalYieldRecord(record)
+                        Task { await historicalYieldSync.syncForSelectedVineyard() }
                     } content: {
                         Button {
                             showHistoricalDetail = record
