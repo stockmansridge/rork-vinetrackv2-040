@@ -222,7 +222,17 @@ private struct BlockRipenessRow: View {
         return min(1.0, max(0, row.total / row.target))
     }
 
+    private var hasUnresolvedVariety: Bool {
+        !row.block.varietyAllocations.isEmpty && row.variety == nil
+    }
+
     private var status: (label: String, color: Color, icon: String) {
+        if hasUnresolvedVariety {
+            return ("Variety not configured for ripeness", .orange, "exclamationmark.circle")
+        }
+        if row.variety != nil, row.target <= 0 {
+            return ("Add GDD target for this variety", .orange, "exclamationmark.circle")
+        }
         if row.target <= 0 {
             return ("No target", .secondary, "questionmark.circle")
         }
@@ -265,6 +275,10 @@ private struct BlockRipenessRow: View {
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                        } else if hasUnresolvedVariety {
+                            Text("Unrecognised variety")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.orange)
                         } else {
                             Text("No variety")
                                 .font(.caption2.weight(.medium))
@@ -397,16 +411,53 @@ private struct SetupChecklist {
         ))
 
         // 2. Block varieties
+        //
+        // A block passes this check only when:
+        //   1) it has at least one variety allocation, AND
+        //   2) its primary allocation resolves to a `GrapeVariety` in the
+        //      currently configured variety list (same lookup the GDD
+        //      calculation uses — `store.grapeVariety(for:)`).
+        //
+        // A non-empty variety value alone is not enough: a block can carry
+        // a legacy / imported varietyId that no longer exists in
+        // GrapeVarietyManagement, in which case the ripeness calc has no
+        // GDD target to work with.
         let blocks = store.orderedPaddocks
         let blocksWithoutVariety = blocks.filter { $0.varietyAllocations.isEmpty }
+        let blocksWithUnknownVariety: [Paddock] = blocks.filter { block in
+            guard !block.varietyAllocations.isEmpty else { return false }
+            let primary = block.varietyAllocations.max(by: { $0.percent < $1.percent })
+            guard let primary else { return true }
+            return store.grapeVariety(for: primary.varietyId) == nil
+        }
+        let varietyDetail: String
+        let varietyOK: Bool
+        let varietyAction: String?
+        if blocks.isEmpty {
+            varietyDetail = "No blocks"
+            varietyOK = false
+            varietyAction = "Add blocks first"
+        } else if !blocksWithoutVariety.isEmpty {
+            varietyDetail = "\(blocksWithoutVariety.count) block\(blocksWithoutVariety.count == 1 ? "" : "s") missing a variety"
+            varietyOK = false
+            varietyAction = "Add a variety to each block"
+        } else if !blocksWithUnknownVariety.isEmpty {
+            let names = blocksWithUnknownVariety.prefix(3).map(\.name).joined(separator: ", ")
+            let suffix = blocksWithUnknownVariety.count > 3 ? " and \(blocksWithUnknownVariety.count - 3) more" : ""
+            varietyDetail = "Variety not in ripeness list: \(names)\(suffix)"
+            varietyOK = false
+            varietyAction = "Add these varieties under Variety GDD targets"
+        } else {
+            varietyDetail = "All blocks have a recognised variety"
+            varietyOK = true
+            varietyAction = nil
+        }
         items.append(SetupChecklistItem(
             title: "Block varieties",
-            detail: blocksWithoutVariety.isEmpty
-                ? "All blocks have a variety"
-                : "\(blocksWithoutVariety.count) block\(blocksWithoutVariety.count == 1 ? "" : "s") missing a variety",
-            ok: blocksWithoutVariety.isEmpty && !blocks.isEmpty,
-            action: blocksWithoutVariety.isEmpty ? nil : "Add a variety to each block",
-            destination: .blockVarieties
+            detail: varietyDetail,
+            ok: varietyOK,
+            action: varietyAction,
+            destination: blocksWithUnknownVariety.isEmpty ? .blockVarieties : .varietyTargets
         ))
 
         // 3. Season start date
