@@ -204,7 +204,6 @@ final class PinSyncService {
 
         let deletes = metadata.pendingDeletes
         var deleteFailures: [String] = []
-        var permissionDeniedIds: [UUID] = []
         for (pinId, _) in deletes {
             do {
                 try await repository.softDeletePin(id: pinId)
@@ -221,27 +220,10 @@ final class PinSyncService {
                     print("[PinSync] soft delete failed for \(pinId): \(error.localizedDescription)")
                     #endif
                     deleteFailures.append(error.localizedDescription)
-                    if Self.isPermissionError(error) {
-                        // Server rejected the delete (role check). The local store
-                        // already removed the pin, but the row still lives on the
-                        // server and on every other device. Drop the pending delete
-                        // and restore the pin locally so the two devices stay in
-                        // sync until someone with permission deletes it.
-                        metadata.clearDeleted([pinId])
-                        permissionDeniedIds.append(pinId)
-                    }
-                    // Otherwise keep the deletion pending so it retries next sync.
+                    // Keep the deletion pending so it retries next sync, but don't abort.
                     continue
                 }
             }
-        }
-        if !permissionDeniedIds.isEmpty {
-            await restorePinsAfterPermissionDenied(
-                ids: permissionDeniedIds,
-                vineyardId: vineyardId,
-                store: store
-            )
-            errorMessage = "You don't have permission to delete this pin. Ask an owner or manager."
         }
         if !deleteFailures.isEmpty {
             // Surface a non-fatal warning via errorMessage but don't throw — let pull and
@@ -258,38 +240,6 @@ final class PinSyncService {
         if message.contains("no rows") { return true }
         if message.contains("0 rows") { return true }
         return false
-    }
-
-    private static func isPermissionError(_ error: Error) -> Bool {
-        let message = String(describing: error).lowercased()
-        if message.contains("insufficient permission") { return true }
-        if message.contains("permission denied") { return true }
-        if message.contains("not authorized") { return true }
-        if message.contains("forbidden") { return true }
-        if message.contains(" 403") || message.contains("(403)") { return true }
-        return false
-    }
-
-    /// Re-fetch the named pins from the server and re-apply them to the local
-    /// store so the device that issued an unauthorised delete continues to
-    /// show the pin (matching what every other device sees).
-    private func restorePinsAfterPermissionDenied(
-        ids: [UUID],
-        vineyardId: UUID,
-        store: MigratedDataStore
-    ) async {
-        guard !ids.isEmpty else { return }
-        do {
-            let remote = try await repository.fetchAllPins(vineyardId: vineyardId)
-            let lookup = Set(ids)
-            for backend in remote where lookup.contains(backend.id) && backend.deletedAt == nil {
-                await applyRemote(backend, vineyardId: vineyardId, store: store)
-            }
-        } catch {
-            #if DEBUG
-            print("[PinSync] restore-after-permission-denied fetch failed: \(error.localizedDescription)")
-            #endif
-        }
     }
 
     // MARK: - Pull
