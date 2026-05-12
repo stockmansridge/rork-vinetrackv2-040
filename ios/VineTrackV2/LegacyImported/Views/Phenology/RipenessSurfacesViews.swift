@@ -22,41 +22,45 @@ import SwiftUI
 /// for Open-Meteo) so we don't falsely claim "weather station required"
 /// when the vineyard already has weather configured elsewhere.
 enum RipenessWeatherState {
-    /// Weather Underground PWS configured — GDD history can be computed.
-    case ready(stationId: String)
-    /// Davis WeatherLink or vineyard coordinates (Open-Meteo) are
-    /// configured, but `DegreeDayService` still needs a WU PWS to pull
-    /// daily highs/lows. UI should explain this rather than say the
-    /// station is missing.
-    case configuredButGDDUnavailable
+    /// A usable GDD source was resolved. Carries the concrete source
+    /// so callers can fetch and pass the matching `sourceKey` into
+    /// `DegreeDayService.dailyGDDSeries`.
+    case ready(source: GDDSource)
     /// No weather source configured for this vineyard at all.
     case notConfigured
+
+    var source: GDDSource? {
+        if case .ready(let source) = self { return source }
+        return nil
+    }
 }
 
 enum RipenessMath {
+    /// Resolves the best available GDD source for the current vineyard.
+    /// Priority: Weather Underground PWS → Open-Meteo Archive (coords).
+    /// Davis historical temps are not yet wired through and currently
+    /// fall through to the coordinate-based Open-Meteo source.
     @MainActor
     static func weatherState(store: MigratedDataStore) -> RipenessWeatherState {
         if let id = store.settings.weatherStationId, !id.isEmpty {
-            return .ready(stationId: id)
+            return .ready(source: .weatherUnderground(stationId: id))
         }
-        let hasCoords =
-            (store.settings.vineyardLatitude != nil && store.settings.vineyardLongitude != nil)
-            || (store.paddockCentroidLatitude != nil && store.paddockCentroidLongitude != nil)
-        var davisConfigured = false
-        if let vid = store.selectedVineyardId {
-            let cfg = WeatherProviderStore.shared.config(for: vid)
-            let hasShared = cfg.davisIsVineyardShared
-                && cfg.davisVineyardHasServerCredentials
-                && (cfg.davisStationId?.isEmpty == false)
-            let hasLocal = cfg.davisHasCredentials
-                && cfg.davisConnectionTested
-                && (cfg.davisStationId?.isEmpty == false)
-            davisConfigured = hasShared || hasLocal
-        }
-        if davisConfigured || hasCoords {
-            return .configuredButGDDUnavailable
+        let lat = store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
+        let lon = store.settings.vineyardLongitude ?? store.paddockCentroidLongitude
+        if let lat, let lon {
+            return .ready(source: .openMeteoArchive(latitude: lat, longitude: lon))
         }
         return .notConfigured
+    }
+
+    /// Earliest date the Optimal Ripeness surfaces might query. Used to
+    /// pre-fetch a comfortable temperature buffer (per-block reset
+    /// dates can be up to a year back).
+    @MainActor
+    static func fetchRangeStart(settings: AppSettings) -> Date {
+        let cal = Calendar.current
+        let oneYearAgo = cal.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+        return min(oneYearAgo, seasonStartDate(settings: settings))
     }
 
     static func seasonStartDate(settings: AppSettings) -> Date {
@@ -85,9 +89,11 @@ enum RipenessMath {
     static func blockTotal(
         block: Paddock,
         store: MigratedDataStore,
-        degreeDayService: DegreeDayService
+        degreeDayService: DegreeDayService,
+        sourceKey: String
     ) -> BlockTotal? {
-        guard let stationId = store.settings.weatherStationId, !stationId.isEmpty else { return nil }
+        guard !sourceKey.isEmpty else { return nil }
+        let stationId = sourceKey
         let cal = Calendar.current
         let now = Date()
         let oneYearAgo = cal.date(byAdding: .year, value: -1, to: now) ?? now
@@ -161,8 +167,14 @@ struct BlockRipenessChip: View {
     }
 
     private var blockTotal: RipenessMath.BlockTotal? {
-        guard let paddock else { return nil }
-        return RipenessMath.blockTotal(block: paddock, store: store, degreeDayService: degreeDayService)
+        guard let paddock,
+              let source = RipenessMath.weatherState(store: store).source else { return nil }
+        return RipenessMath.blockTotal(
+            block: paddock,
+            store: store,
+            degreeDayService: degreeDayService,
+            sourceKey: source.sourceKey
+        )
     }
 
     private var progress: Double {
@@ -173,10 +185,8 @@ struct BlockRipenessChip: View {
     private var caveatMessage: String? {
         switch RipenessMath.weatherState(store: store) {
         case .ready: break
-        case .configuredButGDDUnavailable:
-            return "Weather data not yet available for GDD — add a Weather Underground PWS in Weather Settings"
         case .notConfigured:
-            return "Add a weather station to project ripeness"
+            return "Add vineyard coordinates or a weather station to project ripeness"
         }
         if !hasResetData, let mode = resetMode {
             switch mode {
@@ -325,7 +335,7 @@ struct RipenessWatchTile: View {
     }
 
     private var topVariety: VarietyStatus? {
-        guard case .ready = weatherState else { return nil }
+        guard case .ready(let source) = weatherState else { return nil }
         var results: [VarietyStatus] = []
         for variety in allocatedVarieties {
             let blocks = store.orderedPaddocks.filter { p in
@@ -333,7 +343,7 @@ struct RipenessWatchTile: View {
             }
             var totals: [RipenessMath.BlockTotal] = []
             for block in blocks {
-                if let bt = RipenessMath.blockTotal(block: block, store: store, degreeDayService: degreeDayService) {
+                if let bt = RipenessMath.blockTotal(block: block, store: store, degreeDayService: degreeDayService, sourceKey: source.sourceKey) {
                     totals.append(bt)
                 }
             }
@@ -454,8 +464,7 @@ struct RipenessWatchTile: View {
 
     private var emptyTitle: String {
         switch weatherState {
-        case .notConfigured: return "Weather station required"
-        case .configuredButGDDUnavailable: return "Weather data unavailable"
+        case .notConfigured: return "Weather source required"
         case .ready:
             if allocatedVarieties.isEmpty { return "No tracked varieties yet" }
             return "Awaiting season data"
@@ -465,9 +474,7 @@ struct RipenessWatchTile: View {
     private var emptySubtitle: String {
         switch weatherState {
         case .notConfigured:
-            return "Connect a station in Setup to track GDD and harvest timing."
-        case .configuredButGDDUnavailable:
-            return "Weather is configured, but Optimal Ripeness needs a Weather Underground PWS for GDD history."
+            return "Add vineyard coordinates or connect a weather station to track GDD and harvest timing."
         case .ready:
             break
         }

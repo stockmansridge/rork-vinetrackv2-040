@@ -30,6 +30,36 @@ nonisolated struct GDDComputeResult: Sendable {
     let lastDate: Date?
 }
 
+/// Configured data source used to populate `temps` for a season GDD
+/// calculation. Each case carries the information `DegreeDayService`
+/// needs to fetch daily high/low temperatures and a stable cache key.
+nonisolated enum GDDSource: Equatable, Sendable, Hashable {
+    case weatherUnderground(stationId: String)
+    case openMeteoArchive(latitude: Double, longitude: Double)
+    case davisWeatherLink(stationId: String)
+
+    /// Stable identifier used as the key in `DegreeDayService.temps`.
+    var sourceKey: String {
+        switch self {
+        case .weatherUnderground(let id):
+            return id
+        case .openMeteoArchive(let lat, let lon):
+            return String(format: "openmeteo:%.4f,%.4f", lat, lon)
+        case .davisWeatherLink(let id):
+            return "davis:\(id)"
+        }
+    }
+
+    /// Short label shown in Optimal Ripeness UI.
+    var displayName: String {
+        switch self {
+        case .weatherUnderground: return "Weather Underground"
+        case .openMeteoArchive: return "Open-Meteo Archive"
+        case .davisWeatherLink: return "Davis WeatherLink"
+        }
+    }
+}
+
 @Observable
 @MainActor
 class DegreeDayService {
@@ -48,6 +78,9 @@ class DegreeDayService {
     var lastFetchAttempted: Int = 0
     var lastFetchSucceeded: Int = 0
     var lastFetchStatusSample: String?
+    /// The most recent source used to populate `seasonGDD` / temps.
+    /// Surfaced in the Optimal Ripeness UI as "GDD source: …".
+    var lastSource: GDDSource?
 
     /// Per-station cache of daily temperatures keyed by yyyyMMdd.
     private var temps: [String: [String: DailyTemp]] = [:]
@@ -87,6 +120,27 @@ class DegreeDayService {
     private func saveCache() {
         if let data = try? JSONEncoder().encode(temps) {
             UserDefaults.standard.set(data, forKey: cacheKey)
+        }
+    }
+
+    // MARK: - Unified source-aware entry point
+
+    /// Fetch & compute season GDD for any supported source. The result
+    /// is written into `seasonGDD` / `lastSource` and cached temps are
+    /// keyed by the source's `sourceKey` so subsequent
+    /// `dailyGDDSeries(stationId:)` calls find the same data.
+    func fetchSeason(source: GDDSource, seasonStart: Date, useBEDD: Bool = true) async {
+        switch source {
+        case .weatherUnderground(let id):
+            await fetchSeasonGDD(stationId: id, seasonStart: seasonStart, latitude: nil, useBEDD: useBEDD)
+            lastSource = .weatherUnderground(stationId: id)
+        case .openMeteoArchive(let lat, let lon):
+            await fetchSeasonOpenMeteo(latitude: lat, longitude: lon, seasonStart: seasonStart, useBEDD: useBEDD)
+        case .davisWeatherLink:
+            // Davis historical daily min/max is not yet wired through
+            // `DavisWeatherLinkService`. Fall through silently; callers
+            // should prefer Open-Meteo until this is added.
+            errorMessage = "Davis historical temperatures are not yet integrated for GDD."
         }
     }
 
@@ -529,6 +583,164 @@ class DegreeDayService {
         if status.contains("Network") { return "Network error" }
         if status.contains("Bad JSON") { return "Bad JSON" }
         return "Other"
+    }
+
+    // MARK: - Open-Meteo Archive
+
+    /// Fetches daily min/max temperatures from Open-Meteo Archive for the
+    /// given coordinates and computes `seasonGDD`. The temps cache is
+    /// keyed by `GDDSource.openMeteoArchive(...).sourceKey` so existing
+    /// `dailyGDDSeries(stationId:)` lookups work transparently.
+    ///
+    /// Open-Meteo Archive lags about 5 days behind today, so any missing
+    /// recent days are filled from the forecast endpoint's `past_days`
+    /// data.
+    func fetchSeasonOpenMeteo(latitude: Double, longitude: Double, seasonStart: Date, useBEDD: Bool = true) async {
+        let source = GDDSource.openMeteoArchive(latitude: latitude, longitude: longitude)
+        let key = source.sourceKey
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = cal.startOfDay(for: seasonStart)
+
+        isLoading = true
+        errorMessage = nil
+        lastStationId = key
+        lastSeasonStart = seasonStart
+        lastFetchAttempted = 0
+        lastFetchSucceeded = 0
+        lastFetchStatusSample = nil
+        var diagnostics: [String] = ["Open-Meteo Archive @ \(String(format: "%.4f,%.4f", latitude, longitude))"]
+
+        guard start <= today else {
+            seasonGDD = 0
+            daysCovered = 0
+            firstDateCovered = nil
+            lastDateCovered = nil
+            lastSource = source
+            lastUpdated = Date()
+            isLoading = false
+            return
+        }
+
+        var stationTemps = temps[key] ?? [:]
+
+        var dates: [Date] = []
+        var d = start
+        while d < today {
+            dates.append(d)
+            d = cal.date(byAdding: .day, value: 1, to: d) ?? today
+        }
+
+        let missing = dates.filter { stationTemps[Self.wuDateFormatter.string(from: $0)] == nil }
+        diagnostics.append("Season dates: \(dates.count) • missing: \(missing.count)")
+
+        if !missing.isEmpty {
+            let fmt = DateFormatter()
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+            fmt.timeZone = TimeZone(identifier: "UTC")
+            fmt.dateFormat = "yyyy-MM-dd"
+            let archiveCutoff = cal.date(byAdding: .day, value: -6, to: today) ?? today
+
+            // 1. Archive endpoint for older dates (more authoritative).
+            let archiveStart = missing.min() ?? start
+            let archiveEnd = min(missing.max() ?? archiveCutoff, archiveCutoff)
+            if archiveStart <= archiveEnd {
+                let startStr = fmt.string(from: archiveStart)
+                let endStr = fmt.string(from: archiveEnd)
+                let urlString = "https://archive-api.open-meteo.com/v1/archive?latitude=\(latitude)&longitude=\(longitude)&start_date=\(startStr)&end_date=\(endStr)&daily=temperature_2m_max,temperature_2m_min&timezone=auto"
+                if let url = URL(string: urlString) {
+                    lastFetchAttempted += 1
+                    do {
+                        let (data, response) = try await URLSession.shared.data(from: url)
+                        if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                            let count = applyOpenMeteoDailyTemps(data: data, into: &stationTemps, fmt: fmt)
+                            diagnostics.append("Archive rows: \(count)")
+                            lastFetchSucceeded += 1
+                        } else if let http = response as? HTTPURLResponse {
+                            diagnostics.append("Archive HTTP \(http.statusCode)")
+                            lastFetchStatusSample = "HTTP \(http.statusCode)"
+                        }
+                    } catch {
+                        diagnostics.append("Archive error: \(error.localizedDescription)")
+                        lastFetchStatusSample = error.localizedDescription
+                    }
+                }
+            }
+
+            // 2. Forecast endpoint with `past_days` to fill the recent
+            //    days that the archive doesn't yet cover.
+            let stillMissing = dates.filter { stationTemps[Self.wuDateFormatter.string(from: $0)] == nil }
+            if !stillMissing.isEmpty {
+                let earliestStill = stillMissing.min() ?? today
+                let daysBack = max(1, min(92, (cal.dateComponents([.day], from: earliestStill, to: today).day ?? 1) + 1))
+                let urlString = "https://api.open-meteo.com/v1/forecast?latitude=\(latitude)&longitude=\(longitude)&daily=temperature_2m_max,temperature_2m_min&past_days=\(daysBack)&forecast_days=1&timezone=auto"
+                if let url = URL(string: urlString) {
+                    lastFetchAttempted += 1
+                    do {
+                        let (data, response) = try await URLSession.shared.data(from: url)
+                        if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                            let count = applyOpenMeteoDailyTemps(data: data, into: &stationTemps, fmt: fmt)
+                            diagnostics.append("Forecast past_days rows: \(count)")
+                            lastFetchSucceeded += 1
+                        } else if let http = response as? HTTPURLResponse {
+                            diagnostics.append("Forecast HTTP \(http.statusCode)")
+                            lastFetchStatusSample = "HTTP \(http.statusCode)"
+                        }
+                    } catch {
+                        diagnostics.append("Forecast error: \(error.localizedDescription)")
+                        lastFetchStatusSample = error.localizedDescription
+                    }
+                }
+            }
+        }
+
+        temps[key] = stationTemps
+        saveCache()
+
+        let result = computeGDD(stationId: key, from: start, to: today, latitude: latitude, useBEDD: useBEDD)
+        seasonGDD = result.gdd
+        daysCovered = result.daysCovered
+        expectedDays = result.expectedDays
+        interpolatedDays = result.interpolatedDays
+        firstDateCovered = result.firstDate
+        lastDateCovered = result.lastDate
+        lastUpdated = Date()
+        lastSource = source
+        diagnostics.append("Days with data: \(result.daysCovered) • GDD: \(Int(result.gdd))")
+        if result.daysCovered == 0 && errorMessage == nil {
+            errorMessage = "Open-Meteo did not return any temperatures for this location yet."
+        }
+        lastDiagnostics = diagnostics.joined(separator: "\n")
+        markDailyRefresh(for: key)
+        isLoading = false
+    }
+
+    /// Parses an Open-Meteo daily JSON payload and writes high/low
+    /// readings into the supplied cache. Returns the number of days
+    /// applied.
+    private func applyOpenMeteoDailyTemps(
+        data: Data,
+        into stationTemps: inout [String: DailyTemp],
+        fmt: DateFormatter
+    ) -> Int {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let daily = json["daily"] as? [String: Any],
+              let times = daily["time"] as? [String],
+              let highs = daily["temperature_2m_max"] as? [Any],
+              let lows = daily["temperature_2m_min"] as? [Any] else {
+            return 0
+        }
+        let count = min(times.count, min(highs.count, lows.count))
+        var written = 0
+        for i in 0..<count {
+            guard let date = fmt.date(from: times[i]),
+                  let high = parseDouble(highs[i]),
+                  let low = parseDouble(lows[i]) else { continue }
+            let k = Self.wuDateFormatter.string(from: date)
+            stationTemps[k] = DailyTemp(high: high, low: low)
+            written += 1
+        }
+        return written
     }
 
     private func parseDouble(_ value: Any?) -> Double? {

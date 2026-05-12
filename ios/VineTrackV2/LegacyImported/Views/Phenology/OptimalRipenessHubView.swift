@@ -45,18 +45,31 @@ struct OptimalRipenessHubView: View {
                 }
             } else if case .notConfigured = weatherState {
                 ContentUnavailableView {
-                    Label("Weather Station Required", systemImage: "thermometer.sun")
+                    Label("Weather Source Required", systemImage: "thermometer.sun")
                 } description: {
-                    Text("Connect a weather station to compute growing degree days for ripeness predictions.")
-                }
-            } else if case .configuredButGDDUnavailable = weatherState {
-                ContentUnavailableView {
-                    Label("Weather Data Unavailable", systemImage: "thermometer.sun")
-                } description: {
-                    Text("Weather is configured for this vineyard, but Optimal Ripeness needs a Weather Underground PWS for daily high/low temperatures. Add one under Weather Settings → Weather Underground to enable GDD predictions.")
+                    Text("Add vineyard coordinates under Setup or connect a weather station to compute growing degree days for ripeness predictions.")
                 }
             } else {
                 List {
+                    if case .ready(let source) = weatherState {
+                        Section {
+                            HStack(spacing: 8) {
+                                Image(systemName: "thermometer.sun.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                Text("GDD source")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(source.displayName)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                if degreeDayService.isLoading {
+                                    ProgressView().controlSize(.mini)
+                                }
+                            }
+                        }
+                    }
                     if !sortedVarieties.isEmpty {
                         Section {
                             ForEach(sortedVarieties) { variety in
@@ -107,6 +120,30 @@ struct OptimalRipenessHubView: View {
         }
         .navigationTitle("Optimal Ripeness")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: weatherStateKey) {
+            await loadGDDIfNeeded()
+        }
+    }
+
+    private var weatherStateKey: String {
+        switch weatherState {
+        case .ready(let source): return source.sourceKey
+        case .notConfigured: return "none"
+        }
+    }
+
+    private func loadGDDIfNeeded() async {
+        guard case .ready(let source) = weatherState else { return }
+        if !degreeDayService.needsDailyRefresh(for: source.sourceKey),
+           degreeDayService.lastSource == source {
+            return
+        }
+        let start = RipenessMath.fetchRangeStart(settings: store.settings)
+        await degreeDayService.fetchSeason(
+            source: source,
+            seasonStart: start,
+            useBEDD: store.settings.calculationMode.useBEDD
+        )
     }
 }
 
@@ -153,7 +190,8 @@ private struct VarietyRipenessRow: View {
     }
 
     private var blockTotals: [BlockTotal] {
-        guard let stationId = store.settings.weatherStationId, !stationId.isEmpty else { return [] }
+        guard let source = RipenessMath.weatherState(store: store).source else { return [] }
+        let stationId = source.sourceKey
         let cal = Calendar.current
         let now = Date()
         let oneYearAgo = cal.date(byAdding: .year, value: -1, to: now) ?? now

@@ -54,8 +54,13 @@ struct VarietyGDDDetailView: View {
         let total: Double
     }
 
+    private var weatherSource: GDDSource? {
+        RipenessMath.weatherState(store: store).source
+    }
+
     private var blockSeries: [BlockSeries] {
-        guard let stationId = store.settings.weatherStationId, !stationId.isEmpty else { return [] }
+        guard let source = weatherSource else { return [] }
+        let stationId = source.sourceKey
         let cal = Calendar.current
         let now = Date()
         let oneYearAgo = cal.date(byAdding: .year, value: -1, to: now) ?? now
@@ -168,6 +173,23 @@ struct VarietyGDDDetailView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(variety?.name ?? "Variety")
         .navigationBarTitleDisplayMode(.large)
+        .task(id: weatherSource?.sourceKey ?? "none") {
+            await loadGDDIfNeeded()
+        }
+    }
+
+    private func loadGDDIfNeeded() async {
+        guard let source = weatherSource else { return }
+        if !degreeDayService.needsDailyRefresh(for: source.sourceKey),
+           degreeDayService.lastSource == source {
+            return
+        }
+        let start = RipenessMath.fetchRangeStart(settings: store.settings)
+        await degreeDayService.fetchSeason(
+            source: source,
+            seasonStart: start,
+            useBEDD: store.settings.calculationMode.useBEDD
+        )
     }
 
     private var emptyState: some View {
@@ -189,6 +211,20 @@ struct VarietyGDDDetailView: View {
 
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let source = weatherSource {
+                HStack(spacing: 6) {
+                    Image(systemName: "thermometer.sun.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Text("GDD source: \(source.displayName)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if degreeDayService.isLoading {
+                        ProgressView().controlSize(.mini)
+                    }
+                }
+            }
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Season to date")
