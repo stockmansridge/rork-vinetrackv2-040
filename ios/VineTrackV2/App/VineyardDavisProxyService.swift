@@ -307,6 +307,66 @@ nonisolated enum VineyardDavisProxyService {
         )
     }
 
+    /// Fetches archive temperature records and aggregates to daily
+    /// high/low (Celsius) using `Calendar.current`. Splits the window
+    /// into 24-hour chunks to satisfy the WeatherLink v2 historic
+    /// endpoint limit. Calls go through the davis-proxy edge function
+    /// so operators without API credentials can still use the vineyard's
+    /// shared Davis station for GDD calculations.
+    static func fetchHistoricDailyTemps(
+        vineyardId: UUID,
+        stationId: String,
+        from: Date,
+        to: Date
+    ) async throws -> DavisWeatherLinkService.DavisDailyTemps {
+        guard !stationId.isEmpty else { throw VineyardDavisProxyError.notConfigured }
+        guard from < to else {
+            return DavisWeatherLinkService.DavisDailyTemps(dailyHighC: [:], dailyLowC: [:], recordCount: 0)
+        }
+
+        var chunks: [(start: Date, end: Date)] = []
+        var cur = from
+        while cur < to {
+            let next = min(cur.addingTimeInterval(historicChunkSeconds), to)
+            chunks.append((cur, next))
+            cur = next
+        }
+
+        var perRecord: [(ts: Date, hiF: Double, loF: Double)] = []
+        for chunk in chunks {
+            let json = try await invoke(
+                payload: [
+                    "vineyardId": vineyardId.uuidString,
+                    "action": "historic",
+                    "stationId": stationId,
+                    "startEpoch": Int(chunk.start.timeIntervalSince1970),
+                    "endEpoch": Int(chunk.end.timeIntervalSince1970),
+                ]
+            )
+            guard let sensors = json["sensors"] as? [[String: Any]] else {
+                throw VineyardDavisProxyError.decoding("Missing 'sensors' array in historic")
+            }
+            let parsed = DavisWeatherLinkService.parseHistoricTemperatures(sensorsArr: sensors)
+            for r in parsed { perRecord.append((r.0, r.1, r.2)) }
+        }
+
+        let cal = Calendar.current
+        var highs: [Date: Double] = [:]
+        var lows: [Date: Double] = [:]
+        for (ts, hiF, loF) in perRecord {
+            let key = cal.startOfDay(for: ts)
+            let hiC = (hiF - 32) * 5 / 9
+            let loC = (loF - 32) * 5 / 9
+            highs[key] = max(highs[key] ?? -.greatestFiniteMagnitude, hiC)
+            lows[key] = min(lows[key] ?? .greatestFiniteMagnitude, loC)
+        }
+        return DavisWeatherLinkService.DavisDailyTemps(
+            dailyHighC: highs,
+            dailyLowC: lows,
+            recordCount: perRecord.count
+        )
+    }
+
     /// Backfills the past `days` of vineyard-local rainfall into
     /// `rainfall_daily` via the davis-proxy edge function. Owner /
     /// manager only — the proxy enforces the role check using the

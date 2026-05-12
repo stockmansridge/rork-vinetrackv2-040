@@ -55,7 +55,7 @@ struct VarietyGDDDetailView: View {
     }
 
     private var weatherSource: GDDSource? {
-        RipenessMath.weatherState(store: store).source
+        RipenessMath.weatherState(store: store, degreeDayService: degreeDayService).source
     }
 
     private var blockSeries: [BlockSeries] {
@@ -179,17 +179,34 @@ struct VarietyGDDDetailView: View {
     }
 
     private func loadGDDIfNeeded() async {
-        guard let source = weatherSource else { return }
-        if !degreeDayService.needsDailyRefresh(for: source.sourceKey),
-           degreeDayService.lastSource == source {
+        let cands = RipenessMath.candidates(store: store)
+        guard !cands.isEmpty else { return }
+        if let last = degreeDayService.lastSource,
+           cands.contains(where: { $0.source == last }),
+           !degreeDayService.needsDailyRefresh(for: last.sourceKey) {
             return
         }
         let start = RipenessMath.fetchRangeStart(settings: store.settings)
-        await degreeDayService.fetchSeason(
-            source: source,
-            seasonStart: start,
-            useBEDD: store.settings.calculationMode.useBEDD
-        )
+        let useBEDD = store.settings.calculationMode.useBEDD
+        for c in cands {
+            switch c.source {
+            case .davisWeatherLink(let sid):
+                await degreeDayService.fetchSeasonDavis(
+                    stationId: sid,
+                    vineyardId: store.selectedVineyardId,
+                    useProxy: c.usesProxy,
+                    latitude: effectiveLatitude,
+                    seasonStart: start,
+                    useBEDD: useBEDD
+                )
+            case .weatherUnderground, .openMeteoArchive:
+                await degreeDayService.fetchSeason(source: c.source, seasonStart: start, useBEDD: useBEDD)
+            }
+            if degreeDayService.lastSource == c.source,
+               degreeDayService.hasUsableData(for: c.source) {
+                return
+            }
+        }
     }
 
     private var emptyState: some View {

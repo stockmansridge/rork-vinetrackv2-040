@@ -136,12 +136,28 @@ class DegreeDayService {
             lastSource = .weatherUnderground(stationId: id)
         case .openMeteoArchive(let lat, let lon):
             await fetchSeasonOpenMeteo(latitude: lat, longitude: lon, seasonStart: seasonStart, useBEDD: useBEDD)
-        case .davisWeatherLink:
-            // Davis historical daily min/max is not yet wired through
-            // `DavisWeatherLinkService`. Fall through silently; callers
-            // should prefer Open-Meteo until this is added.
-            errorMessage = "Davis historical temperatures are not yet integrated for GDD."
+        case .davisWeatherLink(let stationId):
+            // Davis seasons are best fetched via the vineyard-aware helper
+            // below; this entry point is only used when a direct, fully
+            // configured Davis client is on this device.
+            await fetchSeasonDavis(
+                stationId: stationId,
+                vineyardId: nil,
+                useProxy: false,
+                latitude: nil,
+                seasonStart: seasonStart,
+                useBEDD: useBEDD
+            )
         }
+    }
+
+    /// Returns `true` when at least one usable daily temperature is
+    /// cached for the given source. Callers use this to decide whether
+    /// to keep `lastSource` set after a network failure, or fall through
+    /// to the next priority source.
+    func hasUsableData(for source: GDDSource) -> Bool {
+        guard let cached = temps[source.sourceKey] else { return false }
+        return !cached.isEmpty
     }
 
     /// Returns true if today's daily refresh hasn't happened yet for this station.
@@ -586,6 +602,142 @@ class DegreeDayService {
     }
 
     // MARK: - Open-Meteo Archive
+
+    // MARK: - Davis WeatherLink (historic temperatures)
+
+    /// Fetch & compute season GDD using Davis WeatherLink historic
+    /// daily min/max temperatures. When `useProxy` is true the call is
+    /// routed through the davis-proxy edge function (operators / any
+    /// vineyard member). Otherwise direct WeatherLink credentials are
+    /// read from the Keychain (owner / manager device).
+    ///
+    /// On success `lastSource` is set to `.davisWeatherLink(stationId:)`
+    /// and the temp cache is keyed by that source's `sourceKey` so the
+    /// existing `dailyGDDSeries(stationId:)` lookups work. On failure
+    /// the cache is left untouched and `lastSource` remains `nil` so
+    /// callers can fall through to a lower-priority source.
+    func fetchSeasonDavis(
+        stationId: String,
+        vineyardId: UUID?,
+        useProxy: Bool,
+        latitude: Double?,
+        seasonStart: Date,
+        useBEDD: Bool = true
+    ) async {
+        guard !stationId.isEmpty else {
+            errorMessage = "Davis station is not configured for this vineyard."
+            return
+        }
+        let source = GDDSource.davisWeatherLink(stationId: stationId)
+        let key = source.sourceKey
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = cal.startOfDay(for: seasonStart)
+
+        isLoading = true
+        errorMessage = nil
+        lastStationId = key
+        lastSeasonStart = seasonStart
+        lastFetchAttempted = 0
+        lastFetchSucceeded = 0
+        lastFetchStatusSample = nil
+        var diagnostics: [String] = ["Davis WeatherLink \(useProxy ? "(shared)" : "(direct)")"]
+
+        guard start <= today else {
+            seasonGDD = 0
+            daysCovered = 0
+            firstDateCovered = nil
+            lastDateCovered = nil
+            lastSource = source
+            lastUpdated = Date()
+            isLoading = false
+            return
+        }
+
+        var stationTemps = temps[key] ?? [:]
+        var dates: [Date] = []
+        var d = start
+        while d < today {
+            dates.append(d)
+            d = cal.date(byAdding: .day, value: 1, to: d) ?? today
+        }
+        let missing = dates.filter { stationTemps[Self.wuDateFormatter.string(from: $0)] == nil }
+        diagnostics.append("Season dates: \(dates.count) \u{2022} missing: \(missing.count)")
+
+        // Davis historic costs one API call per 24h chunk. To avoid
+        // hammering WeatherLink the first time, cap the per-fetch
+        // window at 60 days; older days fall through to the
+        // higher-priority chain (callers can then layer Open-Meteo in
+        // for the long tail).
+        if !missing.isEmpty {
+            let maxDaysPerFetch = 60
+            let toFetch = Array(missing.suffix(maxDaysPerFetch))
+            let from = toFetch.first ?? start
+            let to = (toFetch.last ?? today).addingTimeInterval(24 * 60 * 60)
+            lastFetchAttempted = toFetch.count
+            do {
+                let result: DavisWeatherLinkService.DavisDailyTemps
+                if useProxy {
+                    guard let vid = vineyardId else {
+                        errorMessage = "Davis vineyard ID missing."
+                        isLoading = false
+                        return
+                    }
+                    result = try await VineyardDavisProxyService.fetchHistoricDailyTemps(
+                        vineyardId: vid, stationId: stationId, from: from, to: to
+                    )
+                } else {
+                    let apiKey = WeatherKeychain.get(.apiKey) ?? ""
+                    let apiSecret = WeatherKeychain.get(.apiSecret) ?? ""
+                    guard !apiKey.isEmpty, !apiSecret.isEmpty else {
+                        errorMessage = "Davis credentials are not available on this device."
+                        isLoading = false
+                        return
+                    }
+                    result = try await DavisWeatherLinkService.fetchDailyTemperatures(
+                        apiKey: apiKey, apiSecret: apiSecret,
+                        stationId: stationId, from: from, to: to
+                    )
+                }
+                for (day, hi) in result.dailyHighC {
+                    let k = Self.wuDateFormatter.string(from: day)
+                    let lo = result.dailyLowC[day] ?? hi
+                    stationTemps[k] = DailyTemp(high: hi, low: lo)
+                }
+                lastFetchSucceeded = result.dailyHighC.count
+                diagnostics.append("Davis archive rows: \(result.recordCount), days written: \(result.dailyHighC.count)")
+            } catch {
+                lastFetchStatusSample = error.localizedDescription
+                diagnostics.append("Davis fetch failed: \(error.localizedDescription)")
+                // Surface the error but DO NOT mark `lastSource = source`.
+                // Callers fall through to the next priority source.
+                errorMessage = "Davis historical fetch failed: \(error.localizedDescription)"
+                lastDiagnostics = diagnostics.joined(separator: "\n")
+                isLoading = false
+                return
+            }
+        }
+
+        temps[key] = stationTemps
+        saveCache()
+
+        let result = computeGDD(stationId: key, from: start, to: today, latitude: latitude, useBEDD: useBEDD)
+        seasonGDD = result.gdd
+        daysCovered = result.daysCovered
+        expectedDays = result.expectedDays
+        interpolatedDays = result.interpolatedDays
+        firstDateCovered = result.firstDate
+        lastDateCovered = result.lastDate
+        lastUpdated = Date()
+        lastSource = source
+        diagnostics.append("Days with data: \(result.daysCovered) \u{2022} GDD: \(Int(result.gdd))")
+        if result.daysCovered == 0 {
+            errorMessage = "Davis returned no usable temperatures for this season."
+        }
+        lastDiagnostics = diagnostics.joined(separator: "\n")
+        markDailyRefresh(for: key)
+        isLoading = false
+    }
 
     /// Fetches daily min/max temperatures from Open-Meteo Archive for the
     /// given coordinates and computes `seasonGDD`. The temps cache is

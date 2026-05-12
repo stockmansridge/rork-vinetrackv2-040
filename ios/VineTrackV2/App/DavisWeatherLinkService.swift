@@ -591,6 +591,147 @@ nonisolated enum DavisWeatherLinkService {
         return parseHistoricRainfall(sensorsArr: sensors)
     }
 
+    // MARK: - Historic temperatures (for GDD)
+
+    /// Aggregated daily min/max temperatures (Celsius) parsed from a
+    /// WeatherLink v2 historic response. Keys are start-of-day in
+    /// `Calendar.current`.
+    nonisolated struct DavisDailyTemps: Sendable {
+        let dailyHighC: [Date: Double]
+        let dailyLowC: [Date: Double]
+        let recordCount: Int
+    }
+
+    /// Fetches archive temperature records and aggregates to daily
+    /// high/low (Celsius) using `Calendar.current`. Splits the window
+    /// into 24-hour chunks to satisfy the WeatherLink v2 historic
+    /// endpoint limit.
+    static func fetchDailyTemperatures(
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        from: Date,
+        to: Date,
+        maxConcurrent: Int = 4
+    ) async throws -> DavisDailyTemps {
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSecret = apiSecret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty, !trimmedSecret.isEmpty, !stationId.isEmpty else {
+            throw DavisWeatherLinkError.missingCredentials
+        }
+        guard from < to else {
+            return DavisDailyTemps(dailyHighC: [:], dailyLowC: [:], recordCount: 0)
+        }
+
+        var chunks: [(start: Date, end: Date)] = []
+        var cur = from
+        while cur < to {
+            let next = min(cur.addingTimeInterval(historicChunkSeconds), to)
+            chunks.append((cur, next))
+            cur = next
+        }
+
+        let limit = max(1, min(maxConcurrent, 6))
+        var perRecord: [(ts: Date, highF: Double, lowF: Double)] = []
+
+        try await withThrowingTaskGroup(of: [(Date, Double, Double)].self) { group in
+            var index = 0
+            var inFlight = 0
+            while index < chunks.count {
+                while inFlight < limit && index < chunks.count {
+                    let chunk = chunks[index]
+                    index += 1
+                    inFlight += 1
+                    group.addTask {
+                        try await fetchHistoricTemperaturesChunk(
+                            apiKey: trimmedKey,
+                            apiSecret: trimmedSecret,
+                            stationId: stationId,
+                            startEpoch: Int(chunk.start.timeIntervalSince1970),
+                            endEpoch: Int(chunk.end.timeIntervalSince1970)
+                        )
+                    }
+                }
+                if let res = try await group.next() {
+                    for r in res { perRecord.append((r.0, r.1, r.2)) }
+                    inFlight -= 1
+                }
+            }
+            for try await res in group {
+                for r in res { perRecord.append((r.0, r.1, r.2)) }
+            }
+        }
+
+        let cal = Calendar.current
+        var highs: [Date: Double] = [:]
+        var lows: [Date: Double] = [:]
+        for (ts, hiF, loF) in perRecord {
+            let key = cal.startOfDay(for: ts)
+            let hiC = (hiF - 32) * 5 / 9
+            let loC = (loF - 32) * 5 / 9
+            if let existing = highs[key] {
+                highs[key] = max(existing, hiC)
+            } else {
+                highs[key] = hiC
+            }
+            if let existing = lows[key] {
+                lows[key] = min(existing, loC)
+            } else {
+                lows[key] = loC
+            }
+        }
+        return DavisDailyTemps(dailyHighC: highs, dailyLowC: lows, recordCount: perRecord.count)
+    }
+
+    private static func fetchHistoricTemperaturesChunk(
+        apiKey: String,
+        apiSecret: String,
+        stationId: String,
+        startEpoch: Int,
+        endEpoch: Int
+    ) async throws -> [(Date, Double, Double)] {
+        let extra = [
+            URLQueryItem(name: "start-timestamp", value: String(startEpoch)),
+            URLQueryItem(name: "end-timestamp", value: String(endEpoch))
+        ]
+        let data = try await get(
+            path: "/historic/\(stationId)",
+            apiKey: apiKey,
+            apiSecret: apiSecret,
+            extraQuery: extra
+        )
+        guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let sensors = json["sensors"] as? [[String: Any]] else {
+            throw DavisWeatherLinkError.decoding("Missing 'sensors' array in historic")
+        }
+        return parseHistoricTemperatures(sensorsArr: sensors)
+    }
+
+    /// Parses per-interval outdoor temperature high/low values (in F) from
+    /// a WeatherLink v2 historic response. Returns `(timestamp, hiF, loF)`
+    /// per archive record that reports outdoor temperature.
+    static func parseHistoricTemperatures(sensorsArr: [[String: Any]]) -> [(Date, Double, Double)] {
+        var out: [(Date, Double, Double)] = []
+        for sensor in sensorsArr {
+            // Skip console / internal blocks so indoor temp can't pollute outdoor highs/lows.
+            if let st = sensor["sensor_type"] as? Int, internalSensorTypes.contains(st) { continue }
+            guard let dataArr = sensor["data"] as? [[String: Any]] else { continue }
+            for entry in dataArr {
+                guard let ts = parseAnyDouble(entry["ts"] ?? 0), ts > 0 else { continue }
+                // Pull outdoor high/low — prefer explicit hi/lo, then avg.
+                let hi = parseAnyDouble(entry["temp_hi"] ?? entry["temp_out_hi"] ?? entry["temp_last_hi"] ?? 0)
+                    ?? parseAnyDouble(entry["temp_avg"] ?? entry["temp_out_avg"] ?? entry["temp_last"] ?? 0)
+                let lo = parseAnyDouble(entry["temp_lo"] ?? entry["temp_out_lo"] ?? entry["temp_last_lo"] ?? 0)
+                    ?? parseAnyDouble(entry["temp_avg"] ?? entry["temp_out_avg"] ?? entry["temp_last"] ?? 0)
+                guard let hiF = hi, let loF = lo,
+                      hiF.isFinite, loF.isFinite,
+                      hiF > -100, hiF < 200, loF > -100, loF < 200 else { continue }
+                out.append((Date(timeIntervalSince1970: ts), max(hiF, loF), min(hiF, loF)))
+            }
+        }
+        return out
+    }
+
     /// Parses interval rainfall fields from a WeatherLink v2 historic
     /// response. Returns `(timestamp, mm)` per archive record.
     static func parseHistoricRainfall(sensorsArr: [[String: Any]]) -> [(Date, Double)] {

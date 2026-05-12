@@ -35,21 +35,62 @@ enum RipenessWeatherState {
     }
 }
 
+/// One candidate GDD source for the current vineyard. `candidates`
+/// returns these in priority order so callers can cascade through them
+/// when the preferred source fails.
+struct RipenessSourceCandidate: Hashable {
+    let source: GDDSource
+    /// When true, Davis fetches should route through the davis-proxy
+    /// edge function. Otherwise direct WeatherLink credentials from the
+    /// device Keychain are used. Ignored for non-Davis sources.
+    let usesProxy: Bool
+}
+
 enum RipenessMath {
-    /// Resolves the best available GDD source for the current vineyard.
-    /// Priority: Weather Underground PWS → Open-Meteo Archive (coords).
-    /// Davis historical temps are not yet wired through and currently
-    /// fall through to the coordinate-based Open-Meteo source.
+    /// Ordered list of usable GDD sources for the current vineyard.
+    /// Priority: Davis WeatherLink (configured + station selected)
+    /// → Weather Underground PWS → Open-Meteo Archive (vineyard or
+    /// paddock centroid coordinates).
     @MainActor
-    static func weatherState(store: MigratedDataStore) -> RipenessWeatherState {
+    static func candidates(store: MigratedDataStore) -> [RipenessSourceCandidate] {
+        var out: [RipenessSourceCandidate] = []
+        if let vid = store.selectedVineyardId {
+            let cfg = WeatherProviderStore.shared.config(for: vid)
+            if let sid = cfg.davisStationId, !sid.isEmpty {
+                let hasShared = cfg.davisIsVineyardShared && cfg.davisVineyardHasServerCredentials
+                let hasDirect = cfg.davisHasCredentials && cfg.davisConnectionTested
+                if hasShared {
+                    out.append(RipenessSourceCandidate(source: .davisWeatherLink(stationId: sid), usesProxy: true))
+                } else if hasDirect {
+                    out.append(RipenessSourceCandidate(source: .davisWeatherLink(stationId: sid), usesProxy: false))
+                }
+            }
+        }
         if let id = store.settings.weatherStationId, !id.isEmpty {
-            return .ready(source: .weatherUnderground(stationId: id))
+            out.append(RipenessSourceCandidate(source: .weatherUnderground(stationId: id), usesProxy: false))
         }
         let lat = store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
         let lon = store.settings.vineyardLongitude ?? store.paddockCentroidLongitude
         if let lat, let lon {
-            return .ready(source: .openMeteoArchive(latitude: lat, longitude: lon))
+            out.append(RipenessSourceCandidate(source: .openMeteoArchive(latitude: lat, longitude: lon), usesProxy: false))
         }
+        return out
+    }
+
+    /// Best-effort resolved state for surfaces that don't perform a
+    /// fetch themselves (chips, dashboard tile). Uses `lastSource` from
+    /// `DegreeDayService` when it matches one of the configured
+    /// candidates so the source label reflects the source we actually
+    /// have data for; otherwise returns the top candidate or
+    /// `.notConfigured`.
+    @MainActor
+    static func weatherState(store: MigratedDataStore, degreeDayService: DegreeDayService? = nil) -> RipenessWeatherState {
+        let cands = candidates(store: store)
+        if let svc = degreeDayService, let resolved = svc.lastSource,
+           cands.contains(where: { $0.source == resolved }) {
+            return .ready(source: resolved)
+        }
+        if let first = cands.first { return .ready(source: first.source) }
         return .notConfigured
     }
 
