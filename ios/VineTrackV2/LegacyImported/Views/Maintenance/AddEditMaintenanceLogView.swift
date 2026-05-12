@@ -282,8 +282,8 @@ struct AddEditMaintenanceLogView: View {
                 Text("Are you sure you want to delete this maintenance record?")
             }
             .sheet(isPresented: $showAddOther) {
-                NavigationStack {
-                    OtherEquipmentManagementView()
+                OtherEquipmentFormSheet(item: nil) { saved in
+                    itemName = saved.displayName
                 }
             }
             .onAppear {

@@ -53,20 +53,9 @@ struct OtherEquipmentManagementView: View {
                     }
                 }
             } header: {
-                HStack {
-                    Label("Other Items", systemImage: "shippingbox.fill")
-                        .font(.caption.weight(.semibold))
-                        .textCase(.uppercase)
-                    Spacer()
-                    if canManageSetup {
-                        Button {
-                            showAddSheet = true
-                        } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.body)
-                        }
-                    }
-                }
+                Label("Other Items", systemImage: "shippingbox.fill")
+                    .font(.caption.weight(.semibold))
+                    .textCase(.uppercase)
             } footer: {
                 if canManageSetup {
                     Text("Items added here appear in the Maintenance Log Item / Machine selector under Other, and sync with Lovable.")
@@ -136,6 +125,7 @@ struct OtherEquipmentFormSheet: View {
     @Environment(EquipmentItemSyncService.self) private var sync
 
     let item: EquipmentItem?
+    var onSaved: ((EquipmentItem) -> Void)?
 
     @State private var name: String = ""
     @State private var make: String = ""
@@ -143,8 +133,9 @@ struct OtherEquipmentFormSheet: View {
     @State private var serial: String = ""
     @State private var notes: String = ""
 
-    init(item: EquipmentItem?) {
+    init(item: EquipmentItem?, onSaved: ((EquipmentItem) -> Void)? = nil) {
         self.item = item
+        self.onSaved = onSaved
         if let i = item {
             _name = State(initialValue: i.name)
             _make = State(initialValue: i.make ?? "")
@@ -188,7 +179,8 @@ struct OtherEquipmentFormSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        save()
+                        let saved = save()
+                        if let saved { onSaved?(saved) }
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -198,14 +190,16 @@ struct OtherEquipmentFormSheet: View {
         }
     }
 
-    private func save() {
+    @discardableResult
+    private func save() -> EquipmentItem? {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty else { return }
+        guard !trimmedName.isEmpty else { return nil }
         let trimmedMake = make.trimmingCharacters(in: .whitespaces)
         let trimmedModel = model.trimmingCharacters(in: .whitespaces)
         let trimmedSerial = serial.trimmingCharacters(in: .whitespaces)
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        let result: EquipmentItem
         if var existing = item {
             existing.name = trimmedName
             existing.make = trimmedMake.isEmpty ? nil : trimmedMake
@@ -213,16 +207,20 @@ struct OtherEquipmentFormSheet: View {
             existing.serialNumber = trimmedSerial.isEmpty ? nil : trimmedSerial
             existing.notes = trimmedNotes
             store.updateEquipmentItem(existing)
+            result = existing
         } else {
-            store.addEquipmentItem(EquipmentItem(
+            let newItem = EquipmentItem(
                 name: trimmedName,
                 category: "other",
                 make: trimmedMake.isEmpty ? nil : trimmedMake,
                 model: trimmedModel.isEmpty ? nil : trimmedModel,
                 serialNumber: trimmedSerial.isEmpty ? nil : trimmedSerial,
                 notes: trimmedNotes
-            ))
+            )
+            store.addEquipmentItem(newItem)
+            result = newItem
         }
         Task { await sync.syncForSelectedVineyard() }
+        return result
     }
 }
