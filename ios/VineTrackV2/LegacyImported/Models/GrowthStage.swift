@@ -20,6 +20,11 @@ nonisolated struct GrowthStage: Codable, Identifiable, Sendable, Hashable {
         return hasImage.contains(code) ? code : nil
     }
 
+    /// E-L stage code treated as Budburst by the app. Recording a
+    /// growth-stage pin with this code can auto-populate the block's
+    /// `budburstDate` for Optimal Ripeness when none is set.
+    static let budburstCode: String = "EL4"
+
     static let allStages: [GrowthStage] = [
         GrowthStage(code: "EL1", description: "Winter bud", isEnabled: true),
         GrowthStage(code: "EL2", description: "Bud scales opening", isEnabled: true),

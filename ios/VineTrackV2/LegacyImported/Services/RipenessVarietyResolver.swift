@@ -71,26 +71,31 @@ enum RipenessVarietyResolver {
         guard let primary = paddock.varietyAllocations.max(by: { $0.percent < $1.percent }) else {
             return RipenessVarietyResolution(primaryAllocation: nil, variety: nil, status: .missing)
         }
+        return resolve(allocation: primary, store: store)
+    }
 
-        if let variety = store.grapeVariety(for: primary.varietyId) {
+    /// Resolve a specific allocation's variety + target status. Used by
+    /// surfaces that show one row per allocation (e.g. multi-variety
+    /// blocks in the Optimal Ripeness list).
+    static func resolve(allocation: PaddockVarietyAllocation, store: MigratedDataStore) -> RipenessVarietyResolution {
+        if let variety = store.grapeVariety(for: allocation.varietyId) {
             if variety.optimalGDD > 0 {
                 return RipenessVarietyResolution(
-                    primaryAllocation: primary,
+                    primaryAllocation: allocation,
                     variety: variety,
                     status: .ready(variety)
                 )
             }
             return RipenessVarietyResolution(
-                primaryAllocation: primary,
+                primaryAllocation: allocation,
                 variety: variety,
                 status: .missingTarget(variety)
             )
         }
-
         return RipenessVarietyResolution(
-            primaryAllocation: primary,
+            primaryAllocation: allocation,
             variety: nil,
-            status: .unrecognised(primary)
+            status: .unrecognised(allocation)
         )
     }
 

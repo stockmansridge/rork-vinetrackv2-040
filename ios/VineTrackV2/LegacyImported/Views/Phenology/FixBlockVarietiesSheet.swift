@@ -2,10 +2,11 @@ import SwiftUI
 
 /// Focused correction sheet opened from the Optimal Ripeness setup
 /// checklist when one or more blocks have a missing or unrecognised
-/// variety. Lists the problem blocks first and lets the user pick a
-/// recognised variety inline — writes straight back to the paddock
-/// via `MigratedDataStore.updatePaddock`, so changes are reflected in
-/// Block Settings and the checklist immediately.
+/// variety. Supports the same percentage allocation model as the
+/// Block Settings editor — each block can hold one or more variety
+/// allocations whose percentages should total 100%. Saves write
+/// back to the same `MigratedDataStore.updatePaddock` path that
+/// Block Settings uses, so changes are reflected in both places.
 struct FixBlockVarietiesSheet: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -22,13 +23,8 @@ struct FixBlockVarietiesSheet: View {
         }
     }
 
-    private var problemRows: [Row] {
-        allRows.filter { !$0.resolution.isReady }
-    }
-
-    private var resolvedRows: [Row] {
-        allRows.filter { $0.resolution.isReady }
-    }
+    private var problemRows: [Row] { allRows.filter { !$0.resolution.isReady } }
+    private var resolvedRows: [Row] { allRows.filter { $0.resolution.isReady } }
 
     private var managedVarieties: [GrapeVariety] {
         let vineyardId = store.selectedVineyardId
@@ -49,12 +45,12 @@ struct FixBlockVarietiesSheet: View {
             if !problemRows.isEmpty {
                 Section {
                     ForEach(problemRows) { row in
-                        rowView(row)
+                        BlockAllocationEditor(paddockId: row.paddock.id, managedVarieties: managedVarieties)
                     }
                 } header: {
                     Text("Needs Attention")
                 } footer: {
-                    Text("Pick the matching variety from your managed list. Saves immediately to the block's settings.")
+                    Text("Allocate the planted varieties and percentages — totals should add to 100%. Saves immediately to the same data used by Block Settings.")
                         .font(.caption)
                 }
             } else {
@@ -71,7 +67,7 @@ struct FixBlockVarietiesSheet: View {
             if !resolvedRows.isEmpty {
                 Section("Already Configured") {
                     ForEach(resolvedRows) { row in
-                        rowView(row)
+                        BlockAllocationEditor(paddockId: row.paddock.id, managedVarieties: managedVarieties)
                     }
                 }
             }
@@ -79,104 +75,176 @@ struct FixBlockVarietiesSheet: View {
         .navigationTitle("Fix Block Varieties")
         .navigationBarTitleDisplayMode(.inline)
     }
+}
 
-    @ViewBuilder
-    private func rowView(_ row: Row) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(row.paddock.name)
+// MARK: - Per-block allocation editor
+
+private struct BlockAllocationEditor: View {
+    @Environment(MigratedDataStore.self) private var store
+
+    let paddockId: UUID
+    let managedVarieties: [GrapeVariety]
+
+    @State private var allocations: [PaddockVarietyAllocation] = []
+    @State private var loaded: Bool = false
+
+    private var paddock: Paddock? {
+        store.paddocks.first(where: { $0.id == paddockId })
+    }
+
+    private var total: Double { allocations.reduce(0) { $0 + $1.percent } }
+    private var isBalanced: Bool { abs(total - 100) < 0.5 }
+
+    private var available: [GrapeVariety] {
+        let used = Set(allocations.map { $0.varietyId })
+        return managedVarieties.filter { !used.contains($0.id) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(paddock?.name ?? "Block")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
-                statusBadge(row.resolution)
+                if !allocations.isEmpty {
+                    Text("Total: \(Int(total))%")
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(isBalanced ? VineyardTheme.leafGreen : .orange)
+                }
             }
-            Text(currentSummary(row))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Menu {
-                ForEach(managedVarieties) { variety in
+
+            if allocations.isEmpty {
+                Text("No variety allocations yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(allocations) { alloc in
+                allocationRow(alloc)
+            }
+
+            HStack(spacing: 10) {
+                if !available.isEmpty {
                     Button {
-                        applyVariety(variety, to: row.paddock)
+                        addAllocation()
                     } label: {
-                        HStack {
-                            Text(variety.name)
-                            if variety.optimalGDD > 0 {
-                                Text("\u{2022} \(Int(variety.optimalGDD)) GDD")
-                            } else {
-                                Text("\u{2022} no target")
-                            }
+                        Label("Add Variety", systemImage: "plus.circle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(VineyardTheme.info)
+                    }
+                    .buttonStyle(.plain)
+                } else if !managedVarieties.isEmpty {
+                    Text("All varieties already allocated.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !isBalanced, !allocations.isEmpty {
+                    Label("Doesn't total 100%", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .onAppear {
+            if !loaded, let p = paddock {
+                allocations = p.varietyAllocations
+                loaded = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func allocationRow(_ alloc: PaddockVarietyAllocation) -> some View {
+        let current = store.grapeVariety(for: alloc.varietyId)
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(managedVarieties) { v in
+                    Button {
+                        replaceVariety(alloc.id, with: v.id)
+                    } label: {
+                        if v.optimalGDD > 0 {
+                            Text("\(v.name) • \(Int(v.optimalGDD)) GDD")
+                        } else {
+                            Text("\(v.name) • no target")
                         }
                     }
                 }
                 if managedVarieties.isEmpty {
-                    Text("No varieties available — add some under Grape Varieties.")
+                    Text("No varieties available")
                 }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                    Text(row.resolution.isReady ? "Change Variety" : "Choose Variety")
-                    Spacer()
+                HStack(spacing: 4) {
+                    Text(current?.name ?? "Choose Variety")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(current == nil ? .orange : .primary)
+                        .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                .font(.caption.weight(.semibold))
-                .padding(.vertical, 6)
-                .padding(.horizontal, 10)
-                .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 8))
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 6))
             }
-        }
-        .padding(.vertical, 4)
-    }
+            .buttonStyle(.plain)
 
-    @ViewBuilder
-    private func statusBadge(_ resolution: RipenessVarietyResolution) -> some View {
-        switch resolution.status {
-        case .ready:
-            Label("Ready", systemImage: "checkmark.seal.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(VineyardTheme.leafGreen)
-        case .missingTarget:
-            Label("No GDD target", systemImage: "exclamationmark.circle")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
-        case .unrecognised:
-            Label("Unrecognised", systemImage: "questionmark.circle")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
-        case .missing:
-            Label("No variety", systemImage: "exclamationmark.circle")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
-        }
-    }
+            Spacer(minLength: 4)
 
-    private func currentSummary(_ row: Row) -> String {
-        switch row.resolution.status {
-        case .ready(let v):
-            return "Current: \(v.name) \u{2022} \(Int(v.optimalGDD)) GDD"
-        case .missingTarget(let v):
-            return "Current: \(v.name) \u{2022} no GDD target set"
-        case .unrecognised:
-            return "Variety is not in the ripeness variety list."
-        case .missing:
-            return "No variety assigned to this block."
+            TextField("0", value: percentBinding(for: alloc.id), format: .number)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 56)
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+            Text("%")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button {
+                allocations.removeAll { $0.id == alloc.id }
+                persist()
+            } label: {
+                Image(systemName: "minus.circle.fill")
+                    .foregroundStyle(.red)
+            }
+            .buttonStyle(.plain)
         }
     }
 
-    private func applyVariety(_ variety: GrapeVariety, to paddock: Paddock) {
-        var updated = paddock
-        if let idx = updated.varietyAllocations.firstIndex(where: { $0.id == paddock.varietyAllocations.max(by: { $0.percent < $1.percent })?.id }) {
-            // Replace the primary allocation's varietyId, preserve percent.
-            updated.varietyAllocations[idx] = PaddockVarietyAllocation(
-                id: updated.varietyAllocations[idx].id,
-                varietyId: variety.id,
-                percent: updated.varietyAllocations[idx].percent
-            )
-        } else {
-            updated.varietyAllocations = [
-                PaddockVarietyAllocation(varietyId: variety.id, percent: 100)
-            ]
-        }
-        store.updatePaddock(updated)
+    private func percentBinding(for id: UUID) -> Binding<Double> {
+        Binding(
+            get: { allocations.first(where: { $0.id == id })?.percent ?? 0 },
+            set: { newValue in
+                if let i = allocations.firstIndex(where: { $0.id == id }) {
+                    allocations[i].percent = newValue
+                    persist()
+                }
+            }
+        )
+    }
+
+    private func addAllocation() {
+        let remaining = max(0, 100 - total)
+        let suggested = allocations.isEmpty ? 100.0 : remaining
+        guard let v = available.first else { return }
+        allocations.append(PaddockVarietyAllocation(varietyId: v.id, percent: suggested))
+        persist()
+    }
+
+    private func replaceVariety(_ allocId: UUID, with varietyId: UUID) {
+        guard let i = allocations.firstIndex(where: { $0.id == allocId }) else { return }
+        allocations[i] = PaddockVarietyAllocation(
+            id: allocations[i].id,
+            varietyId: varietyId,
+            percent: allocations[i].percent
+        )
+        persist()
+    }
+
+    private func persist() {
+        guard var current = paddock else { return }
+        current.varietyAllocations = allocations
+        store.updatePaddock(current)
     }
 }

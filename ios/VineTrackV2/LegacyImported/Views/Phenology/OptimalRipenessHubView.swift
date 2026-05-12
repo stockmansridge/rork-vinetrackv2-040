@@ -15,6 +15,8 @@ struct OptimalRipenessHubView: View {
     @Environment(DegreeDayService.self) private var degreeDayService
 
     @State private var activeDestination: SetupChecklistDestination?
+    @State private var budburstFocusPaddockId: UUID?
+    @State private var showBudburstSheet: Bool = false
 
     private var candidates: [RipenessSourceCandidate] {
         RipenessMath.candidates(store: store)
@@ -29,8 +31,12 @@ struct OptimalRipenessHubView: View {
     }
 
     fileprivate struct BlockRow: Identifiable {
-        let id: UUID
+        let id: String
         let block: Paddock
+        let allocation: PaddockVarietyAllocation?
+        /// Number of allocations on the block (used to decide whether to
+        /// surface the variety percentage in the row label).
+        let allocationCount: Int
         let variety: GrapeVariety?
         let resolution: RipenessVarietyResolution
         let resetDate: Date?
@@ -50,10 +56,6 @@ struct OptimalRipenessHubView: View {
         let latitude = store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
         var rows: [BlockRow] = []
         for block in store.orderedPaddocks {
-            // Resolve the primary allocated variety using the centralised
-            // resolver shared with the setup checklist.
-            let resolution = RipenessVarietyResolver.resolve(block, store: store)
-            let variety = resolution.variety
             let resetMode = block.effectiveResetMode(defaultMode: resetDefault)
             let resetDate = block.resetDate(for: resetMode, seasonStart: seasonStart)
             let calcMode = block.effectiveCalculationMode(defaultMode: modeDefault)
@@ -69,16 +71,43 @@ struct OptimalRipenessHubView: View {
                 )
                 total = series.last?.cumulative ?? 0
             }
-            rows.append(BlockRow(
-                id: block.id,
-                block: block,
-                variety: variety,
-                resolution: resolution,
-                resetDate: resetDate,
-                total: total,
-                target: variety?.optimalGDD ?? 0,
-                series: series
-            ))
+
+            // One row per allocation so multi-variety blocks surface each
+            // variety's ripeness independently. Blocks with no allocations
+            // still produce a single row in the `.missing` state so the
+            // checklist warnings remain visible in context.
+            let allocations = block.varietyAllocations.sorted { $0.percent > $1.percent }
+            if allocations.isEmpty {
+                let resolution = RipenessVarietyResolver.resolve(block, store: store)
+                rows.append(BlockRow(
+                    id: block.id.uuidString,
+                    block: block,
+                    allocation: nil,
+                    allocationCount: 0,
+                    variety: nil,
+                    resolution: resolution,
+                    resetDate: resetDate,
+                    total: total,
+                    target: 0,
+                    series: series
+                ))
+            } else {
+                for alloc in allocations {
+                    let resolution = RipenessVarietyResolver.resolve(allocation: alloc, store: store)
+                    rows.append(BlockRow(
+                        id: "\(block.id.uuidString)-\(alloc.id.uuidString)",
+                        block: block,
+                        allocation: alloc,
+                        allocationCount: allocations.count,
+                        variety: resolution.variety,
+                        resolution: resolution,
+                        resetDate: resetDate,
+                        total: total,
+                        target: resolution.variety?.optimalGDD ?? 0,
+                        series: series
+                    ))
+                }
+            }
         }
         return rows.sorted { a, b in
             let pa = a.target > 0 ? a.total / a.target : 0
@@ -134,15 +163,18 @@ struct OptimalRipenessHubView: View {
                     if activeSource != nil {
                         Section {
                             ForEach(blockRows) { row in
-                                if let variety = row.variety {
-                                    NavigationLink {
-                                        VarietyGDDDetailView(varietyId: variety.id)
-                                    } label: {
-                                        BlockRipenessRow(row: row)
+                                rowContent(row)
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                        if row.block.effectiveResetMode(defaultMode: store.settings.resetMode) == .budburst {
+                                            Button {
+                                                budburstFocusPaddockId = row.block.id
+                                                showBudburstSheet = true
+                                            } label: {
+                                                Label("Budburst", systemImage: "leaf.arrow.triangle.circlepath")
+                                            }
+                                            .tint(VineyardTheme.leafGreen)
+                                        }
                                     }
-                                } else {
-                                    BlockRipenessRow(row: row)
-                                }
                             }
                         } header: {
                             Text("Blocks")
@@ -169,6 +201,29 @@ struct OptimalRipenessHubView: View {
                         }
                     }
             }
+        }
+        .sheet(isPresented: $showBudburstSheet) {
+            NavigationStack {
+                SetBudburstDatesSheet(focusPaddockId: budburstFocusPaddockId)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showBudburstSheet = false }
+                        }
+                    }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowContent(_ row: BlockRow) -> some View {
+        if let variety = row.variety {
+            NavigationLink {
+                VarietyGDDDetailView(varietyId: variety.id)
+            } label: {
+                BlockRipenessRow(row: row)
+            }
+        } else {
+            BlockRipenessRow(row: row)
         }
     }
 
@@ -279,10 +334,17 @@ private struct BlockRipenessRow: View {
                         .lineLimit(1)
                     HStack(spacing: 6) {
                         if let variety = row.variety {
-                            Text(variety.name)
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                            if let alloc = row.allocation, row.allocationCount > 1 {
+                                Text("\(variety.name) • \(Int(alloc.percent))%")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            } else {
+                                Text(variety.name)
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         } else if hasUnresolvedVariety {
                             Text("Unrecognised variety")
                                 .font(.caption2.weight(.medium))
@@ -357,6 +419,7 @@ enum SetupChecklistDestination: Identifiable {
     case seasonStart
     case varietyTargets
     case blockLocation
+    case budburstDates
 
     var id: String {
         switch self {
@@ -366,6 +429,7 @@ enum SetupChecklistDestination: Identifiable {
         case .seasonStart: return "seasonStart"
         case .varietyTargets: return "varietyTargets"
         case .blockLocation: return "blockLocation"
+        case .budburstDates: return "budburstDates"
         }
     }
 
@@ -382,6 +446,8 @@ enum SetupChecklistDestination: Identifiable {
             OperationPreferencesView()
         case .varietyTargets:
             GrapeVarietyManagementView()
+        case .budburstDates:
+            SetBudburstDatesSheet()
         }
     }
 }
@@ -534,7 +600,37 @@ private struct SetupChecklist {
             destination: .varietyTargets
         ))
 
-        // 5. Block location (for Open-Meteo fallback)
+        // 5. Budburst dates (only when budburst reset mode is in play).
+        //
+        // We surface this row whenever the vineyard default OR any per-block
+        // override is set to `.budburst`, so the checklist guides the user
+        // to set the date that the GDD calculation actually depends on.
+        let resetDefault = store.settings.resetMode
+        let budburstBlocks = blocks.filter { $0.effectiveResetMode(defaultMode: resetDefault) == .budburst }
+        if !budburstBlocks.isEmpty {
+            let missing = budburstBlocks.filter { $0.budburstDate == nil }
+            let bbOK = missing.isEmpty
+            let detail: String
+            let action: String?
+            if bbOK {
+                detail = "\(budburstBlocks.count) block\(budburstBlocks.count == 1 ? "" : "s") • using block budburst date"
+                action = nil
+            } else {
+                let names = missing.prefix(3).map(\.name).joined(separator: ", ")
+                let suffix = missing.count > 3 ? " and \(missing.count - 3) more" : ""
+                detail = "Missing for: \(names)\(suffix) — using season start date as fallback"
+                action = "Set Budburst Dates"
+            }
+            items.append(SetupChecklistItem(
+                title: "Budburst dates",
+                detail: detail,
+                ok: bbOK,
+                action: action,
+                destination: .budburstDates
+            ))
+        }
+
+        // 6. Block location (for Open-Meteo fallback)
         let hasCoords = store.settings.vineyardLatitude != nil
             || store.paddockCentroidLatitude != nil
         items.append(SetupChecklistItem(

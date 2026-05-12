@@ -116,6 +116,22 @@ final class GrowthStageRecordSyncService {
             #endif
         }
         persist()
+        // Auto-suggest budburst date when a Budburst (EL4) growth stage
+        // is recorded against a paddock with no Budburst date yet. The
+        // value is the same field Block Settings and Optimal Ripeness
+        // read, so the GDD calculation picks it up immediately.
+        if code == GrowthStage.budburstCode,
+           let paddockId = pin.paddockId,
+           let store,
+           let pIdx = store.paddocks.firstIndex(where: { $0.id == paddockId }),
+           store.paddocks[pIdx].budburstDate == nil {
+            var p = store.paddocks[pIdx]
+            p.budburstDate = pin.timestamp
+            store.updatePaddock(p)
+            #if DEBUG
+            print("[GrowthStageRecord] auto-set budburstDate=\(pin.timestamp) for paddock=\(paddockId) from EL4 pin=\(pin.id)")
+            #endif
+        }
         // Best-effort: push immediately so the record is visible to other
         // devices / Lovable without waiting for the next sync cycle.
         Task { [weak self] in
