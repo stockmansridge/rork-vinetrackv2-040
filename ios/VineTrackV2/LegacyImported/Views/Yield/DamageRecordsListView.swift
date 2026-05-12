@@ -6,7 +6,11 @@ struct DamageRecordsListView: View {
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
     @Environment(\.accessControl) private var accessControl
 
+    @State private var showReportSheet: Bool = false
+    @State private var pendingPaddock: Paddock?
+
     private var canDelete: Bool { accessControl?.canDelete ?? false }
+    private var canCreate: Bool { true }
 
     private var paddocks: [Paddock] {
         store.orderedPaddocks.filter { $0.polygonPoints.count >= 3 }
@@ -28,21 +32,36 @@ struct DamageRecordsListView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                if allDamageRecords.isEmpty {
-                    emptyState
-                } else {
-                    summarySection
-                    blockDamageSection
-                    allRecordsSection
+                overviewSection
+
+                if !affectedPaddocks.isEmpty {
+                    yieldImpactSection
                 }
 
-                addDamageSection
+                damageReportsSection
             }
             .padding(.horizontal)
             .padding(.bottom, 32)
         }
-        .navigationTitle("Record Damage")
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Damage Reports")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showReportSheet = true
+                } label: {
+                    Label("Report Damage", systemImage: "plus.circle.fill")
+                }
+                .disabled(paddocks.isEmpty)
+            }
+        }
+        .sheet(isPresented: $showReportSheet) {
+            reportDamagePicker
+        }
+        .navigationDestination(item: $pendingPaddock) { paddock in
+            RecordDamageView(paddock: paddock)
+        }
         .task {
             await damageRecordSync.syncForSelectedVineyard()
         }
@@ -51,33 +70,34 @@ struct DamageRecordsListView: View {
         }
     }
 
-    // MARK: - Empty State
+    // MARK: - Damage Overview
 
-    private var emptyState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "shield.checkered")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("No Damage Recorded")
-                .font(.title3.weight(.semibold))
-            Text("Select a block below to record damage from frost, hail, wind, or other events.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
+    private var totalAffectedHa: Double {
+        allDamageRecords.reduce(0) { $0 + $1.areaHectares }
     }
 
-    // MARK: - Summary
+    private var effectiveLossHa: Double {
+        allDamageRecords.reduce(0) { acc, record in
+            acc + record.areaHectares * (max(0, min(100, record.damagePercent)) / 100.0)
+        }
+    }
 
-    private var summarySection: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
+    private var overallImpactPercent: Double {
+        let total = paddocks.reduce(0.0) { $0 + $1.areaHectares }
+        guard total > 0 else { return 0 }
+        return min(100, (effectiveLossHa / total) * 100)
+    }
+
+    private var overviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Damage Overview", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                 overviewCard(
-                    title: "Total Records",
+                    title: "Records",
                     value: "\(allDamageRecords.count)",
-                    icon: "exclamationmark.triangle.fill",
+                    icon: "list.bullet.clipboard",
                     color: .orange
                 )
                 overviewCard(
@@ -86,12 +106,24 @@ struct DamageRecordsListView: View {
                     icon: "map.fill",
                     color: .red
                 )
+                overviewCard(
+                    title: "Effective Loss",
+                    value: String(format: "%.2f ha", effectiveLossHa),
+                    icon: "leaf.fill",
+                    color: .brown
+                )
+                overviewCard(
+                    title: "Yield Impact",
+                    value: String(format: "%.1f%%", overallImpactPercent),
+                    icon: "chart.line.downtrend.xyaxis",
+                    color: .pink
+                )
             }
         }
     }
 
     private func overviewCard(title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.caption.weight(.semibold))
@@ -101,79 +133,111 @@ struct DamageRecordsListView: View {
                     .foregroundStyle(.secondary)
             }
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(.title3.weight(.bold))
                 .foregroundStyle(.primary)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
     }
 
-    // MARK: - Block Damage Summary
+    // MARK: - Yield Impact (per-block viability)
 
     private var affectedPaddocks: [Paddock] {
         paddocks.filter { !store.damageRecords(for: $0.id).isEmpty }
     }
 
-    private var blockDamageSection: some View {
+    private var yieldImpactSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Block Viability", systemImage: "chart.bar.xaxis")
+            Label("Yield Impact", systemImage: "chart.bar.xaxis")
                 .font(.headline)
 
-            ForEach(affectedPaddocks) { paddock in
-                let records = store.damageRecords(for: paddock.id)
-                let factor = store.damageFactor(for: paddock.id)
-                let color = colorFor(paddock)
+            VStack(spacing: 8) {
+                ForEach(affectedPaddocks) { paddock in
+                    let records = store.damageRecords(for: paddock.id)
+                    let factor = store.damageFactor(for: paddock.id)
+                    let color = colorFor(paddock)
 
-                HStack(spacing: 12) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 10, height: 10)
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(color)
+                            .frame(width: 8, height: 8)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(paddock.name)
-                            .font(.subheadline.weight(.semibold))
-                        Text("\(records.count) damage record\(records.count == 1 ? "" : "s")")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(paddock.name)
+                                .font(.subheadline.weight(.semibold))
+                            Text("\(records.count) record\(records.count == 1 ? "" : "s")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
 
-                    Spacer()
+                        Spacer()
 
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text(String(format: "%.0f%%", factor * 100))
-                            .font(.subheadline.weight(.bold))
+                        Text(String(format: "%.0f%% viable", factor * 100))
+                            .font(.caption.weight(.bold))
                             .foregroundStyle(factor >= 0.8 ? .green : factor >= 0.5 ? .orange : .red)
-                        Text("viable")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 10))
                 }
-                .padding(12)
-                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
             }
         }
     }
 
-    // MARK: - All Records
+    // MARK: - Damage Reports list
 
-    private var allRecordsSection: some View {
+    private var damageReportsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("All Damage Records", systemImage: "list.bullet.clipboard")
-                .font(.headline)
+            HStack {
+                Label("Damage Reports", systemImage: "list.bullet.clipboard")
+                    .font(.headline)
+                Spacer()
+                if !allDamageRecords.isEmpty {
+                    Text("\(allDamageRecords.count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(Color(.secondarySystemFill), in: .capsule)
+                }
+            }
 
-            ForEach(allDamageRecords) { record in
-                SwipeToDeleteCard(
-                    actionLabel: "Delete",
-                    isEnabled: canDelete
-                ) {
-                    store.deleteDamageRecord(record)
-                    Task { await damageRecordSync.syncForSelectedVineyard() }
-                } content: {
-                    damageRecordCard(record)
+            if allDamageRecords.isEmpty {
+                emptyState
+            } else {
+                ForEach(allDamageRecords) { record in
+                    SwipeToDeleteCard(
+                        actionLabel: "Delete",
+                        isEnabled: canDelete
+                    ) {
+                        store.deleteDamageRecord(record)
+                        Task { await damageRecordSync.syncForSelectedVineyard() }
+                    } content: {
+                        damageRecordCard(record)
+                    }
                 }
             }
         }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "shield.checkered")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("No Damage Recorded")
+                .font(.subheadline.weight(.semibold))
+            Text("Tap Report Damage to log frost, hail, wind, or other damage events.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
     }
 
     private func damageRecordCard(_ record: DamageRecord) -> some View {
@@ -189,15 +253,6 @@ struct DamageRecordsListView: View {
             damageRecordCardContent(record, paddockName: paddockName, color: color)
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            if let paddock {
-                NavigationLink {
-                    RecordDamageView(paddock: paddock, editingRecord: record)
-                } label: {
-                    Label("Edit Record", systemImage: "pencil")
-                }
-            }
-        }
     }
 
     private func damageRecordCardContent(_ record: DamageRecord, paddockName: String, color: Color) -> some View {
@@ -263,70 +318,93 @@ struct DamageRecordsListView: View {
         }
     }
 
-    // MARK: - Add Damage
+    // MARK: - Report Damage Sheet (paddock picker)
 
-    private var addDamageSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("Record New Damage", systemImage: "plus.circle.fill")
-                .font(.headline)
-
-            if paddocks.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "map")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("No blocks with boundaries found")
+    private var reportDamagePicker: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Select the block where damage occurred.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
-                    ForEach(paddocks) { paddock in
-                        let color = colorFor(paddock)
-                        let existingCount = store.damageRecords(for: paddock.id).count
+                        .padding(.horizontal, 4)
 
-                        NavigationLink {
-                            RecordDamageView(paddock: paddock)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .font(.body.weight(.medium))
-                                    .foregroundStyle(color)
-
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(paddock.name)
-                                        .font(.subheadline.weight(.medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                    if existingCount > 0 {
-                                        Text("\(existingCount) existing")
-                                            .font(.caption2)
-                                            .foregroundStyle(.orange)
-                                    } else {
-                                        Text(String(format: "%.2f Ha", paddock.areaHectares))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-
-                                Spacer(minLength: 0)
-
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                    if paddocks.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "map")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("No blocks with boundaries found")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                            ForEach(paddocks) { paddock in
+                                paddockPickerButton(paddock)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .fill(Color(.tertiarySystemFill))
-                            )
                         }
                     }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Report Damage")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") { showReportSheet = false }
+                }
             }
         }
+    }
+
+    private func paddockPickerButton(_ paddock: Paddock) -> some View {
+        let color = colorFor(paddock)
+        let existingCount = store.damageRecords(for: paddock.id).count
+
+        return Button {
+            showReportSheet = false
+            // Defer to allow sheet dismissal to complete before pushing.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                pendingPaddock = paddock
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(color)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(paddock.name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if existingCount > 0 {
+                        Text("\(existingCount) existing")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text(String(format: "%.2f Ha", paddock.areaHectares))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
     }
 }
