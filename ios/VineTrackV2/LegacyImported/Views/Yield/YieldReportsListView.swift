@@ -210,17 +210,6 @@ struct YieldReportsListView: View {
                     color: .teal
                 )
             }
-
-            Button {
-                showStartEstimateSheet = true
-            } label: {
-                Label("New Yield Estimate", systemImage: "plus.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(VineyardTheme.leafGreen)
         }
     }
 

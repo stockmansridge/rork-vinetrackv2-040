@@ -60,10 +60,6 @@ struct YieldEstimationView: View {
 
                     bunchWeightButton
 
-                    if viewModel.recordedSiteCount > 0 {
-                        reportButton
-                    }
-
                     if !viewModel.isCompleted && viewModel.recordedSiteCount > 0 {
                         completeJobButton
                     }
