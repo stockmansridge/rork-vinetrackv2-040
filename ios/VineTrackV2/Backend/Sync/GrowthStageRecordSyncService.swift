@@ -66,6 +66,38 @@ final class GrowthStageRecordSyncService {
         store.onGrowthStagePinDeleted = { [weak self] pinId in
             self?.softDeleteByPin(pinId)
         }
+        // Backfill: mirror any growth-stage pins that already exist locally
+        // (e.g. pins created before this sync service was wired up, or
+        // imported from a previous app version) so they appear in the new
+        // Growth Stage Records list without requiring a fresh observation.
+        backfillFromExistingPins()
+    }
+
+    // MARK: - Backfill
+
+    /// Mirror any growth-stage pins in `store.pins` that don't yet have a
+    /// corresponding `GrowthStageRecord`. Idempotent and cheap to call on
+    /// every configure.
+    func backfillFromExistingPins() {
+        guard let store else { return }
+        let mirroredPinIds = Set(records.compactMap { $0.pinId })
+        let candidates = store.pins.filter { pin in
+            pin.mode == .growth
+                && (pin.growthStageCode?.isEmpty == false)
+                && !mirroredPinIds.contains(pin.id)
+        }
+        guard !candidates.isEmpty else { return }
+        #if DEBUG
+        print("[GrowthStageRecord] backfillFromExistingPins mirroring \(candidates.count) legacy pins")
+        #endif
+        for pin in candidates {
+            mirrorPinWithoutSync(pin)
+        }
+        persist()
+        // Push the backfilled rows once at the end.
+        Task { [weak self] in
+            await self?.syncForSelectedVineyard()
+        }
     }
 
     // MARK: - Mirroring
@@ -77,11 +109,38 @@ final class GrowthStageRecordSyncService {
         #if DEBUG
         print("[GrowthStageRecord] mirrorGrowthStagePin pinId=\(pin.id) mode=\(pin.mode) code=\(pin.growthStageCode ?? "nil") vineyardId=\(pin.vineyardId) paddockId=\(pin.paddockId?.uuidString ?? "nil")")
         #endif
+        guard mirrorPinWithoutSync(pin) else { return }
+        persist()
+        // Auto-suggest budburst date when a Budburst (EL4) growth stage
+        // is recorded against a paddock with no Budburst date yet.
+        if pin.growthStageCode == GrowthStage.budburstCode,
+           let paddockId = pin.paddockId,
+           let store,
+           let pIdx = store.paddocks.firstIndex(where: { $0.id == paddockId }),
+           store.paddocks[pIdx].budburstDate == nil {
+            var p = store.paddocks[pIdx]
+            p.budburstDate = pin.timestamp
+            store.updatePaddock(p)
+            #if DEBUG
+            print("[GrowthStageRecord] auto-set budburstDate=\(pin.timestamp) for paddock=\(paddockId) from EL4 pin=\(pin.id)")
+            #endif
+        }
+        // Best-effort: push immediately so the record is visible to other
+        // devices / Lovable without waiting for the next sync cycle.
+        Task { [weak self] in
+            await self?.syncForSelectedVineyard()
+        }
+    }
+
+    /// Core mirror logic without persistence or sync side-effects. Returns
+    /// `true` if the pin was a valid growth-stage pin and was mirrored.
+    @discardableResult
+    private func mirrorPinWithoutSync(_ pin: VinePin) -> Bool {
         guard pin.mode == .growth, let code = pin.growthStageCode, !code.isEmpty else {
             #if DEBUG
-            print("[GrowthStageRecord] mirrorGrowthStagePin SKIPPED — not a growth-stage pin")
+            print("[GrowthStageRecord] mirrorPinWithoutSync SKIPPED — not a growth-stage pin")
             #endif
-            return
+            return false
         }
         let stageLabel = GrowthStage.allStages.first { $0.code == code }?.description
         let variety = variety(for: pin.paddockId)
@@ -107,7 +166,7 @@ final class GrowthStageRecordSyncService {
                 pin,
                 stageLabel: stageLabel,
                 variety: variety
-            ) else { return }
+            ) else { return false }
             mirrored.recordedByName = pin.createdBy ?? auth?.userName
             records.append(mirrored)
             metadata.markDirty(mirrored.id, at: Date())
@@ -115,28 +174,7 @@ final class GrowthStageRecordSyncService {
             print("[GrowthStageRecord] mirrored new record id=\(mirrored.id) for pin=\(pin.id)")
             #endif
         }
-        persist()
-        // Auto-suggest budburst date when a Budburst (EL4) growth stage
-        // is recorded against a paddock with no Budburst date yet. The
-        // value is the same field Block Settings and Optimal Ripeness
-        // read, so the GDD calculation picks it up immediately.
-        if code == GrowthStage.budburstCode,
-           let paddockId = pin.paddockId,
-           let store,
-           let pIdx = store.paddocks.firstIndex(where: { $0.id == paddockId }),
-           store.paddocks[pIdx].budburstDate == nil {
-            var p = store.paddocks[pIdx]
-            p.budburstDate = pin.timestamp
-            store.updatePaddock(p)
-            #if DEBUG
-            print("[GrowthStageRecord] auto-set budburstDate=\(pin.timestamp) for paddock=\(paddockId) from EL4 pin=\(pin.id)")
-            #endif
-        }
-        // Best-effort: push immediately so the record is visible to other
-        // devices / Lovable without waiting for the next sync cycle.
-        Task { [weak self] in
-            await self?.syncForSelectedVineyard()
-        }
+        return true
     }
 
     private func variety(for paddockId: UUID?) -> String? {

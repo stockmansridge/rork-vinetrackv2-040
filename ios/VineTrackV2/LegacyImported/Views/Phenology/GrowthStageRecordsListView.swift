@@ -14,9 +14,40 @@ struct GrowthStageRecordsListView: View {
 
     private var vineyardRecords: [GrowthStageRecord] {
         guard let vineyardId = store.selectedVineyardId else { return [] }
-        return growthStageRecordSync.records
-            .filter { $0.vineyardId == vineyardId }
-            .sorted { $0.observedAt > $1.observedAt }
+        let mirrored = growthStageRecordSync.records.filter { $0.vineyardId == vineyardId }
+        // Fallback: synthesize ephemeral records for any growth-stage pins
+        // that haven't been mirrored yet (e.g. legacy pins created before
+        // the sync service existed). This guarantees the new list is never
+        // empty when the old Growth Stage Report can see records.
+        let mirroredPinIds = Set(mirrored.compactMap { $0.pinId })
+        let legacy: [GrowthStageRecord] = store.pins.compactMap { pin in
+            guard pin.vineyardId == vineyardId,
+                  pin.mode == .growth,
+                  let code = pin.growthStageCode, !code.isEmpty,
+                  !mirroredPinIds.contains(pin.id) else { return nil }
+            let label = GrowthStage.allStages.first { $0.code == code }?.description
+            let variety = paddockVariety(for: pin.paddockId)
+            return GrowthStageRecord(
+                id: pin.id, // ephemeral, stable per pin
+                vineyardId: pin.vineyardId,
+                paddockId: pin.paddockId,
+                pinId: pin.id,
+                stageCode: code,
+                stageLabel: label,
+                variety: variety,
+                observedAt: pin.timestamp,
+                latitude: pin.latitude,
+                longitude: pin.longitude,
+                rowNumber: pin.rowNumber,
+                side: nil, // intentionally hidden for growth-stage display
+                notes: pin.notes,
+                photoPaths: pin.photoPath.map { [$0] } ?? [],
+                recordedByName: pin.createdBy,
+                createdAt: pin.timestamp,
+                updatedAt: pin.timestamp
+            )
+        }
+        return (mirrored + legacy).sorted { $0.observedAt > $1.observedAt }
     }
 
     private var filteredRecords: [GrowthStageRecord] {
@@ -239,5 +270,16 @@ struct GrowthStageRecordsListView: View {
     private func paddockName(for id: UUID?) -> String? {
         guard let id else { return nil }
         return store.paddocks.first(where: { $0.id == id })?.name
+    }
+
+    private func paddockVariety(for id: UUID?) -> String? {
+        guard let id, let paddock = store.paddocks.first(where: { $0.id == id }) else { return nil }
+        for child in Mirror(reflecting: paddock).children {
+            guard let label = child.label?.lowercased() else { continue }
+            if label == "variety" || label == "grapevariety" || label == "grape" {
+                if let s = child.value as? String, !s.isEmpty { return s }
+            }
+        }
+        return nil
     }
 }
