@@ -31,9 +31,8 @@ struct OptimalRipenessHubView: View {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    private var hasWeatherStation: Bool {
-        if let id = store.settings.weatherStationId, !id.isEmpty { return true }
-        return false
+    private var weatherState: RipenessWeatherState {
+        RipenessMath.weatherState(store: store)
     }
 
     var body: some View {
@@ -44,11 +43,17 @@ struct OptimalRipenessHubView: View {
                 } description: {
                     Text("Add grape varieties under Setup → Grape Varieties to track ripeness.")
                 }
-            } else if !hasWeatherStation {
+            } else if case .notConfigured = weatherState {
                 ContentUnavailableView {
                     Label("Weather Station Required", systemImage: "thermometer.sun")
                 } description: {
                     Text("Connect a weather station to compute growing degree days for ripeness predictions.")
+                }
+            } else if case .configuredButGDDUnavailable = weatherState {
+                ContentUnavailableView {
+                    Label("Weather Data Unavailable", systemImage: "thermometer.sun")
+                } description: {
+                    Text("Weather is configured for this vineyard, but Optimal Ripeness needs a Weather Underground PWS for daily high/low temperatures. Add one under Weather Settings → Weather Underground to enable GDD predictions.")
                 }
             } else {
                 List {

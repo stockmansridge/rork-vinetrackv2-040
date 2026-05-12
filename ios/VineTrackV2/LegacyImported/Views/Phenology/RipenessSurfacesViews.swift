@@ -16,7 +16,49 @@ import SwiftUI
 
 // MARK: - Shared math helpers
 
-private enum RipenessMath {
+/// Unified weather configuration state used by every Optimal Ripeness
+/// surface. Mirrors the rest of the app's weather-source detection
+/// (Weather Underground PWS, Davis WeatherLink, or vineyard coordinates
+/// for Open-Meteo) so we don't falsely claim "weather station required"
+/// when the vineyard already has weather configured elsewhere.
+enum RipenessWeatherState {
+    /// Weather Underground PWS configured — GDD history can be computed.
+    case ready(stationId: String)
+    /// Davis WeatherLink or vineyard coordinates (Open-Meteo) are
+    /// configured, but `DegreeDayService` still needs a WU PWS to pull
+    /// daily highs/lows. UI should explain this rather than say the
+    /// station is missing.
+    case configuredButGDDUnavailable
+    /// No weather source configured for this vineyard at all.
+    case notConfigured
+}
+
+enum RipenessMath {
+    @MainActor
+    static func weatherState(store: MigratedDataStore) -> RipenessWeatherState {
+        if let id = store.settings.weatherStationId, !id.isEmpty {
+            return .ready(stationId: id)
+        }
+        let hasCoords =
+            (store.settings.vineyardLatitude != nil && store.settings.vineyardLongitude != nil)
+            || (store.paddockCentroidLatitude != nil && store.paddockCentroidLongitude != nil)
+        var davisConfigured = false
+        if let vid = store.selectedVineyardId {
+            let cfg = WeatherProviderStore.shared.config(for: vid)
+            let hasShared = cfg.davisIsVineyardShared
+                && cfg.davisVineyardHasServerCredentials
+                && (cfg.davisStationId?.isEmpty == false)
+            let hasLocal = cfg.davisHasCredentials
+                && cfg.davisConnectionTested
+                && (cfg.davisStationId?.isEmpty == false)
+            davisConfigured = hasShared || hasLocal
+        }
+        if davisConfigured || hasCoords {
+            return .configuredButGDDUnavailable
+        }
+        return .notConfigured
+    }
+
     static func seasonStartDate(settings: AppSettings) -> Date {
         let cal = Calendar.current
         let now = Date()
@@ -102,10 +144,6 @@ struct BlockRipenessChip: View {
 
     private var paddock: Paddock? { store.paddocks.first(where: { $0.id == paddockId }) }
     private var variety: GrapeVariety? { store.grapeVariety(for: varietyId) }
-    private var hasWeatherStation: Bool {
-        if let id = store.settings.weatherStationId, !id.isEmpty { return true }
-        return false
-    }
 
     private var resetMode: GDDResetMode? {
         guard let paddock else { return nil }
@@ -133,7 +171,11 @@ struct BlockRipenessChip: View {
     }
 
     private var caveatMessage: String? {
-        if !hasWeatherStation {
+        switch RipenessMath.weatherState(store: store) {
+        case .ready: break
+        case .configuredButGDDUnavailable:
+            return "Weather data not yet available for GDD — add a Weather Underground PWS in Weather Settings"
+        case .notConfigured:
             return "Add a weather station to project ripeness"
         }
         if !hasResetData, let mode = resetMode {
@@ -261,9 +303,8 @@ struct RipenessWatchTile: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(DegreeDayService.self) private var degreeDayService
 
-    private var hasWeatherStation: Bool {
-        if let id = store.settings.weatherStationId, !id.isEmpty { return true }
-        return false
+    private var weatherState: RipenessWeatherState {
+        RipenessMath.weatherState(store: store)
     }
 
     private struct VarietyStatus {
@@ -284,7 +325,7 @@ struct RipenessWatchTile: View {
     }
 
     private var topVariety: VarietyStatus? {
-        guard hasWeatherStation else { return nil }
+        guard case .ready = weatherState else { return nil }
         var results: [VarietyStatus] = []
         for variety in allocatedVarieties {
             let blocks = store.orderedPaddocks.filter { p in
@@ -412,14 +453,23 @@ struct RipenessWatchTile: View {
     }
 
     private var emptyTitle: String {
-        if !hasWeatherStation { return "Weather station required" }
-        if allocatedVarieties.isEmpty { return "No tracked varieties yet" }
-        return "Awaiting season data"
+        switch weatherState {
+        case .notConfigured: return "Weather station required"
+        case .configuredButGDDUnavailable: return "Weather data unavailable"
+        case .ready:
+            if allocatedVarieties.isEmpty { return "No tracked varieties yet" }
+            return "Awaiting season data"
+        }
     }
 
     private var emptySubtitle: String {
-        if !hasWeatherStation {
+        switch weatherState {
+        case .notConfigured:
             return "Connect a station in Setup to track GDD and harvest timing."
+        case .configuredButGDDUnavailable:
+            return "Weather is configured, but Optimal Ripeness needs a Weather Underground PWS for GDD history."
+        case .ready:
+            break
         }
         if allocatedVarieties.isEmpty {
             return "Allocate varieties to a block to track ripeness."
