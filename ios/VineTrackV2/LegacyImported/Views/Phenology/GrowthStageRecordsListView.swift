@@ -51,12 +51,6 @@ struct GrowthStageRecordsListView: View {
                     .listRowBackground(Color.clear)
             }
 
-            Section {
-                statusRow
-            } header: {
-                Text("Sync")
-            }
-
             if filteredRecords.isEmpty {
                 Section {
                     emptyState
@@ -145,62 +139,6 @@ struct GrowthStageRecordsListView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Status
-
-    private var statusRow: some View {
-        HStack(spacing: 10) {
-            statusIcon
-            VStack(alignment: .leading, spacing: 2) {
-                Text(statusText)
-                    .font(.subheadline.weight(.medium))
-                if let last = growthStageRecordSync.lastSyncDate {
-                    Text("Last sync \(last.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if let msg = growthStageRecordSync.errorMessage {
-                    Text(msg)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                }
-            }
-            Spacer()
-            let pending = growthStageRecordSync.pendingUpsertCount + growthStageRecordSync.pendingDeleteCount
-            if pending > 0 {
-                Text("\(pending) pending")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.orange.opacity(0.18), in: .capsule)
-                    .foregroundStyle(.orange)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIcon: some View {
-        switch growthStageRecordSync.syncStatus {
-        case .idle:
-            Image(systemName: "clock").foregroundStyle(.secondary)
-        case .syncing:
-            ProgressView().controlSize(.small)
-        case .success:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-        case .failure:
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-        }
-    }
-
-    private var statusText: String {
-        switch growthStageRecordSync.syncStatus {
-        case .idle: return "Idle"
-        case .syncing: return "Syncing…"
-        case .success: return "Synced"
-        case .failure(let msg): return "Sync failed: \(msg)"
-        }
     }
 
     // MARK: - Row
