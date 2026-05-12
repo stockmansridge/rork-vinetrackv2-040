@@ -60,6 +60,14 @@ final class MigratedDataStore {
     /// Called when a pin is deleted locally.
     var onPinDeleted: ((UUID) -> Void)?
 
+    /// Called when a growth-stage pin is added locally so the dedicated
+    /// `growth_stage_records` table can be kept in sync. Wired by
+    /// `GrowthStageRecordSyncService.configure(store:auth:)`.
+    var onGrowthStagePinAdded: ((VinePin) -> Void)?
+    /// Called when a growth-stage pin is soft-deleted locally so the
+    /// mirrored growth-stage record can also be soft-deleted.
+    var onGrowthStagePinDeleted: ((UUID) -> Void)?
+
     /// Provides the currently-authenticated user UUID, used to self-heal
     /// `createdByUserId` on pins that were saved before auth was wired up
     /// (or on creation paths that forgot to plumb auth in).
@@ -661,6 +669,12 @@ final class MigratedDataStore {
         }
         pins.append(item)
         pinRepo.saveSlice(pins, for: vineyardId)
+        // Mirror growth-stage pins into the dedicated growth_stage_records
+        // table for the Lovable Growth Stage Records page. Legacy pin-based
+        // growth observations remain authoritative for the iOS workflow.
+        if item.mode == .growth, item.growthStageCode != nil {
+            onGrowthStagePinAdded?(item)
+        }
         // Append to the active trip's pinIds so the saved trip record
         // carries the association even if downstream code only reads
         // `trip.pinIds` (e.g. PDF export, Lovable trip report).
@@ -697,9 +711,13 @@ final class MigratedDataStore {
 
     func deletePin(_ pinId: UUID) {
         guard let vineyardId = selectedVineyardId else { return }
+        let wasGrowthStagePin = pins.first(where: { $0.id == pinId })?.growthStageCode != nil
         pins.removeAll { $0.id == pinId }
         pinRepo.saveSlice(pins, for: vineyardId)
         onPinDeleted?(pinId)
+        if wasGrowthStagePin {
+            onGrowthStagePinDeleted?(pinId)
+        }
     }
 
     func togglePinCompletion(_ pinId: UUID) {

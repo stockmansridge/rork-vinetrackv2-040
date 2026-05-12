@@ -21,6 +21,7 @@ struct NewMainTabView: View {
     @Environment(WorkTaskTypeSyncService.self) private var workTaskTypeSync
     @Environment(EquipmentItemSyncService.self) private var equipmentItemSync
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
+    @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
     @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
@@ -88,6 +89,7 @@ struct NewMainTabView: View {
             workTaskTypeSync.configure(store: store, auth: auth)
             equipmentItemSync.configure(store: store, auth: auth)
             growthStageImageSync.configure(store: store, auth: auth)
+            growthStageRecordSync.configure(store: store, auth: auth)
             workTaskSync.configure(store: store, auth: auth)
             workTaskLabourLineSync.configure(store: store, auth: auth)
             workTaskPaddockSync.configure(store: store, auth: auth)
@@ -113,6 +115,7 @@ struct NewMainTabView: View {
             await workTaskTypeSync.syncForSelectedVineyard()
             await equipmentItemSync.syncForSelectedVineyard()
             await growthStageImageSync.syncForSelectedVineyard()
+            await growthStageRecordSync.syncForSelectedVineyard()
             await workTaskSync.syncForSelectedVineyard()
             await workTaskLabourLineSync.syncForSelectedVineyard()
             await workTaskPaddockSync.syncForSelectedVineyard()
@@ -152,6 +155,7 @@ struct NewMainTabView: View {
                     await workTaskTypeSync.syncForSelectedVineyard()
                     await equipmentItemSync.syncForSelectedVineyard()
                     await growthStageImageSync.syncForSelectedVineyard()
+                    await growthStageRecordSync.syncForSelectedVineyard()
                     await workTaskSync.syncForSelectedVineyard()
                     await workTaskLabourLineSync.syncForSelectedVineyard()
                     await workTaskPaddockSync.syncForSelectedVineyard()
