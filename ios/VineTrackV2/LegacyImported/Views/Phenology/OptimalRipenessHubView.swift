@@ -32,6 +32,7 @@ struct OptimalRipenessHubView: View {
         let id: UUID
         let block: Paddock
         let variety: GrapeVariety?
+        let resolution: RipenessVarietyResolution
         let resetDate: Date?
         let total: Double
         let target: Double
@@ -49,10 +50,10 @@ struct OptimalRipenessHubView: View {
         let latitude = store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
         var rows: [BlockRow] = []
         for block in store.orderedPaddocks {
-            // Pick the primary allocated variety (highest area share).
-            let alloc = block.varietyAllocations
-                .max(by: { $0.percent < $1.percent })
-            let variety: GrapeVariety? = alloc.flatMap { store.grapeVariety(for: $0.varietyId) }
+            // Resolve the primary allocated variety using the centralised
+            // resolver shared with the setup checklist.
+            let resolution = RipenessVarietyResolver.resolve(block, store: store)
+            let variety = resolution.variety
             let resetMode = block.effectiveResetMode(defaultMode: resetDefault)
             let resetDate = block.resetDate(for: resetMode, seasonStart: seasonStart)
             let calcMode = block.effectiveCalculationMode(defaultMode: modeDefault)
@@ -72,6 +73,7 @@ struct OptimalRipenessHubView: View {
                 id: block.id,
                 block: block,
                 variety: variety,
+                resolution: resolution,
                 resetDate: resetDate,
                 total: total,
                 target: variety?.optimalGDD ?? 0,
@@ -223,12 +225,18 @@ private struct BlockRipenessRow: View {
     }
 
     private var hasUnresolvedVariety: Bool {
-        !row.block.varietyAllocations.isEmpty && row.variety == nil
+        if case .unrecognised = row.resolution.status { return true }
+        return false
     }
 
     private var status: (label: String, color: Color, icon: String) {
-        if hasUnresolvedVariety {
+        switch row.resolution.status {
+        case .unrecognised:
             return ("Variety not configured for ripeness", .orange, "exclamationmark.circle")
+        case .missingTarget:
+            return ("Add GDD target for this variety", .orange, "exclamationmark.circle")
+        case .missing, .ready:
+            break
         }
         if row.variety != nil, row.target <= 0 {
             return ("Add GDD target for this variety", .orange, "exclamationmark.circle")
@@ -345,6 +353,7 @@ private struct BlockRipenessRow: View {
 enum SetupChecklistDestination: Identifiable {
     case weatherSource
     case blockVarieties
+    case fixBlockVarieties
     case seasonStart
     case varietyTargets
     case blockLocation
@@ -353,6 +362,7 @@ enum SetupChecklistDestination: Identifiable {
         switch self {
         case .weatherSource: return "weatherSource"
         case .blockVarieties: return "blockVarieties"
+        case .fixBlockVarieties: return "fixBlockVarieties"
         case .seasonStart: return "seasonStart"
         case .varietyTargets: return "varietyTargets"
         case .blockLocation: return "blockLocation"
@@ -366,6 +376,8 @@ enum SetupChecklistDestination: Identifiable {
             WeatherDataSettingsView()
         case .blockVarieties, .blockLocation:
             BlocksHubView()
+        case .fixBlockVarieties:
+            FixBlockVarietiesSheet()
         case .seasonStart:
             OperationPreferencesView()
         case .varietyTargets:
@@ -412,52 +424,62 @@ private struct SetupChecklist {
 
         // 2. Block varieties
         //
-        // A block passes this check only when:
-        //   1) it has at least one variety allocation, AND
-        //   2) its primary allocation resolves to a `GrapeVariety` in the
-        //      currently configured variety list (same lookup the GDD
-        //      calculation uses — `store.grapeVariety(for:)`).
-        //
-        // A non-empty variety value alone is not enough: a block can carry
-        // a legacy / imported varietyId that no longer exists in
-        // GrapeVarietyManagement, in which case the ripeness calc has no
-        // GDD target to work with.
+        // Uses the same `RipenessVarietyResolver` as the block row list and
+        // the GDD calculation so the checklist can never disagree with the
+        // calculation surface. A block passes only when its primary
+        // allocation resolves to a managed `GrapeVariety` with a usable
+        // optimal GDD target.
         let blocks = store.orderedPaddocks
-        let blocksWithoutVariety = blocks.filter { $0.varietyAllocations.isEmpty }
-        let blocksWithUnknownVariety: [Paddock] = blocks.filter { block in
-            guard !block.varietyAllocations.isEmpty else { return false }
-            let primary = block.varietyAllocations.max(by: { $0.percent < $1.percent })
-            guard let primary else { return true }
-            return store.grapeVariety(for: primary.varietyId) == nil
+        var blocksMissingVariety: [Paddock] = []
+        var blocksUnrecognised: [Paddock] = []
+        var blocksMissingTarget: [(Paddock, GrapeVariety)] = []
+        for block in blocks {
+            switch RipenessVarietyResolver.resolve(block, store: store).status {
+            case .missing: blocksMissingVariety.append(block)
+            case .unrecognised: blocksUnrecognised.append(block)
+            case .missingTarget(let v): blocksMissingTarget.append((block, v))
+            case .ready: break
+            }
         }
         let varietyDetail: String
         let varietyOK: Bool
         let varietyAction: String?
+        let varietyDestination: SetupChecklistDestination
         if blocks.isEmpty {
             varietyDetail = "No blocks"
             varietyOK = false
             varietyAction = "Add blocks first"
-        } else if !blocksWithoutVariety.isEmpty {
-            varietyDetail = "\(blocksWithoutVariety.count) block\(blocksWithoutVariety.count == 1 ? "" : "s") missing a variety"
+            varietyDestination = .blockVarieties
+        } else if !blocksMissingVariety.isEmpty {
+            varietyDetail = "\(blocksMissingVariety.count) block\(blocksMissingVariety.count == 1 ? "" : "s") missing a variety"
             varietyOK = false
-            varietyAction = "Add a variety to each block"
-        } else if !blocksWithUnknownVariety.isEmpty {
-            let names = blocksWithUnknownVariety.prefix(3).map(\.name).joined(separator: ", ")
-            let suffix = blocksWithUnknownVariety.count > 3 ? " and \(blocksWithUnknownVariety.count - 3) more" : ""
-            varietyDetail = "Variety not in ripeness list: \(names)\(suffix)"
+            varietyAction = "Fix Block Varieties"
+            varietyDestination = .fixBlockVarieties
+        } else if !blocksUnrecognised.isEmpty {
+            let names = blocksUnrecognised.prefix(3).map(\.name).joined(separator: ", ")
+            let suffix = blocksUnrecognised.count > 3 ? " and \(blocksUnrecognised.count - 3) more" : ""
+            varietyDetail = "Some block varieties are not configured for ripeness: \(names)\(suffix)"
             varietyOK = false
-            varietyAction = "Add these varieties under Variety GDD targets"
+            varietyAction = "Fix Block Varieties"
+            varietyDestination = .fixBlockVarieties
+        } else if !blocksMissingTarget.isEmpty {
+            let names = blocksMissingTarget.prefix(3).map { $0.1.name }.joined(separator: ", ")
+            varietyDetail = "Varieties need a GDD target: \(names)"
+            varietyOK = false
+            varietyAction = "Set GDD targets"
+            varietyDestination = .varietyTargets
         } else {
             varietyDetail = "All blocks have a recognised variety"
             varietyOK = true
             varietyAction = nil
+            varietyDestination = .fixBlockVarieties
         }
         items.append(SetupChecklistItem(
             title: "Block varieties",
             detail: varietyDetail,
             ok: varietyOK,
             action: varietyAction,
-            destination: blocksWithUnknownVariety.isEmpty ? .blockVarieties : .varietyTargets
+            destination: varietyDestination
         ))
 
         // 3. Season start date
@@ -472,16 +494,43 @@ private struct SetupChecklist {
         ))
 
         // 4. Variety GDD targets
-        let allocatedVarietyIds = Set(blocks.flatMap { $0.varietyAllocations.map(\.varietyId) })
-        let allocatedVarieties = store.grapeVarieties.filter { allocatedVarietyIds.contains($0.id) }
-        let missingTargets = allocatedVarieties.filter { $0.optimalGDD <= 0 }
+        //
+        // Only validates the varieties currently used by the vineyard's
+        // blocks (via the resolver). A target of <= 0 is treated as not
+        // set; any positive value passes. Unresolved varieties are
+        // reported by the Block Varieties row above, so this row stays
+        // green even when blocks point at unknown ids — that avoids
+        // double-counting the same problem.
+        let usedVarieties = RipenessVarietyResolver.varietiesInUse(store: store)
+        let missingTargets = usedVarieties.filter { $0.optimalGDD <= 0 }
+        let targetsDetail: String
+        let targetsOK: Bool
+        let targetsAction: String?
+        if blocks.isEmpty {
+            targetsDetail = "Add blocks first"
+            targetsOK = false
+            targetsAction = nil
+        } else if usedVarieties.isEmpty {
+            // No resolved variety in use — Block Varieties row will guide
+            // the user. Keep this row neutral but flagged so it doesn't
+            // claim 0/0 is complete.
+            targetsDetail = "No recognised varieties in use yet"
+            targetsOK = false
+            targetsAction = "Fix block varieties first"
+        } else if !missingTargets.isEmpty {
+            targetsDetail = "Missing: \(missingTargets.map(\.name).joined(separator: ", "))"
+            targetsOK = false
+            targetsAction = "Set GDD target for each variety"
+        } else {
+            targetsDetail = "\(usedVarieties.count) variet\(usedVarieties.count == 1 ? "y" : "ies") set"
+            targetsOK = true
+            targetsAction = nil
+        }
         items.append(SetupChecklistItem(
             title: "Variety GDD targets",
-            detail: missingTargets.isEmpty
-                ? "\(allocatedVarieties.count) variet\(allocatedVarieties.count == 1 ? "y" : "ies") set"
-                : "Missing: \(missingTargets.map(\.name).joined(separator: ", "))",
-            ok: missingTargets.isEmpty && !allocatedVarieties.isEmpty,
-            action: missingTargets.isEmpty ? nil : "Set GDD target for each variety",
+            detail: targetsDetail,
+            ok: targetsOK,
+            action: targetsAction,
             destination: .varietyTargets
         ))
 
