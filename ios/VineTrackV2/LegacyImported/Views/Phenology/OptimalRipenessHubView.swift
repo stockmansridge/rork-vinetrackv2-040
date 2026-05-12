@@ -14,6 +14,8 @@ struct OptimalRipenessHubView: View {
     @Environment(MigratedDataStore.self) private var store
     @Environment(DegreeDayService.self) private var degreeDayService
 
+    @State private var activeDestination: SetupChecklistDestination?
+
     private var candidates: [RipenessSourceCandidate] {
         RipenessMath.candidates(store: store)
     }
@@ -99,7 +101,9 @@ struct OptimalRipenessHubView: View {
                 List {
                     if !checklist.items.isEmpty {
                         Section {
-                            SetupChecklistCard(checklist: checklist)
+                            SetupChecklistCard(checklist: checklist) { destination in
+                                activeDestination = destination
+                            }
                                 .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
                                 .listRowBackground(Color.clear)
                         }
@@ -153,6 +157,16 @@ struct OptimalRipenessHubView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: candidatesKey) {
             await loadGDDIfNeeded()
+        }
+        .sheet(item: $activeDestination) { destination in
+            NavigationStack {
+                destination.destinationView
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { activeDestination = nil }
+                        }
+                    }
+            }
         }
     }
 
@@ -314,6 +328,38 @@ private struct BlockRipenessRow: View {
 
 // MARK: - Setup checklist
 
+enum SetupChecklistDestination: Identifiable {
+    case weatherSource
+    case blockVarieties
+    case seasonStart
+    case varietyTargets
+    case blockLocation
+
+    var id: String {
+        switch self {
+        case .weatherSource: return "weatherSource"
+        case .blockVarieties: return "blockVarieties"
+        case .seasonStart: return "seasonStart"
+        case .varietyTargets: return "varietyTargets"
+        case .blockLocation: return "blockLocation"
+        }
+    }
+
+    @ViewBuilder
+    var destinationView: some View {
+        switch self {
+        case .weatherSource:
+            WeatherDataSettingsView()
+        case .blockVarieties, .blockLocation:
+            BlocksHubView()
+        case .seasonStart:
+            OperationPreferencesView()
+        case .varietyTargets:
+            GrapeVarietyManagementView()
+        }
+    }
+}
+
 private struct SetupChecklistItem: Identifiable {
     let id = UUID()
     let title: String
@@ -322,6 +368,8 @@ private struct SetupChecklistItem: Identifiable {
     /// Friendly hint shown when not satisfied. `nil` when no action surface
     /// exists yet for this item.
     let action: String?
+    /// Screen the row should open when tapped. `nil` if no deep-link is wired.
+    let destination: SetupChecklistDestination?
 }
 
 private struct SetupChecklist {
@@ -344,7 +392,8 @@ private struct SetupChecklist {
             title: "Weather source",
             detail: weatherDetail,
             ok: weatherOK,
-            action: weatherOK ? nil : "Configure a weather source"
+            action: weatherOK ? nil : "Configure a weather source",
+            destination: .weatherSource
         ))
 
         // 2. Block varieties
@@ -356,7 +405,8 @@ private struct SetupChecklist {
                 ? "All blocks have a variety"
                 : "\(blocksWithoutVariety.count) block\(blocksWithoutVariety.count == 1 ? "" : "s") missing a variety",
             ok: blocksWithoutVariety.isEmpty && !blocks.isEmpty,
-            action: blocksWithoutVariety.isEmpty ? nil : "Add a variety to each block"
+            action: blocksWithoutVariety.isEmpty ? nil : "Add a variety to each block",
+            destination: .blockVarieties
         ))
 
         // 3. Season start date
@@ -366,7 +416,8 @@ private struct SetupChecklist {
             title: "Season start date",
             detail: "\(s.seasonStartDay) \(monthName)",
             ok: true,
-            action: nil
+            action: nil,
+            destination: .seasonStart
         ))
 
         // 4. Variety GDD targets
@@ -379,7 +430,8 @@ private struct SetupChecklist {
                 ? "\(allocatedVarieties.count) variet\(allocatedVarieties.count == 1 ? "y" : "ies") set"
                 : "Missing: \(missingTargets.map(\.name).joined(separator: ", "))",
             ok: missingTargets.isEmpty && !allocatedVarieties.isEmpty,
-            action: missingTargets.isEmpty ? nil : "Set GDD target for each variety"
+            action: missingTargets.isEmpty ? nil : "Set GDD target for each variety",
+            destination: .varietyTargets
         ))
 
         // 5. Block location (for Open-Meteo fallback)
@@ -389,7 +441,8 @@ private struct SetupChecklist {
             title: "Block location",
             detail: hasCoords ? "Coordinates available" : "No coordinates",
             ok: hasCoords,
-            action: hasCoords ? nil : "Add vineyard coordinates or paddock polygons"
+            action: hasCoords ? nil : "Add vineyard coordinates or paddock polygons",
+            destination: .blockLocation
         ))
 
         return SetupChecklist(items: items)
@@ -398,6 +451,7 @@ private struct SetupChecklist {
 
 private struct SetupChecklistCard: View {
     let checklist: SetupChecklist
+    let onSelect: (SetupChecklistDestination) -> Void
 
     @State private var expanded: Bool = false
 
@@ -436,31 +490,52 @@ private struct SetupChecklistCard: View {
             if expanded {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(checklist.items) { item in
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: item.ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                                .font(.callout)
-                                .foregroundStyle(item.ok ? VineyardTheme.leafGreen : .orange)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(item.title)
-                                    .font(.caption.weight(.semibold))
-                                if let d = item.detail {
-                                    Text(d)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                if !item.ok, let a = item.action {
-                                    Text(a)
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(VineyardTheme.info)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                        }
+                        checklistRow(item)
                     }
                 }
             }
         }
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private func checklistRow(_ item: SetupChecklistItem) -> some View {
+        if let destination = item.destination {
+            Button { onSelect(destination) } label: { rowContent(item, tappable: true) }
+                .buttonStyle(.plain)
+        } else {
+            rowContent(item, tappable: false)
+        }
+    }
+
+    private func rowContent(_ item: SetupChecklistItem, tappable: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: item.ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.callout)
+                .foregroundStyle(item.ok ? VineyardTheme.leafGreen : .orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                if let d = item.detail {
+                    Text(d)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if !item.ok, let a = item.action {
+                    Text(a)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(VineyardTheme.info)
+                }
+            }
+            Spacer(minLength: 0)
+            if tappable {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
