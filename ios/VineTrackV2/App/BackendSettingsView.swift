@@ -516,6 +516,7 @@ struct BackendSettingsView: View {
 // MARK: - Sync Settings (extracted)
 
 struct SyncSettingsView: View {
+    @Environment(MigratedDataStore.self) private var store
     @Environment(PinSyncService.self) private var pinSync
     @Environment(PaddockSyncService.self) private var paddockSync
     @Environment(TripSyncService.self) private var tripSync
@@ -529,6 +530,7 @@ struct SyncSettingsView: View {
     @Environment(OperatorCategorySyncService.self) private var operatorCategorySync
     @Environment(WorkTaskTypeSyncService.self) private var workTaskTypeSync
     @Environment(GrowthStageImageSyncService.self) private var growthStageImageSync
+    @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
     @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
@@ -720,6 +722,36 @@ struct SyncSettingsView: View {
             } footer: {
                 Text("Custom E-L growth stage reference images are shared with all vineyard members. Pin photos sync automatically with each pin.")
             }
+
+            Section {
+                Button {
+                    Task { await growthStageRecordSync.syncForSelectedVineyard() }
+                } label: {
+                    syncButtonLabel(title: "Sync Growth Stage Records", icon: "leaf.fill", isSyncing: isSyncingGrowthRecord(growthStageRecordSync.syncStatus))
+                }
+                .disabled(isSyncingGrowthRecord(growthStageRecordSync.syncStatus))
+                VineyardSyncStatusRow(label: "growth stage records", state: growthRecordStateFrom(growthStageRecordSync.syncStatus, lastSync: growthStageRecordSync.lastSyncDate))
+                HStack {
+                    Text("Local records")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(growthStageRecordSync.records.filter { $0.vineyardId == store.selectedVineyardId }.count)")
+                        .font(.footnote.monospacedDigit())
+                }
+                HStack {
+                    Text("Pending upload / delete")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(growthStageRecordSync.pendingUpsertCount) / \(growthStageRecordSync.pendingDeleteCount)")
+                        .font(.footnote.monospacedDigit())
+                }
+            } header: {
+                Text("Growth Stage Records")
+            } footer: {
+                Text("E-L growth observations. Mirrored from growth-stage pins via pin_id for back-compat, plus any records added directly. Shared with all vineyard members.")
+            }
         }
         .navigationTitle("Sync")
         .navigationBarTitleDisplayMode(.inline)
@@ -787,6 +819,20 @@ struct SyncSettingsView: View {
     }
 
     private func mgmtStateFrom(_ status: ManagementSyncStatus, lastSync: Date?) -> VineyardSyncState {
+        switch status {
+        case .idle: return .idle
+        case .syncing: return .syncing
+        case .success: return .success(lastSync)
+        case .failure(let m): return .failure(m)
+        }
+    }
+
+    private func isSyncingGrowthRecord(_ status: GrowthStageRecordSyncService.Status) -> Bool {
+        if case .syncing = status { return true }
+        return false
+    }
+
+    private func growthRecordStateFrom(_ status: GrowthStageRecordSyncService.Status, lastSync: Date?) -> VineyardSyncState {
         switch status {
         case .idle: return .idle
         case .syncing: return .syncing

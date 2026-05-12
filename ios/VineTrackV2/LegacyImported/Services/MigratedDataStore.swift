@@ -673,6 +673,9 @@ final class MigratedDataStore {
         // table for the Lovable Growth Stage Records page. Legacy pin-based
         // growth observations remain authoritative for the iOS workflow.
         if item.mode == .growth, item.growthStageCode != nil {
+            #if DEBUG
+            print("[Pins] addPin firing onGrowthStagePinAdded? \(onGrowthStagePinAdded != nil) for pin=\(item.id) code=\(item.growthStageCode ?? "nil")")
+            #endif
             onGrowthStagePinAdded?(item)
         }
         // Append to the active trip's pinIds so the saved trip record

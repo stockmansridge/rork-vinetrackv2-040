@@ -74,7 +74,15 @@ final class GrowthStageRecordSyncService {
     /// Idempotent — if a record already exists for this `pinId`, the
     /// existing row is updated in place.
     func mirrorGrowthStagePin(_ pin: VinePin) {
-        guard pin.mode == .growth, let code = pin.growthStageCode, !code.isEmpty else { return }
+        #if DEBUG
+        print("[GrowthStageRecord] mirrorGrowthStagePin pinId=\(pin.id) mode=\(pin.mode) code=\(pin.growthStageCode ?? "nil") vineyardId=\(pin.vineyardId) paddockId=\(pin.paddockId?.uuidString ?? "nil")")
+        #endif
+        guard pin.mode == .growth, let code = pin.growthStageCode, !code.isEmpty else {
+            #if DEBUG
+            print("[GrowthStageRecord] mirrorGrowthStagePin SKIPPED — not a growth-stage pin")
+            #endif
+            return
+        }
         let stageLabel = GrowthStage.allStages.first { $0.code == code }?.description
         let variety = variety(for: pin.paddockId)
         if let idx = records.firstIndex(where: { $0.pinId == pin.id }) {
@@ -103,8 +111,16 @@ final class GrowthStageRecordSyncService {
             mirrored.recordedByName = pin.createdBy ?? auth?.userName
             records.append(mirrored)
             metadata.markDirty(mirrored.id, at: Date())
+            #if DEBUG
+            print("[GrowthStageRecord] mirrored new record id=\(mirrored.id) for pin=\(pin.id)")
+            #endif
         }
         persist()
+        // Best-effort: push immediately so the record is visible to other
+        // devices / Lovable without waiting for the next sync cycle.
+        Task { [weak self] in
+            await self?.syncForSelectedVineyard()
+        }
     }
 
     private func variety(for paddockId: UUID?) -> String? {

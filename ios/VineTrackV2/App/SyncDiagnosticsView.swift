@@ -15,6 +15,7 @@ struct SyncDiagnosticsView: View {
     @Environment(WorkTaskSyncService.self) private var workTaskSync
     @Environment(WorkTaskLabourLineSyncService.self) private var workTaskLabourLineSync
     @Environment(WorkTaskPaddockSyncService.self) private var workTaskPaddockSync
+    @Environment(GrowthStageRecordSyncService.self) private var growthStageRecordSync
 
     @State private var copyConfirmation: String?
     @State private var isSyncingAll: Bool = false
@@ -548,6 +549,17 @@ struct SyncDiagnosticsView: View {
                 errorMessage: workTaskPaddockSync.errorMessage
             ),
             DiagnosticRow(
+                id: "growth_stage_records",
+                title: "Growth Stage Records",
+                icon: "leaf.fill",
+                localCount: filteredCount(growthStageRecordSync.records, vineyardId: vineyardId) { $0.vineyardId },
+                pendingUpserts: growthStageRecordSync.pendingUpsertCount,
+                pendingDeletes: growthStageRecordSync.pendingDeleteCount,
+                lastSync: growthStageRecordSync.lastSyncDate,
+                status: statusGrowthRecord(growthStageRecordSync.syncStatus),
+                errorMessage: growthStageRecordSync.errorMessage
+            ),
+            DiagnosticRow(
                 id: "chemicals",
                 title: "Chemicals",
                 icon: "flask.fill",
@@ -581,6 +593,9 @@ struct SyncDiagnosticsView: View {
     private func statusOps(_ s: OperationsSyncStatus) -> GenericSyncStatus {
         switch s { case .idle: .idle; case .syncing: .syncing; case .success: .success; case .failure: .failure }
     }
+    private func statusGrowthRecord(_ s: GrowthStageRecordSyncService.Status) -> GenericSyncStatus {
+        switch s { case .idle: .idle; case .syncing: .syncing; case .success: .success; case .failure: .failure }
+    }
 
     // MARK: - Actions
 
@@ -596,6 +611,7 @@ struct SyncDiagnosticsView: View {
         await workTaskSync.syncForSelectedVineyard()
         await workTaskLabourLineSync.syncForSelectedVineyard()
         await workTaskPaddockSync.syncForSelectedVineyard()
+        await growthStageRecordSync.syncForSelectedVineyard()
     }
 
     private func copyDiagnostics() {
