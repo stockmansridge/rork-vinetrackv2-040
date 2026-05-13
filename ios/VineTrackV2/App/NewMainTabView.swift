@@ -30,6 +30,7 @@ struct NewMainTabView: View {
     @Environment(DamageRecordSyncService.self) private var damageRecordSync
     @Environment(HistoricalYieldRecordSyncService.self) private var historicalYieldSync
     @Environment(AlertService.self) private var alertService
+    @Environment(AppNoticeService.self) private var appNoticeService
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Int = 0
     @State private var isSweeping: Bool = false
@@ -100,6 +101,8 @@ struct NewMainTabView: View {
             damageRecordSync.configure(store: store, auth: auth)
             historicalYieldSync.configure(store: store, auth: auth)
             alertService.configure(store: store, auth: auth)
+            appNoticeService.configure(auth: auth)
+            Task { await appNoticeService.refresh() }
         }
         .task(id: store.selectedVineyardId) {
             await accessControl.refresh(for: store.selectedVineyardId, auth: auth)
@@ -133,6 +136,7 @@ struct NewMainTabView: View {
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task { await runFullSweep(alertRefresh: .refresh) }
+                Task { await appNoticeService.refresh() }
             }
         }
         .sheet(item: $portalPromptTrigger) { trigger in
@@ -199,6 +203,7 @@ struct NewMainTabView: View {
         case .refresh:  await alertService.refresh()
         case .none:     break
         }
+        await appNoticeService.refresh()
     }
 }
 
@@ -431,6 +436,7 @@ private struct NewHomeTabView: View {
 
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            AppNoticesBanner()
             plainSectionHeader("Today")
             HomeRainSummaryCard()
             HomeAlertsCard()

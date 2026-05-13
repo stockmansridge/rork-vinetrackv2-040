@@ -44,6 +44,7 @@ struct VineTrackV2App: App {
     @State private var subscriptionService = SubscriptionService()
     @State private var alertService = AlertService()
     @State private var vineyardTripFunctionService = VineyardTripFunctionService()
+    @State private var appNoticeService = AppNoticeService()
 
     init() {
         VineyardTheme.applyGlobalAppearance()
@@ -96,6 +97,7 @@ struct VineTrackV2App: App {
                         .environment(subscriptionService)
                         .environment(alertService)
                         .environment(vineyardTripFunctionService)
+                        .environment(appNoticeService)
                 } else {
                     ContentView()
                 }

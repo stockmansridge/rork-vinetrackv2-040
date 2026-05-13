@@ -416,6 +416,16 @@ struct BackendSettingsView: View {
                     color: .purple
                 )
             }
+            NavigationLink {
+                AdminAppNoticesView()
+            } label: {
+                SettingsRow(
+                    title: "App Notices",
+                    subtitle: "App-wide banners shown on Home",
+                    symbol: "megaphone.fill",
+                    color: .orange
+                )
+            }
         } header: {
             SettingsSectionHeader(title: "Admin", symbol: "shield.lefthalf.filled", color: .purple)
         } footer: {
