@@ -11,6 +11,7 @@ private enum AdminDestination: Identifiable, Hashable {
     case allUsers
     case usersFiltered(AdminUserFilter, String)
     case vineyards
+    case blocks
     case invitations
     case pins
     case sprayRecords
@@ -24,6 +25,7 @@ private enum AdminDestination: Identifiable, Hashable {
         case .allUsers: return "allUsers"
         case .usersFiltered(let f, _): return "usersFiltered-\(f)"
         case .vineyards: return "vineyards"
+        case .blocks: return "blocks"
         case .invitations: return "invitations"
         case .pins: return "pins"
         case .sprayRecords: return "sprayRecords"
@@ -38,6 +40,7 @@ private enum AdminDestination: Identifiable, Hashable {
 struct AdminDashboardView: View {
     @State private var summary: AdminEngagementSummary?
     @State private var users: [AdminUserRow] = []
+    @State private var totalBlocks: Int?
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
@@ -88,6 +91,11 @@ struct AdminDashboardView: View {
             AdminVineyardsListView(onSelect: { v in
                 selectedDestination = .vineyardDetail(v)
             })
+        case .blocks:
+            AdminAllBlocksListView(
+                onSelectBlock: { paddock in selectedDestination = .paddockDetail(paddock) },
+                onCountLoaded: { count in totalBlocks = count }
+            )
         case .invitations:
             AdminInvitationsListView()
         case .pins:
@@ -115,6 +123,7 @@ struct AdminDashboardView: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                     tile("Total Users", "\(summary.totalUsers)", "person.3.fill", .blue, value: .allUsers)
                     tile("Vineyards", "\(summary.totalVineyards)", "building.2.fill", VineyardTheme.leafGreen, value: .vineyards)
+                    tile("Blocks", totalBlocks.map { "\($0)" } ?? "—", "square.grid.2x2.fill", .purple, value: .blocks)
                     tile("Active 7d", "\(summary.signedInLast7Days)", "bolt.fill", .orange, value: .usersFiltered(.active7, "Active in last 7 days"))
                     tile("Active 30d", "\(summary.signedInLast30Days)", "calendar", .indigo, value: .usersFiltered(.active30, "Active in last 30 days"))
                     tile("New 30d", "\(summary.newUsersLast30Days)", "person.fill.badge.plus", .pink, value: .usersFiltered(.new30, "New users (30d)"))
@@ -216,6 +225,155 @@ struct AdminDashboardView: View {
             users = u
         } catch {
             errorMessage = error.localizedDescription
+        }
+        // Block count is loaded separately because it requires a per-vineyard
+        // fan-out and shouldn't block the main dashboard from appearing.
+        Task { await loadBlockCount() }
+    }
+
+    @MainActor
+    private func loadBlockCount() async {
+        do {
+            let rows = try await repository.fetchAllPaddocks()
+            totalBlocks = rows.filter { $0.paddock.deletedAt == nil }.count
+        } catch {
+            // Non-fatal; leave totalBlocks nil so the tile shows "—"
+        }
+    }
+}
+
+// MARK: - All Blocks (across vineyards)
+
+private struct AdminAllBlocksListView: View {
+    let onSelectBlock: (AdminVineyardPaddockRow) -> Void
+    var onCountLoaded: ((Int) -> Void)? = nil
+
+    @State private var rows: [(vineyard: AdminVineyardRow, paddock: AdminVineyardPaddockRow)] = []
+    @State private var isLoading: Bool = false
+    @State private var loadError: String?
+    @State private var query: String = ""
+    @State private var showArchived: Bool = false
+
+    private let repository = SupabaseAdminRepository()
+
+    private var filtered: [(AdminVineyardRow, AdminVineyardPaddockRow)] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return rows.filter { item in
+            if !showArchived && item.paddock.deletedAt != nil { return false }
+            guard !q.isEmpty else { return true }
+            return item.paddock.name.lowercased().contains(q) ||
+                   item.vineyard.name.lowercased().contains(q)
+        }
+    }
+
+    private var activeCount: Int {
+        rows.filter { $0.paddock.deletedAt == nil }.count
+    }
+
+    private var grouped: [(vineyard: AdminVineyardRow, blocks: [AdminVineyardPaddockRow])] {
+        var dict: [UUID: (AdminVineyardRow, [AdminVineyardPaddockRow])] = [:]
+        for item in filtered {
+            if var existing = dict[item.0.id] {
+                existing.1.append(item.1)
+                dict[item.0.id] = existing
+            } else {
+                dict[item.0.id] = (item.0, [item.1])
+            }
+        }
+        return dict.values
+            .map { (vineyard: $0.0, blocks: $0.1.sorted { $0.name.lowercased() < $1.name.lowercased() }) }
+            .sorted { $0.vineyard.name.lowercased() < $1.vineyard.name.lowercased() }
+    }
+
+    var body: some View {
+        List {
+            if let loadError {
+                Section {
+                    Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).font(.footnote)
+                }
+            }
+
+            Section {
+                Toggle("Show archived", isOn: $showArchived)
+            } footer: {
+                Text("\(activeCount) active block\(activeCount == 1 ? "" : "s") across \(Set(rows.filter { $0.paddock.deletedAt == nil }.map { $0.vineyard.id }).count) vineyard\(Set(rows.filter { $0.paddock.deletedAt == nil }.map { $0.vineyard.id }).count == 1 ? "" : "s").")
+            }
+
+            if grouped.isEmpty && !isLoading {
+                Section {
+                    Text(rows.isEmpty ? "No blocks found." : "No matches.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+
+            ForEach(grouped, id: \.vineyard.id) { group in
+                Section {
+                    ForEach(group.blocks) { p in
+                        Button {
+                            onSelectBlock(p)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: p.polygonPoints.count >= 3 ? "map.fill" : "square.grid.2x2")
+                                    .foregroundStyle(p.polygonPoints.count >= 3 ? Color.green : Color.secondary)
+                                    .frame(width: 22)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 6) {
+                                        Text(p.name)
+                                            .font(.subheadline.weight(.medium))
+                                            .lineLimit(1)
+                                        if p.deletedAt != nil {
+                                            Text("ARCHIVED")
+                                                .font(.caption2.weight(.bold))
+                                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                                .background(Color.secondary.opacity(0.15), in: Capsule())
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Text("\(p.rowCount) row\(p.rowCount == 1 ? "" : "s")\(p.polygonPoints.count >= 3 ? "" : " • no map")")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } header: {
+                    HStack {
+                        Text(group.vineyard.name)
+                        Spacer()
+                        Text("\(group.blocks.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Blocks")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Search blocks or vineyards")
+        .overlay { if isLoading && rows.isEmpty { ProgressView() } }
+        .task { await load() }
+        .refreshable { await load() }
+    }
+
+    @MainActor
+    private func load() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+        do {
+            let fetched = try await repository.fetchAllPaddocks()
+            rows = fetched
+            onCountLoaded?(fetched.filter { $0.paddock.deletedAt == nil }.count)
+        } catch {
+            loadError = error.localizedDescription
         }
     }
 }

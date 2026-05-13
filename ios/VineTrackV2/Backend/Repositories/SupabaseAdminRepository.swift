@@ -491,6 +491,35 @@ final class SupabaseAdminRepository {
         }
     }
 
+    /// Fetches paddocks across every vineyard the current admin can access.
+    /// Issues one call per vineyard in parallel. Annotates rows with vineyard name
+    /// for display in admin lists.
+    func fetchAllPaddocks() async throws -> [(vineyard: AdminVineyardRow, paddock: AdminVineyardPaddockRow)] {
+        let vineyards = try await fetchAllVineyards()
+        let byId: [UUID: AdminVineyardRow] = Dictionary(uniqueKeysWithValues: vineyards.map { ($0.id, $0) })
+        var results: [(AdminVineyardRow, AdminVineyardPaddockRow)] = []
+        try await withThrowingTaskGroup(of: [AdminVineyardPaddockRow].self) { group in
+            for v in vineyards where v.deletedAt == nil {
+                let vid = v.id
+                group.addTask { try await self.fetchVineyardPaddocks(vineyardId: vid) }
+            }
+            for try await rows in group {
+                for r in rows {
+                    if let v = byId[r.vineyardId] {
+                        results.append((v, r))
+                    }
+                }
+            }
+        }
+        results.sort { lhs, rhs in
+            if lhs.0.name.lowercased() == rhs.0.name.lowercased() {
+                return lhs.1.name.lowercased() < rhs.1.name.lowercased()
+            }
+            return lhs.0.name.lowercased() < rhs.0.name.lowercased()
+        }
+        return results
+    }
+
     func fetchWorkTasks(limit: Int = 500) async throws -> [AdminWorkTaskRow] {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         let rows: [WorkTaskDTO] = try await provider.client
