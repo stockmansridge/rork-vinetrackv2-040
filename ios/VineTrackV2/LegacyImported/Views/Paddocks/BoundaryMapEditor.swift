@@ -10,6 +10,8 @@ struct BoundaryMapEditor: View {
     @State private var hasSetInitialPosition: Bool = false
     @State private var visibleRegion: MKCoordinateRegion?
     @State private var draggingIndex: Int?
+    @AppStorage("boundaryDrawTipDismissed") private var boundaryTipDismissed: Bool = false
+    @State private var showTip: Bool = true
 
     private var midpointEdges: [MidpointEdge] {
         guard polygonPoints.count >= 2 else { return [] }
@@ -112,6 +114,45 @@ struct BoundaryMapEditor: View {
                     .frame(width: 12, height: 12)
                     .allowsHitTesting(false)
 
+                if showTip && !boundaryTipDismissed {
+                    VStack {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(VineyardTheme.info)
+                                .font(.subheadline)
+                            Text("Tip: Place boundary points between rows, not directly on vine rows, for better row and area calculations.")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 4)
+                            Button {
+                                withAnimation(.snappy) {
+                                    showTip = false
+                                    boundaryTipDismissed = true
+                                }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .accessibilityLabel("Dismiss tip")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: .rect(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(VineyardTheme.info.opacity(0.3), lineWidth: 1)
+                        )
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        Spacer()
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
                 VStack(spacing: 12) {
                     Button {
                         if let region = visibleRegion {
@@ -188,6 +229,7 @@ struct BoundaryMapEditor: View {
                 }
             }
             .onAppear {
+                showTip = !boundaryTipDismissed
                 locationService.requestPermission()
                 locationService.startUpdating()
                 if let loc = locationService.location {

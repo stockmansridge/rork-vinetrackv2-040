@@ -184,6 +184,10 @@ struct EditPaddockSheet: View {
             }
         } header: {
             Text("Boundary")
+        } footer: {
+            Label("Tip: Draw block boundaries through the middle of the row gaps where possible. This helps VineTrack calculate row positions, block area and coverage more accurately.", systemImage: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
