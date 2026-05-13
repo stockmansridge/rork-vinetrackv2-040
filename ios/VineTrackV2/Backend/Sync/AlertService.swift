@@ -102,6 +102,7 @@ final class AlertService {
         guard let store, let auth, auth.isSignedIn,
               let vineyardId = store.selectedVineyardId,
               SupabaseClientProvider.shared.isConfigured else {
+            print("[AlertService] generateAndRefresh skipped — not signed in / no vineyard / supabase unconfigured")
             return
         }
 
@@ -113,63 +114,86 @@ final class AlertService {
         let prefs = preferences ?? BackendAlertPreferences.defaults(for: vineyardId)
         let userId = auth.userId
 
+        print("[AlertService] generateAndRefresh vineyard=\(vineyardId.uuidString.prefix(8)) prefs: agedPins=\(prefs.agedPinAlertsEnabled)(>=\(prefs.agedPinDays)d) irrigation=\(prefs.irrigationAlertsEnabled)(\(prefs.irrigationDeficitThresholdMm)mm) weather=\(prefs.weatherAlertsEnabled)(rain\(prefs.rainAlertThresholdMm)/wind\(prefs.windAlertThresholdKmh)/frost\(prefs.frostAlertThresholdC)/heat\(prefs.heatAlertThresholdC)) spray=\(prefs.sprayJobRemindersEnabled) disease=\(prefs.diseaseAlertsEnabled)")
+
         var generated: [BackendAlertUpsert] = []
+        var bySource: [String: Int] = [:]
 
         if prefs.agedPinAlertsEnabled {
-            generated.append(contentsOf: generateAgedPinAlerts(
+            let items = generateAgedPinAlerts(
                 store: store,
                 vineyardId: vineyardId,
                 prefs: prefs,
                 userId: userId
-            ))
+            )
+            bySource["agedPins"] = items.count
+            generated.append(contentsOf: items)
         }
         if prefs.sprayJobRemindersEnabled {
-            generated.append(contentsOf: generateSprayReminders(
+            let items = generateSprayReminders(
                 store: store,
                 vineyardId: vineyardId,
                 userId: userId
-            ))
+            )
+            bySource["spray"] = items.count
+            generated.append(contentsOf: items)
         }
         if prefs.irrigationAlertsEnabled {
-            generated.append(contentsOf: await generateIrrigationAlerts(
+            let items = await generateIrrigationAlerts(
                 store: store,
                 vineyardId: vineyardId,
                 prefs: prefs,
                 userId: userId
-            ))
+            )
+            bySource["irrigation"] = items.count
+            generated.append(contentsOf: items)
         } else if prefs.weatherAlertsEnabled {
             // Ensure we have a forecast even if irrigation alerts are disabled.
             await ensureForecast(store: store, vineyardId: vineyardId, prefs: prefs)
         }
 
         if prefs.weatherAlertsEnabled {
-            generated.append(contentsOf: generateWeatherAlertsFromForecast(
+            let weather = generateWeatherAlertsFromForecast(
                 forecastDays: forecastService.forecast?.days ?? [],
                 vineyardId: vineyardId,
                 prefs: prefs,
                 userId: userId
-            ))
-            generated.append(contentsOf: await generateRainAlertsFromDavis(
+            )
+            bySource["weather"] = weather.count
+            generated.append(contentsOf: weather)
+            let rain = await generateRainAlertsFromDavis(
                 store: store,
                 vineyardId: vineyardId,
                 userId: userId
-            ))
+            )
+            bySource["rainDavis"] = rain.count
+            generated.append(contentsOf: rain)
         }
 
         if prefs.diseaseAlertsEnabled {
-            generated.append(contentsOf: await generateDiseaseAlerts(
+            let items = await generateDiseaseAlerts(
                 store: store,
                 vineyardId: vineyardId,
                 prefs: prefs,
                 userId: userId
-            ))
+            )
+            bySource["disease"] = items.count
+            generated.append(contentsOf: items)
         }
 
+        print("[AlertService] generated=\(generated.count) bySource=\(bySource)")
+
         if !generated.isEmpty {
-            try? await repository.upsertAlerts(generated)
+            do {
+                try await repository.upsertAlerts(generated)
+                print("[AlertService] upserted \(generated.count) alerts to Supabase")
+            } catch {
+                print("[AlertService] upsert failed — \(error.localizedDescription)")
+            }
         }
 
         await refresh()
+        print("[AlertService] post-refresh fetched=\(alerts.count) active=\(activeAlerts.count) unread=\(unreadAlerts.count)")
     }
 
     // MARK: - Aged pins
