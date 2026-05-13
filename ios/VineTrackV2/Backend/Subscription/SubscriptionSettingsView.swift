@@ -145,14 +145,32 @@ struct SubscriptionSettingsView: View {
         }
     }
 
+    @Environment(\.openURL) private var openURL
+
     private var helpSection: some View {
         Section {
-            if let url = URL(string: "https://vinetrack.com.au/privacy") {
-                Link("Privacy Policy", destination: url)
+            Button {
+                if let url = URL(string: "https://vinetrack.com.au/privacy") { openURL(url) }
+            } label: {
+                HStack {
+                    Text("Privacy Policy")
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square").foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
-            if let url = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
-                Link("Terms of Use (EULA)", destination: url)
+            .buttonStyle(.plain)
+            Button {
+                if let url = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") { openURL(url) }
+            } label: {
+                HStack {
+                    Text("Terms of Use (EULA)")
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square").foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         } footer: {
             Text("Subscriptions are billed through your Apple ID. A 3-month free trial applies to new subscribers.")
         }

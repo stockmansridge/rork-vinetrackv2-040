@@ -24,6 +24,8 @@ struct BackendSettingsView: View {
 
     private let vineyardRepository: any VineyardRepositoryProtocol = SupabaseVineyardRepository()
 
+    @Environment(\.openURL) private var openURL
+
     private static let adminEmails: Set<String> = ["jonathan@stockmansridge.com.au"]
 
     private var isAdminUser: Bool {
@@ -130,6 +132,7 @@ struct BackendSettingsView: View {
                     adminSection
                 }
 
+                supportSection
                 accountPrivacySection
                 aboutSection
 
@@ -445,26 +448,34 @@ struct BackendSettingsView: View {
 
     private var accountPrivacySection: some View {
         Section {
-            if let url = URL(string: "https://vinetrack.com.au/privacy") {
-                Link(destination: url) {
-                    SettingsRow(
-                        title: "Privacy Policy",
-                        subtitle: "How we handle your data",
-                        symbol: "hand.raised.fill",
-                        color: .blue
-                    )
+            Button {
+                if let url = URL(string: "https://vinetrack.com.au/privacy") {
+                    openURL(url)
                 }
+            } label: {
+                externalLinkRow(
+                    title: "Privacy Policy",
+                    subtitle: "How we handle your data",
+                    symbol: "hand.raised.fill",
+                    color: .blue
+                )
             }
-            if let url = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
-                Link(destination: url) {
-                    SettingsRow(
-                        title: "Terms of Use (EULA)",
-                        subtitle: "Apple standard end-user license",
-                        symbol: "doc.text.fill",
-                        color: .gray
-                    )
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            Button {
+                if let url = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") {
+                    openURL(url)
                 }
+            } label: {
+                externalLinkRow(
+                    title: "Terms of Use (EULA)",
+                    subtitle: "Apple standard end-user license",
+                    symbol: "doc.text.fill",
+                    color: .gray
+                )
             }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
             NavigationLink {
                 DisclaimerInfoView()
             } label: {
@@ -519,6 +530,72 @@ struct BackendSettingsView: View {
             } label: {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
+        }
+    }
+
+    // MARK: - Support
+
+    private var supportSection: some View {
+        Section {
+            Button {
+                openSupportEmail()
+            } label: {
+                externalLinkRow(
+                    title: "Contact Support",
+                    subtitle: "Send feedback, feature requests or report an issue",
+                    symbol: "envelope.fill",
+                    color: .green
+                )
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+        } header: {
+            SettingsSectionHeader(title: "Help & Support", symbol: "questionmark.circle.fill", color: .green)
+        } footer: {
+            Text("We read every message — your feedback shapes what we build next.")
+        }
+    }
+
+    private func externalLinkRow(title: String, subtitle: String, symbol: String, color: Color) -> some View {
+        HStack(spacing: 12) {
+            SettingsIconTile(symbol: symbol, color: color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "arrow.up.right.square")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func openSupportEmail() {
+        let address = "support@vinetrack.com.au"
+        let subject = "VineTrack feedback / support — v\(appVersion) (\(appBuild))"
+        let bodyLines = [
+            "Hi VineTrack team,",
+            "",
+            "",
+            "— — —",
+            "App version: \(appVersion) (\(appBuild))",
+            "User: \(auth.userEmail ?? "—")"
+        ]
+        let body = bodyLines.joined(separator: "\n")
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = address
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: subject),
+            URLQueryItem(name: "body", value: body)
+        ]
+        if let url = components.url {
+            openURL(url)
         }
     }
 
