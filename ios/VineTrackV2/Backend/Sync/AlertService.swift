@@ -344,41 +344,70 @@ final class AlertService {
         prefs: BackendAlertPreferences,
         userId: UUID?
     ) -> [BackendAlertUpsert] {
-        guard let firstDay = forecastDays.first else { return [] }
-        let date = firstDay.date
-        let dedupKey = "weather_risk:\(yyyymmdd(date))"
+        guard !forecastDays.isEmpty else { return [] }
 
-        var risks: [String] = []
-        var severity: AlertSeverity = .info
-        if firstDay.forecastRainMm >= prefs.rainAlertThresholdMm {
-            risks.append(String(format: "rain %.1f mm", firstDay.forecastRainMm))
-            if firstDay.forecastRainMm >= prefs.rainAlertThresholdMm * 2 {
-                severity = .warning
-            }
-        }
-        if let wind = firstDay.forecastWindKmhMax, wind >= prefs.windAlertThresholdKmh {
-            risks.append(String(format: "wind %.0f km/h", wind))
-            if wind >= prefs.windAlertThresholdKmh * 1.5 {
-                severity = max(severity, .warning)
-            }
-        }
-        if let tMin = firstDay.forecastTempMinC, tMin <= prefs.frostAlertThresholdC {
-            risks.append(String(format: "frost low %.1f°C", tMin))
-            severity = .critical
-        }
-        if let tMax = firstDay.forecastTempMaxC, tMax >= prefs.heatAlertThresholdC {
-            risks.append(String(format: "heat %.1f°C", tMax))
-            if tMax >= prefs.heatAlertThresholdC + 5 {
-                severity = max(severity, .warning)
-            }
-        }
-        guard !risks.isEmpty else { return [] }
+        // Scan every forecast day in the configured window (not just today)
+        // so future rain/wind/frost/heat events surface as soon as they enter
+        // the forecast. Each day with risks emits its own alert, deduplicated
+        // by date so refreshes don't create duplicates.
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        let cutoff = cal.date(byAdding: .day, value: max(1, prefs.irrigationForecastDays), to: startOfToday) ?? startOfToday
+        let relativeFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.doesRelativeDateFormatting = true
+            f.dateStyle = .medium
+            f.timeStyle = .none
+            return f
+        }()
 
-        let title = "Weather risk forecast"
-        let message = "Forecast for \(date.formatted(date: .abbreviated, time: .omitted)): " + risks.joined(separator: ", ") + "."
-        let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
-        return [
-            BackendAlertUpsert(
+        var upserts: [BackendAlertUpsert] = []
+        for day in forecastDays {
+            let dayStart = cal.startOfDay(for: day.date)
+            guard dayStart >= startOfToday, dayStart < cutoff else { continue }
+
+            var risks: [String] = []
+            var severity: AlertSeverity = .info
+            if day.forecastRainMm >= prefs.rainAlertThresholdMm {
+                risks.append(String(format: "rain %.1f mm", day.forecastRainMm))
+                if day.forecastRainMm >= prefs.rainAlertThresholdMm * 2 {
+                    severity = .warning
+                }
+            }
+            if let wind = day.forecastWindKmhMax, wind >= prefs.windAlertThresholdKmh {
+                risks.append(String(format: "wind %.0f km/h", wind))
+                if wind >= prefs.windAlertThresholdKmh * 1.5 {
+                    severity = max(severity, .warning)
+                }
+            }
+            if let tMin = day.forecastTempMinC, tMin <= prefs.frostAlertThresholdC {
+                risks.append(String(format: "frost low %.1f°C", tMin))
+                severity = .critical
+            }
+            if let tMax = day.forecastTempMaxC, tMax >= prefs.heatAlertThresholdC {
+                risks.append(String(format: "heat %.1f°C", tMax))
+                if tMax >= prefs.heatAlertThresholdC + 5 {
+                    severity = max(severity, .warning)
+                }
+            }
+            guard !risks.isEmpty else { continue }
+
+            let dedupKey = "weather_risk:\(yyyymmdd(day.date))"
+            let dayLabel = relativeFormatter.string(from: day.date)
+            let title: String
+            if cal.isDateInToday(day.date) {
+                title = "Weather risk today"
+            } else if cal.isDateInTomorrow(day.date) {
+                title = "Weather risk tomorrow"
+            } else {
+                title = "Weather risk \(dayLabel)"
+            }
+            let message = "Forecast for \(dayLabel): " + risks.joined(separator: ", ") + "."
+            let alertId = deterministicUUID(vineyardId: vineyardId, dedupKey: dedupKey)
+            // Keep each day's alert visible until the end of that day so a
+            // Monday rain forecast stays in the list right up to Monday.
+            let expires = cal.date(byAdding: .day, value: 1, to: dayStart)
+            upserts.append(BackendAlertUpsert(
                 id: alertId,
                 vineyardId: vineyardId,
                 alertType: AlertType.weatherRisk.rawValue,
@@ -390,11 +419,12 @@ final class AlertService {
                 paddockId: nil,
                 action: AlertAction.openWeather.rawValue,
                 dedupKey: dedupKey,
-                generatedForDate: date,
-                expiresAt: Calendar.current.date(byAdding: .day, value: 1, to: date),
+                generatedForDate: dayStart,
+                expiresAt: expires,
                 createdBy: userId
-            )
-        ]
+            ))
+        }
+        return upserts
     }
 
     // MARK: - Rain alerts (Davis cached current)

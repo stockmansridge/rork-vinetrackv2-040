@@ -8,6 +8,7 @@ import SwiftUI
 /// state so the user is never left wondering whether the system is running.
 struct HomeAlertsCard: View {
     @Environment(AlertService.self) private var alertService
+    @State private var showInfo: Bool = false
 
     private let maxPreviewRows: Int = 3
 
@@ -45,7 +46,25 @@ struct HomeAlertsCard: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
+        .overlay(alignment: .topTrailing) {
+            Button {
+                showInfo = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 20)
+            .padding(.top, 2)
+            .accessibilityLabel("About alerts")
+        }
         .accessibilityLabel(accessibilityLabel)
+        .sheet(isPresented: $showInfo) {
+            AlertsInfoSheet()
+        }
     }
 
     // MARK: - Header
@@ -166,6 +185,116 @@ struct HomeAlertsCard: View {
         case .critical: return .red
         case .warning: return .orange
         case .info: return .blue
+        }
+    }
+
+    private struct AlertsInfoSheet: View {
+        @Environment(\.dismiss) private var dismiss
+        @Environment(AlertService.self) private var alertService
+
+        var body: some View {
+            NavigationStack {
+                List {
+                    Section("What shows up here") {
+                        infoRow(
+                            icon: "cloud.rain.fill",
+                            tint: .blue,
+                            title: "Rain forecast",
+                            detail: "Days within your forecast window where forecast rainfall meets the rain threshold."
+                        )
+                        infoRow(
+                            icon: "cloud.bolt.rain.fill",
+                            tint: .blue,
+                            title: "Rain started / recorded",
+                            detail: "Rain currently falling at your station, plus a 9 AM summary of the past 24 hours."
+                        )
+                        infoRow(
+                            icon: "wind",
+                            tint: .teal,
+                            title: "Wind, frost & heat",
+                            detail: "Forecast days exceeding your wind, low-temperature (frost) or high-temperature (heat) thresholds."
+                        )
+                        infoRow(
+                            icon: "drop.fill",
+                            tint: .cyan,
+                            title: "Irrigation",
+                            detail: "When the forecast water deficit over the next few days exceeds your irrigation threshold."
+                        )
+                        infoRow(
+                            icon: "leaf.fill",
+                            tint: .green,
+                            title: "Disease risk",
+                            detail: "Downy mildew, powdery mildew and botrytis assessments based on hourly weather and (when available) measured leaf wetness."
+                        )
+                        infoRow(
+                            icon: "mappin.circle.fill",
+                            tint: .orange,
+                            title: "Aged pins",
+                            detail: "Unresolved pins older than your aged-pin threshold."
+                        )
+                        infoRow(
+                            icon: "sparkles",
+                            tint: .purple,
+                            title: "Spray jobs due",
+                            detail: "Spray records scheduled for today or tomorrow."
+                        )
+                    }
+                    Section("How it works") {
+                        Label("Alerts are generated automatically when the app refreshes for the selected vineyard.", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.footnote)
+                        Label("Thresholds and which alert types are enabled live in Settings → Alerts.", systemImage: "slider.horizontal.3")
+                            .font(.footnote)
+                        Label("Each day with risks gets its own alert so future rain or weather shows up before it happens.", systemImage: "calendar")
+                            .font(.footnote)
+                        Label("“All clear” means no enabled rule currently meets its threshold for this vineyard.", systemImage: "checkmark.seal.fill")
+                            .font(.footnote)
+                    }
+                    if let prefs = alertService.preferences {
+                        Section("Current thresholds") {
+                            thresholdRow("Rain", value: String(format: "≥ %.1f mm/day", prefs.rainAlertThresholdMm), enabled: prefs.weatherAlertsEnabled)
+                            thresholdRow("Wind", value: String(format: "≥ %.0f km/h", prefs.windAlertThresholdKmh), enabled: prefs.weatherAlertsEnabled)
+                            thresholdRow("Frost", value: String(format: "≤ %.1f°C", prefs.frostAlertThresholdC), enabled: prefs.weatherAlertsEnabled)
+                            thresholdRow("Heat", value: String(format: "≥ %.1f°C", prefs.heatAlertThresholdC), enabled: prefs.weatherAlertsEnabled)
+                            thresholdRow("Irrigation deficit", value: String(format: "≥ %.1f mm", prefs.irrigationDeficitThresholdMm), enabled: prefs.irrigationAlertsEnabled)
+                            thresholdRow("Aged pins", value: "≥ \(prefs.agedPinDays) days", enabled: prefs.agedPinAlertsEnabled)
+                            thresholdRow("Forecast window", value: "\(prefs.irrigationForecastDays) days", enabled: prefs.weatherAlertsEnabled || prefs.irrigationAlertsEnabled)
+                        }
+                    }
+                }
+                .navigationTitle("About alerts")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+
+        private func infoRow(icon: String, tint: Color, title: String, detail: String) -> some View {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 24, alignment: .center)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline.weight(.semibold))
+                    Text(detail).font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+
+        private func thresholdRow(_ label: String, value: String, enabled: Bool) -> some View {
+            HStack {
+                Text(label).font(.subheadline)
+                Spacer()
+                Text(enabled ? value : "Off")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(enabled ? .primary : .secondary)
+            }
         }
     }
 
