@@ -19,6 +19,12 @@ struct RainAndForecastView: View {
     @State private var isLoadingHistory: Bool = false
     @State private var hasLoadedHistory: Bool = false
 
+    /// User-configured high-wind threshold from Alert Preferences. Falls back
+    /// to a sensible default when no prefs are available.
+    @State private var windWarningThresholdKmh: Double = 20
+    /// Spray caution threshold. Fixed lower bound where drift becomes a concern.
+    private let windCautionThresholdKmh: Double = 15
+
     private var latitude: Double? {
         store.settings.vineyardLatitude ?? store.paddockCentroidLatitude
     }
@@ -32,6 +38,9 @@ struct RainAndForecastView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 statusBanner
+                if let warning = windWarning {
+                    windWarningBanner(warning)
+                }
                 forecastSummaryGrid
                 dailyForecastSection
                 rainfallHistorySection
@@ -392,6 +401,80 @@ struct RainAndForecastView: View {
         )
     }
 
+    // MARK: - Wind warning
+
+    private struct WindWarning {
+        enum Level { case caution, high }
+        let level: Level
+        let maxKmh: Double
+        let timeframe: String
+    }
+
+    /// Highest forecast wind across the relevant window (today + next 24-48h).
+    /// Returns nil when no forecast data is available or wind is below caution.
+    private var windWarning: WindWarning? {
+        guard hasLoadedForecast else { return nil }
+        let today = forecastDays.first?.forecastWindKmhMax
+        let next48 = forecastDays.prefix(2).compactMap { $0.forecastWindKmhMax }.max()
+
+        // Prefer today's wind if it already triggers, otherwise look ahead.
+        if let t = today, t >= windCautionThresholdKmh {
+            let level: WindWarning.Level = t >= windWarningThresholdKmh ? .high : .caution
+            return WindWarning(level: level, maxKmh: t, timeframe: "Today")
+        }
+        if let n = next48, n >= windCautionThresholdKmh {
+            let level: WindWarning.Level = n >= windWarningThresholdKmh ? .high : .caution
+            return WindWarning(level: level, maxKmh: n, timeframe: "Next 48h")
+        }
+        return nil
+    }
+
+    private func windWarningBanner(_ warning: WindWarning) -> some View {
+        let tint: Color = warning.level == .high ? .red : .orange
+        let icon = warning.level == .high ? "wind" : "wind"
+        let title = warning.level == .high ? "High wind warning" : "Spray caution: high wind forecast"
+        let subtitle: String = {
+            let speed = String(format: "%.0f km/h", warning.maxKmh)
+            switch warning.level {
+            case .high:
+                return "Wind forecast up to \(speed) \(warning.timeframe.lowercased()). Wind is above the recommended spray limit — consider delaying spray operations."
+            case .caution:
+                return "Wind forecast up to \(speed) \(warning.timeframe.lowercased()). Conditions may be unsuitable for spraying — check on-site before applying."
+            }
+        }()
+
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(tint)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(String(format: "Limit: %.0f km/h · Caution: %.0f km/h",
+                            windWarningThresholdKmh, windCautionThresholdKmh))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tint.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+        )
+    }
+
     // MARK: - Computed sums
 
     private var rain24h: Double {
@@ -458,9 +541,17 @@ struct RainAndForecastView: View {
     // MARK: - Loading
 
     private func reload() async {
+        await loadWindThreshold()
         await loadToday()
         await loadForecast()
         await loadHistory()
+    }
+
+    private func loadWindThreshold() async {
+        guard let vid = store.selectedVineyardId else { return }
+        if let prefs = try? await SupabaseAlertRepository().fetchPreferences(vineyardId: vid) {
+            windWarningThresholdKmh = prefs.windAlertThresholdKmh
+        }
     }
 
     private func loadToday() async {
