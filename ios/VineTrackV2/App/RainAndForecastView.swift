@@ -231,10 +231,24 @@ struct RainAndForecastView: View {
 
             Spacer(minLength: 0)
 
+            if let wind = day.forecastWindKmhMax {
+                HStack(spacing: 4) {
+                    Image(systemName: "wind")
+                        .font(.caption2)
+                        .foregroundStyle(windTint(kmh: wind))
+                    Text(String(format: "%.0f km/h", wind))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(windTint(kmh: wind))
+                }
+                .frame(minWidth: 70, alignment: .trailing)
+            }
+
             Text(String(format: "%.1f mm", day.forecastRainMm))
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
                 .foregroundStyle(day.forecastRainMm >= 1 ? .primary : .secondary)
+                .frame(minWidth: 64, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -518,6 +532,12 @@ struct RainAndForecastView: View {
         if mm >= 1 { return "cloud.rain.fill" }
         if mm > 0 { return "cloud.drizzle" }
         return "sun.max"
+    }
+
+    private func windTint(kmh: Double) -> Color {
+        if kmh >= windWarningThresholdKmh { return .red }
+        if kmh >= windCautionThresholdKmh { return .orange }
+        return .secondary
     }
 
     private func rainTint(mm: Double) -> Color {
