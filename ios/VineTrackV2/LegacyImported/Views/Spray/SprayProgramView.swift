@@ -229,7 +229,8 @@ struct SprayProgramView: View {
             tractors: includeCostings ? store.tractors : [],
             fuelPurchases: includeCostings ? store.fuelPurchases : [],
             operatorCategories: includeCostings ? store.operatorCategories : [],
-            operatorCategoryForName: includeCostings ? { store.operatorCategoryForName($0) } : nil
+            operatorCategoryForName: includeCostings ? { store.operatorCategoryForName($0) } : nil,
+            savedChemicals: includeCostings ? store.savedChemicals : []
         )
         sharePDFURL = ShareURL(url: url)
     }

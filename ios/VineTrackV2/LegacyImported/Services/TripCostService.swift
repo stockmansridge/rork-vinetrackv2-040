@@ -73,7 +73,8 @@ nonisolated enum TripCostService {
         operatorCategory: OperatorCategory?,
         tractor: Tractor?,
         fuelPurchases: [FuelPurchase],
-        sprayRecord: SprayRecord?
+        sprayRecord: SprayRecord?,
+        savedChemicals: [SavedChemical] = []
     ) -> Result {
         let hours = max(0, trip.activeDuration / 3600.0)
 
@@ -165,14 +166,21 @@ nonisolated enum TripCostService {
         }
 
         // ---- Chemical -------------------------------------------------------
+        // Resolve cost per unit in priority order:
+        //   1. SprayChemical.costPerUnit snapshot stored on the record.
+        //   2. SavedChemical.purchase.costPerBaseUnit via savedChemicalId.
+        //   3. SavedChemical.purchase.costPerBaseUnit via case-insensitive name match.
+        // Step 1 is the canonical path going forward; steps 2/3 keep older
+        // records (created before snapshotting) costable.
         let chemical: ChemicalBreakdown? = sprayRecord.map { record in
             var total: Double = 0
             var anyMissing = false
             var anyPriced = false
             for tank in record.tanks {
                 for chem in tank.chemicals {
-                    if chem.costPerUnit > 0 {
-                        total += chem.costPerTank
+                    let resolvedCostPerUnit = resolveCostPerUnit(chem, savedChemicals: savedChemicals)
+                    if let cpu = resolvedCostPerUnit, cpu > 0 {
+                        total += cpu * chem.volumePerTank
                         anyPriced = true
                     } else if chem.volumePerTank > 0 {
                         anyMissing = true
@@ -238,6 +246,28 @@ nonisolated enum TripCostService {
     }
 
     // MARK: - Helpers
+
+    /// Resolve `costPerUnit` for a spray chemical line. Prefers the snapshot
+    /// stored on the line, falls back to `SavedChemical.purchase` resolved by
+    /// `savedChemicalId` then by case-insensitive name. Returns `nil` when no
+    /// usable cost is available.
+    static func resolveCostPerUnit(_ chem: SprayChemical, savedChemicals: [SavedChemical]) -> Double? {
+        if chem.costPerUnit > 0 { return chem.costPerUnit }
+        if let sid = chem.savedChemicalId,
+           let saved = savedChemicals.first(where: { $0.id == sid }),
+           let purchase = saved.purchase, purchase.costPerBaseUnit > 0 {
+            return purchase.costPerBaseUnit
+        }
+        let key = chem.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !key.isEmpty,
+           let saved = savedChemicals.first(where: {
+               $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key
+           }),
+           let purchase = saved.purchase, purchase.costPerBaseUnit > 0 {
+            return purchase.costPerBaseUnit
+        }
+        return nil
+    }
 
     /// Weighted average fuel cost per litre across all fuel purchases for a
     /// vineyard: `sum(total_cost) / sum(volume_litres)`. Returns nil when no

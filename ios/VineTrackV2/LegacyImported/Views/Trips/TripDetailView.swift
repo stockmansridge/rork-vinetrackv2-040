@@ -399,7 +399,8 @@ struct TripDetailView: View {
             operatorCategory: resolvedOperatorCategory,
             tractor: resolvedTractor,
             fuelPurchases: tripFuelPurchases,
-            sprayRecord: sprayRecord
+            sprayRecord: sprayRecord,
+            savedChemicals: store.savedChemicals
         )
     }
 

@@ -73,6 +73,11 @@ enum SprayCalculator {
                 )
             }
 
+            let purchaseCostPerBaseUnit: Double? = {
+                guard let purchase = chemical.purchase, purchase.costPerBaseUnit > 0 else { return nil }
+                return purchase.costPerBaseUnit
+            }()
+
             return ChemicalCalculationResult(
                 chemicalName: chemical.name,
                 unit: chemical.unit,
@@ -81,7 +86,9 @@ enum SprayCalculator {
                 totalAmountRequired: totalAmountRequired,
                 amountPerFullTank: amountPerFullTank,
                 amountInLastTank: amountInLastTank,
-                paddockBreakdown: paddockBreakdown
+                paddockBreakdown: paddockBreakdown,
+                savedChemicalId: chemical.id,
+                costPerBaseUnit: purchaseCostPerBaseUnit
             )
         }
 

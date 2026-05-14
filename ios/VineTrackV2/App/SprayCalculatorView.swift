@@ -1212,13 +1212,17 @@ struct SprayCalculatorView: View {
             let waterVolume = isLast && result.lastTankLitres > 0 ? result.lastTankLitres : tankCapacity
             let chemicals: [SprayChemical] = result.chemicalResults.map { chemResult in
                 let amount = isLast ? chemResult.amountInLastTank : chemResult.amountPerFullTank
+                // Snapshot the saved chemical's costPerBaseUnit (if any) so
+                // TripCostService can calculate chemical cost reliably without
+                // having to re-resolve the saved chemical later.
                 return SprayChemical(
                     name: chemResult.chemicalName,
                     volumePerTank: amount,
                     ratePerHa: chemResult.basis == .perHectare ? chemResult.selectedRate : 0,
                     ratePer100L: chemResult.basis == .per100Litres ? chemResult.selectedRate : 0,
-                    costPerUnit: 0,
-                    unit: chemResult.unit
+                    costPerUnit: chemResult.costPerBaseUnit ?? 0,
+                    unit: chemResult.unit,
+                    savedChemicalId: chemResult.savedChemicalId
                 )
             }
             tanks.append(

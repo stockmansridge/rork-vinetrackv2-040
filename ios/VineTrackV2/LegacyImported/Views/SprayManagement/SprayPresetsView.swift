@@ -192,6 +192,12 @@ private enum ChemicalFormType: String, CaseIterable, Identifiable {
 struct EditSavedChemicalSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MigratedDataStore.self) private var store
+    @Environment(\.accessControl) private var accessControl
+
+    /// Purchase cost data (container size, dollar cost) is owner/manager only.
+    /// Supervisors/operators can still see other chemical details but the
+    /// purchase/cost section is hidden so they never see pricing.
+    private var canViewFinancials: Bool { accessControl?.canViewFinancials ?? false }
 
     let chemical: SavedChemical?
 
@@ -283,7 +289,9 @@ struct EditSavedChemicalSheet: View {
                 productSection
                 detailsSection
                 ratesSection
-                purchaseSection
+                if canViewFinancials {
+                    purchaseSection
+                }
                 sharingSection
                 notesSection
             }
@@ -512,8 +520,11 @@ struct EditSavedChemicalSheet: View {
             ))
         }
 
-        var purchase: ChemicalPurchase? = nil
-        if trackPurchase {
+        // Preserve existing purchase data when the editor cannot see/edit
+        // financials so that owners/managers don't lose cost values when a
+        // supervisor/operator edits the same chemical for other details.
+        var purchase: ChemicalPurchase? = canViewFinancials ? nil : chemical?.purchase
+        if canViewFinancials, trackPurchase {
             let containerSize = Double(containerSizeText) ?? 0
             let cost = Double(costText) ?? 0
             if containerSize > 0 || cost > 0 {

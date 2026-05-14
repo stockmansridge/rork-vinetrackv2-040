@@ -158,6 +158,13 @@ nonisolated struct ChemicalCalculationResult: Identifiable, Sendable {
     let amountPerFullTank: Double
     let amountInLastTank: Double
     let paddockBreakdown: [PaddockChemicalBreakdown]
+    /// Source `SavedChemical.id` so downstream snapshots (e.g. `SprayChemical.savedChemicalId`)
+    /// can be populated reliably without name-matching.
+    let savedChemicalId: UUID?
+    /// Snapshot of `SavedChemical.purchase.costPerBaseUnit` at the time of
+    /// calculation. `nil` when the saved chemical has no purchase data so
+    /// downstream code can mark the cost as unavailable rather than zero.
+    let costPerBaseUnit: Double?
 }
 
 nonisolated struct ChemicalCostResult: Identifiable, Sendable {

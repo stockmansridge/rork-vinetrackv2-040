@@ -778,7 +778,8 @@ extension SprayRecordDetailView {
                 operatorCategory: category,
                 tractor: tractor,
                 fuelPurchases: fuelPurchases,
-                sprayRecord: recordCopy
+                sprayRecord: recordCopy,
+                savedChemicals: store.savedChemicals
             )
         }()
 

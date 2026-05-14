@@ -60,7 +60,8 @@ struct SprayProgramCSVService {
         tractors: [Tractor] = [],
         fuelPurchases: [FuelPurchase] = [],
         operatorCategories: [OperatorCategory] = [],
-        operatorCategoryForName: ((String) -> OperatorCategory?)? = nil
+        operatorCategoryForName: ((String) -> OperatorCategory?)? = nil,
+        savedChemicals: [SavedChemical] = []
     ) -> URL {
         // Cost columns are only emitted when the caller explicitly opts in
         // (owner/manager). Supervisors and operators MUST receive
@@ -155,7 +156,8 @@ struct SprayProgramCSVService {
                         operatorCategory: category,
                         tractor: tractor,
                         fuelPurchases: vineyardFuelPurchases,
-                        sprayRecord: record
+                        sprayRecord: record,
+                        savedChemicals: savedChemicals
                     )
                     row.append(String(format: "%.2f", r.activeHours))
                     row.append(r.labour.warning == nil ? String(format: "%.2f", r.labour.cost) : "")

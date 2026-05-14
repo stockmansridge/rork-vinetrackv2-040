@@ -167,8 +167,18 @@ nonisolated struct SprayChemical: Codable, Identifiable, Sendable, Hashable {
     var volumePerTank: Double
     var ratePerHa: Double
     var ratePer100L: Double
+    /// Cost per base unit (mL or g) of this chemical. `0` indicates the cost
+    /// is unavailable — callers should treat zero as "missing" rather than
+    /// silently zero-cost. Use `hasCost` to test for availability.
     var costPerUnit: Double
     var unit: ChemicalUnit
+    /// Snapshot of the source `SavedChemical.id` when this line was created
+    /// from a saved chemical. Enables reliable cost lookup/fallback later if
+    /// the snapshot in `costPerUnit` is missing.
+    var savedChemicalId: UUID?
+
+    /// Whether this chemical line has a usable cost per unit snapshot.
+    var hasCost: Bool { costPerUnit > 0 }
 
     var costPerTank: Double {
         costPerUnit * volumePerTank
@@ -190,7 +200,7 @@ nonisolated struct SprayChemical: Codable, Identifiable, Sendable, Hashable {
         unit.rawValue
     }
 
-    init(id: UUID = UUID(), name: String = "", volumePerTank: Double = 0, ratePerHa: Double = 0, ratePer100L: Double = 0, costPerUnit: Double = 0, unit: ChemicalUnit = .litres) {
+    init(id: UUID = UUID(), name: String = "", volumePerTank: Double = 0, ratePerHa: Double = 0, ratePer100L: Double = 0, costPerUnit: Double = 0, unit: ChemicalUnit = .litres, savedChemicalId: UUID? = nil) {
         self.id = id
         self.name = name
         self.volumePerTank = volumePerTank
@@ -198,10 +208,11 @@ nonisolated struct SprayChemical: Codable, Identifiable, Sendable, Hashable {
         self.ratePer100L = ratePer100L
         self.costPerUnit = costPerUnit
         self.unit = unit
+        self.savedChemicalId = savedChemicalId
     }
 
     nonisolated enum CodingKeys: String, CodingKey {
-        case id, name, volumePerTank, ratePerHa, ratePer100L, costPerUnit, unit
+        case id, name, volumePerTank, ratePerHa, ratePer100L, costPerUnit, unit, savedChemicalId
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -213,6 +224,7 @@ nonisolated struct SprayChemical: Codable, Identifiable, Sendable, Hashable {
         ratePer100L = try container.decodeIfPresent(Double.self, forKey: .ratePer100L) ?? 0
         costPerUnit = try container.decodeIfPresent(Double.self, forKey: .costPerUnit) ?? 0
         unit = try container.decodeIfPresent(ChemicalUnit.self, forKey: .unit) ?? .litres
+        savedChemicalId = try container.decodeIfPresent(UUID.self, forKey: .savedChemicalId)
     }
 }
 
