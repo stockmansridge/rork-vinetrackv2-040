@@ -7,6 +7,7 @@ struct AlertsCentreView: View {
 
     @State private var isRefreshing: Bool = false
     @State private var pushDestination: AlertPushDestination?
+    @State private var showInfo: Bool = false
 
     var body: some View {
         List {
@@ -62,6 +63,14 @@ struct AlertsCentreView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showInfo = true
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .accessibilityLabel("About alerts")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 if accessControl.canChangeSettings {
                     NavigationLink {
                         AlertSettingsView()
@@ -70,6 +79,9 @@ struct AlertsCentreView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showInfo) {
+            AlertsInfoSheet()
         }
         .refreshable {
             await alertService.generateAndRefresh()

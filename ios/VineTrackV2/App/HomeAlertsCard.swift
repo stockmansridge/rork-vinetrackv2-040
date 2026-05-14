@@ -8,7 +8,6 @@ import SwiftUI
 /// state so the user is never left wondering whether the system is running.
 struct HomeAlertsCard: View {
     @Environment(AlertService.self) private var alertService
-    @State private var showInfo: Bool = false
 
     private let maxPreviewRows: Int = 3
 
@@ -46,25 +45,7 @@ struct HomeAlertsCard: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
-        .overlay(alignment: .topTrailing) {
-            Button {
-                showInfo = true
-            } label: {
-                Image(systemName: "info.circle")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 20)
-            .padding(.top, 2)
-            .accessibilityLabel("About alerts")
-        }
         .accessibilityLabel(accessibilityLabel)
-        .sheet(isPresented: $showInfo) {
-            AlertsInfoSheet()
-        }
     }
 
     // MARK: - Header
@@ -188,7 +169,9 @@ struct HomeAlertsCard: View {
         }
     }
 
-    private struct AlertsInfoSheet: View {
+}
+
+struct AlertsInfoSheet: View {
         @Environment(\.dismiss) private var dismiss
         @Environment(AlertService.self) private var alertService
 
@@ -269,10 +252,10 @@ struct HomeAlertsCard: View {
                     }
                 }
             }
-            .presentationDetents([.medium, .large])
-        }
+        .presentationDetents([.medium, .large])
+    }
 
-        private func infoRow(icon: String, tint: Color, title: String, detail: String) -> some View {
+    private func infoRow(icon: String, tint: Color, title: String, detail: String) -> some View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: icon)
                     .font(.subheadline.weight(.semibold))
@@ -284,21 +267,22 @@ struct HomeAlertsCard: View {
                     Text(detail).font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            .padding(.vertical, 2)
-        }
-
-        private func thresholdRow(_ label: String, value: String, enabled: Bool) -> some View {
-            HStack {
-                Text(label).font(.subheadline)
-                Spacer()
-                Text(enabled ? value : "Off")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(enabled ? .primary : .secondary)
-            }
-        }
+        .padding(.vertical, 2)
     }
 
-    private func summaryByType(_ items: [AlertWithStatus]) -> [String] {
+    private func thresholdRow(_ label: String, value: String, enabled: Bool) -> some View {
+        HStack {
+            Text(label).font(.subheadline)
+            Spacer()
+            Text(enabled ? value : "Off")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(enabled ? .primary : .secondary)
+        }
+    }
+}
+
+extension HomeAlertsCard {
+    fileprivate func summaryByType(_ items: [AlertWithStatus]) -> [String] {
         var counts: [AlertType: Int] = [:]
         for item in items {
             guard let t = item.alert.typedAlertType else { continue }
