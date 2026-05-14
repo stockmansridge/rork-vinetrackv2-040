@@ -5,6 +5,7 @@ struct BackendTeamAccessView: View {
     let vineyardName: String
 
     @Environment(NewBackendAuthService.self) private var auth
+    @Environment(MigratedDataStore.self) private var store
     @State private var members: [BackendVineyardMember] = []
     @State private var pendingInvitations: [BackendInvitation] = []
     @State private var isLoading: Bool = false
@@ -23,6 +24,16 @@ struct BackendTeamAccessView: View {
 
     private var canManage: Bool {
         currentUserMember?.role.canInviteMembers ?? false
+    }
+
+    /// Owner/manager-only — gates operator category assignment, which is
+    /// part of trip costing (private to managers).
+    private var canAssignOperatorCategory: Bool {
+        currentUserMember?.role.canViewCosting ?? false
+    }
+
+    private var vineyardOperatorCategories: [OperatorCategory] {
+        store.operatorCategories.filter { $0.vineyardId == vineyardId }
     }
 
     private var isCurrentUserOwner: Bool {
@@ -119,9 +130,11 @@ struct BackendTeamAccessView: View {
                 EditMemberRoleSheet(
                     member: member,
                     canManage: canManage,
-                    onSave: { newRole in
+                    canAssignOperatorCategory: canAssignOperatorCategory,
+                    operatorCategories: vineyardOperatorCategories,
+                    onSave: { newRole, newOperatorCategoryId in
                         showEditMember = false
-                        Task { await updateRole(member: member, newRole: newRole) }
+                        Task { await updateMember(member: member, newRole: newRole, newOperatorCategoryId: newOperatorCategoryId) }
                     },
                     onRemove: {
                         showEditMember = false
@@ -230,9 +243,18 @@ struct BackendTeamAccessView: View {
         }
     }
 
-    private func updateRole(member: BackendVineyardMember, newRole: BackendRole) async {
+    private func updateMember(member: BackendVineyardMember, newRole: BackendRole, newOperatorCategoryId: UUID?) async {
         do {
-            try await teamRepository.updateMemberRole(vineyardId: vineyardId, userId: member.userId, role: newRole)
+            if newRole != member.role {
+                try await teamRepository.updateMemberRole(vineyardId: vineyardId, userId: member.userId, role: newRole)
+            }
+            if newOperatorCategoryId != member.operatorCategoryId {
+                try await teamRepository.updateMemberOperatorCategory(
+                    vineyardId: vineyardId,
+                    userId: member.userId,
+                    operatorCategoryId: newOperatorCategoryId
+                )
+            }
             await reload()
         } catch {
             errorMessage = error.localizedDescription
@@ -283,22 +305,41 @@ struct BackendTeamAccessView: View {
 private struct EditMemberRoleSheet: View {
     let member: BackendVineyardMember
     let canManage: Bool
-    let onSave: (BackendRole) -> Void
+    /// Owner/manager-only — controls visibility of the Operator Category
+    /// picker (which is a costing-related setting).
+    let canAssignOperatorCategory: Bool
+    let operatorCategories: [OperatorCategory]
+    let onSave: (BackendRole, UUID?) -> Void
     let onRemove: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedRole: BackendRole
+    @State private var selectedOperatorCategoryId: UUID?
 
-    init(member: BackendVineyardMember, canManage: Bool, onSave: @escaping (BackendRole) -> Void, onRemove: @escaping () -> Void) {
+    init(
+        member: BackendVineyardMember,
+        canManage: Bool,
+        canAssignOperatorCategory: Bool,
+        operatorCategories: [OperatorCategory],
+        onSave: @escaping (BackendRole, UUID?) -> Void,
+        onRemove: @escaping () -> Void
+    ) {
         self.member = member
         self.canManage = canManage
+        self.canAssignOperatorCategory = canAssignOperatorCategory
+        self.operatorCategories = operatorCategories
         self.onSave = onSave
         self.onRemove = onRemove
         self._selectedRole = State(initialValue: member.role)
+        self._selectedOperatorCategoryId = State(initialValue: member.operatorCategoryId)
     }
 
     private var availableRoles: [BackendRole] {
         BackendRole.allCases.filter { $0 != .owner }
+    }
+
+    private var hasChanges: Bool {
+        selectedRole != member.role || selectedOperatorCategoryId != member.operatorCategoryId
     }
 
     var body: some View {
@@ -319,6 +360,26 @@ private struct EditMemberRoleSheet: View {
                     .labelsHidden()
                 }
 
+                if canAssignOperatorCategory {
+                    Section {
+                        Picker("Operator Category", selection: $selectedOperatorCategoryId) {
+                            Text("None").tag(UUID?.none)
+                            ForEach(operatorCategories) { cat in
+                                Text(cat.name).tag(UUID?.some(cat.id))
+                            }
+                        }
+                        .disabled(!canManage)
+                    } header: {
+                        Text("Operator Category")
+                    } footer: {
+                        if operatorCategories.isEmpty {
+                            Text("Create operator categories in Spray Management → Operator Categories to assign hourly rates for trip cost calculations.")
+                        } else {
+                            Text("Used as the default for this member's labour cost on trips. Visible to owners and managers only.")
+                        }
+                    }
+                }
+
                 Section {
                     Button(role: .destructive) {
                         onRemove()
@@ -336,9 +397,9 @@ private struct EditMemberRoleSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        onSave(selectedRole)
+                        onSave(selectedRole, selectedOperatorCategoryId)
                     }
-                    .disabled(!canManage || selectedRole == member.role)
+                    .disabled(!canManage || !hasChanges)
                 }
             }
         }

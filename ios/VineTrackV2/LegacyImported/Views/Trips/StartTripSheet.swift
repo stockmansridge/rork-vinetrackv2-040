@@ -1047,6 +1047,13 @@ struct StartTripSheet: View {
         if var trip = tracking.activeTrip {
             trip.paddockIds = Array(selectedPaddockIds)
 
+            // Phase 2 costing: record the signed-in user as the trip operator
+            // when known. The operator category is resolved at cost time from
+            // vineyard_members.operator_category_id (see TripCostService).
+            if let userId = auth.userId {
+                trip.operatorUserId = userId
+            }
+
             if isSeedingSelected {
                 let details = buildSeedingDetails()
                 // Always persist seeding details when the function is Seeding

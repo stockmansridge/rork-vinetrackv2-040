@@ -29,6 +29,16 @@ final class SupabaseTeamRepository: TeamRepositoryProtocol {
             .execute()
     }
 
+    func updateMemberOperatorCategory(vineyardId: UUID, userId: UUID, operatorCategoryId: UUID?) async throws {
+        guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
+        try await provider.client
+            .from("vineyard_members")
+            .update(MemberOperatorCategoryUpdate(operatorCategoryId: operatorCategoryId))
+            .eq("vineyard_id", value: vineyardId.uuidString)
+            .eq("user_id", value: userId.uuidString)
+            .execute()
+    }
+
     func removeMember(vineyardId: UUID, userId: UUID) async throws {
         guard provider.isConfigured else { throw BackendRepositoryError.missingSupabaseConfiguration }
         try await provider.client
@@ -119,6 +129,20 @@ nonisolated private struct TransferOwnershipRequest: Encodable, Sendable {
 
 nonisolated private struct MemberRoleUpdate: Encodable, Sendable {
     let role: BackendRole
+}
+
+nonisolated private struct MemberOperatorCategoryUpdate: Encodable, Sendable {
+    let operatorCategoryId: UUID?
+
+    enum CodingKeys: String, CodingKey {
+        case operatorCategoryId = "operator_category_id"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        // Always encode the key (even when nil) so we can clear the assignment.
+        try c.encode(operatorCategoryId, forKey: .operatorCategoryId)
+    }
 }
 
 nonisolated private struct InvitationInsert: Encodable, Sendable {

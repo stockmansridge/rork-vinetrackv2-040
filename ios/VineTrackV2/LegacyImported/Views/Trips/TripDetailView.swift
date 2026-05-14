@@ -16,6 +16,9 @@ struct TripDetailView: View {
     @State private var showSprayDetails: Bool = false
     @State private var showSeedingDetails: Bool = false
     @State private var showPinsSection: Bool = false
+    @State private var showCostSection: Bool = true
+    @State private var vineyardMembers: [BackendVineyardMember] = []
+    private let teamRepository: any TeamRepositoryProtocol = SupabaseTeamRepository()
 
     private static let maxDisplayTrailPoints: Int = 500
     private static let maxTrailBuckets: Int = 5
@@ -190,6 +193,17 @@ struct TripDetailView: View {
                 }
             }
 
+            if accessControl.canViewCosting {
+                Section {
+                    DisclosureGroup(isExpanded: $showCostSection) {
+                        tripCostBody
+                    } label: {
+                        Label("Estimated Trip Cost", systemImage: "dollarsign.circle")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+            }
+
             if let notes = trip.completionNotes?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
                !notes.isEmpty {
@@ -281,6 +295,13 @@ struct TripDetailView: View {
         } message: {
             Text("Are you sure you want to delete this trip? This action cannot be undone.")
         }
+        .task {
+            if accessControl.canViewCosting, vineyardMembers.isEmpty {
+                if let members = try? await teamRepository.listMembers(vineyardId: trip.vineyardId) {
+                    vineyardMembers = members
+                }
+            }
+        }
         .onAppear {
             rebuildDisplayTrail()
             if trip.pathPoints.count > 1 {
@@ -309,6 +330,194 @@ struct TripDetailView: View {
     /// Build the bucketed display trail once for this historical trip. Mirrors
     /// the live `ActiveTripView` renderer but without the 1s timer — pathPoints
     /// are static here, so we recompute only on appear or if the array changes.
+    // MARK: - Trip Cost
+
+    private var resolvedOperatorCategory: OperatorCategory? {
+        if let cid = trip.operatorCategoryId,
+           let cat = store.operatorCategories.first(where: { $0.id == cid }) {
+            return cat
+        }
+        if let uid = trip.operatorUserId,
+           let memberCategoryId = vineyardMembers.first(where: { $0.userId == uid })?.operatorCategoryId,
+           let cat = store.operatorCategories.first(where: { $0.id == memberCategoryId }) {
+            return cat
+        }
+        return nil
+    }
+
+    private var resolvedTractor: Tractor? {
+        guard let tid = trip.tractorId else { return nil }
+        return store.tractors.first { $0.id == tid }
+    }
+
+    private var tripFuelPurchases: [FuelPurchase] {
+        store.fuelPurchases.filter { $0.vineyardId == trip.vineyardId }
+    }
+
+    private var costResult: TripCostService.Result {
+        TripCostService.estimate(
+            trip: trip,
+            operatorCategory: resolvedOperatorCategory,
+            tractor: resolvedTractor,
+            fuelPurchases: tripFuelPurchases,
+            sprayRecord: sprayRecord
+        )
+    }
+
+    @ViewBuilder
+    private var tripCostBody: some View {
+        let r = costResult
+        VStack(alignment: .leading, spacing: 8) {
+            costLineRow(
+                label: "Labour",
+                detail: r.labour.categoryName.map { name -> String in
+                    if let rate = r.labour.costPerHour, rate > 0 {
+                        return "\(name) · \(formatCurrency(rate))/hr × \(formatHours(r.labour.hours))"
+                    }
+                    return name
+                },
+                amount: r.labour.cost,
+                showAmount: r.labour.warning == nil,
+                icon: "person.fill"
+            )
+            if let w = r.labour.warning {
+                warningRow(w)
+            }
+
+            costLineRow(
+                label: "Fuel",
+                detail: fuelDetailLabel(r.fuel),
+                amount: r.fuel.cost,
+                showAmount: r.fuel.warning == nil,
+                icon: "fuelpump.fill"
+            )
+            if let w = r.fuel.warning {
+                warningRow(w)
+            }
+
+            if let chem = r.chemical {
+                costLineRow(
+                    label: "Chemicals",
+                    detail: nil,
+                    amount: chem.cost,
+                    showAmount: chem.warning == nil || chem.cost > 0,
+                    icon: "drop.fill"
+                )
+                if let w = chem.warning {
+                    warningRow(w)
+                }
+            }
+
+            if let seed = r.seeding {
+                warningRow(seed.warning)
+            }
+
+            Divider().padding(.vertical, 2)
+
+            HStack {
+                Text("Total estimated")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(formatCurrency(r.totalCost))
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(VineyardTheme.olive)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: completenessIcon(r.completeness))
+                    .font(.caption2)
+                    .foregroundStyle(completenessTint(r.completeness))
+                Text(completenessLabel(r.completeness))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func fuelDetailLabel(_ f: TripCostService.FuelBreakdown) -> String? {
+        guard f.warning == nil else { return nil }
+        guard let perL = f.costPerLitre, f.litres > 0 else { return nil }
+        return "\(formatLitres(f.litres)) · \(formatCurrency(perL))/L"
+    }
+
+    @ViewBuilder
+    private func costLineRow(label: String, detail: String?, amount: Double, showAmount: Bool, icon: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Label(label, systemImage: icon)
+                .font(.subheadline)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                if showAmount {
+                    Text(formatCurrency(amount))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.primary)
+                } else {
+                    Text("—")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func warningRow(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
+    private func formatCurrency(_ value: Double) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .currency
+        f.maximumFractionDigits = 2
+        return f.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
+    }
+
+    private func formatHours(_ hours: Double) -> String {
+        String(format: "%.2f hr", hours)
+    }
+
+    private func formatLitres(_ litres: Double) -> String {
+        String(format: "%.1f L", litres)
+    }
+
+    private func completenessIcon(_ c: TripCostService.CostingCompleteness) -> String {
+        switch c {
+        case .complete: return "checkmark.seal.fill"
+        case .partial: return "exclamationmark.triangle.fill"
+        case .unavailable: return "questionmark.circle.fill"
+        }
+    }
+
+    private func completenessTint(_ c: TripCostService.CostingCompleteness) -> Color {
+        switch c {
+        case .complete: return VineyardTheme.leafGreen
+        case .partial: return .orange
+        case .unavailable: return .secondary
+        }
+    }
+
+    private func completenessLabel(_ c: TripCostService.CostingCompleteness) -> String {
+        switch c {
+        case .complete: return "Estimate complete"
+        case .partial: return "Partial estimate — see warnings above"
+        case .unavailable: return "Cost data unavailable"
+        }
+    }
+
     private func rebuildDisplayTrail() {
         let segments = TrailDisplayProcessor.makeDisplayTrailSegments(
             points: trip.pathPoints,
