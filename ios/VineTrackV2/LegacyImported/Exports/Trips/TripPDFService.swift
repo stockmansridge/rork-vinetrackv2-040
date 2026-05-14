@@ -28,7 +28,8 @@ struct TripPDFService {
         includeCostings: Bool = true,
         timeZone: TimeZone = .current,
         tripFunctionLabel: String? = nil,
-        paddockGroups: [PaddockCoverage] = []
+        paddockGroups: [PaddockCoverage] = [],
+        tripCostResult: TripCostService.Result? = nil
     ) -> Data {
         let pageWidth: CGFloat = 595.0
         let pageHeight: CGFloat = 842.0
@@ -305,28 +306,94 @@ struct TripPDFService {
             // are still stored on the trip for diagnostics and remain visible
             // in the in-app Trip Detail view.
 
-            // ── Costs ────────────────────────────────────────────────────
-            let hasChemCosts = !chemicalCosts.isEmpty
-            let hasCosts = hasChemCosts || fuelCost > 0 || operatorCost > 0
-            if hasCosts && includeCostings {
-                drawSectionHeader("Costs")
-                let totalChemCost = chemicalCosts.reduce(0.0) { $0 + $1.1 }
-                for (name, cost) in chemicalCosts {
-                    drawRow(label: name, value: String(format: "$%.2f", cost))
+            // ── Estimated Trip Cost ──────────────────────────────────────
+            // Gated entirely on `includeCostings` — caller must pass `false`
+            // for non-owner/manager roles so supervisors and operators never
+            // see pricing in exported PDFs.
+            if includeCostings, let r = tripCostResult {
+                drawSectionHeader("Estimated Trip Cost")
+
+                // Labour
+                if let w = r.labour.warning {
+                    drawRow(label: "Labour", value: "—")
+                    drawWrappedRow(label: "  Note", value: w, indent: 12)
+                } else {
+                    let detail: String = {
+                        if let name = r.labour.categoryName, let rate = r.labour.costPerHour, rate > 0 {
+                            return "\(name) · $\(String(format: "%.2f", rate))/hr × \(String(format: "%.2f", r.labour.hours)) hr"
+                        }
+                        return "\(String(format: "%.2f", r.labour.hours)) hr"
+                    }()
+                    drawRow(label: "Labour", value: String(format: "$%.2f", r.labour.cost))
+                    drawRow(label: "  \(detail)", value: "", indent: 12)
                 }
-                if hasChemCosts {
-                    y += 4
-                    drawRow(label: "Chemical Subtotal", value: String(format: "$%.2f", totalChemCost))
+
+                // Fuel
+                if let w = r.fuel.warning {
+                    drawRow(label: "Fuel", value: "—")
+                    drawWrappedRow(label: "  Note", value: w, indent: 12)
+                } else {
+                    drawRow(label: "Fuel litres (est.)", value: String(format: "%.1f L", r.fuel.litres))
+                    if let perL = r.fuel.costPerLitre {
+                        drawRow(label: "Fuel cost per litre", value: String(format: "$%.2f/L", perL))
+                    }
+                    drawRow(label: "Fuel cost", value: String(format: "$%.2f", r.fuel.cost))
                 }
-                if fuelCost > 0 {
-                    drawRow(label: "Fuel Cost", value: String(format: "$%.2f", fuelCost))
+
+                // Chemical
+                if let chem = r.chemical {
+                    if let w = chem.warning, chem.cost <= 0 {
+                        drawRow(label: "Chemical/Input", value: "—")
+                        drawWrappedRow(label: "  Note", value: w, indent: 12)
+                    } else {
+                        drawRow(label: "Chemical/Input", value: String(format: "$%.2f", chem.cost))
+                        if let w = chem.warning {
+                            drawWrappedRow(label: "  Note", value: w, indent: 12)
+                        }
+                    }
                 }
-                if operatorCost > 0 {
-                    drawRow(label: operatorCategoryName ?? "Operator", value: String(format: "$%.2f", operatorCost))
+
+                // Seeding/Input warning if relevant
+                if let s = r.seeding {
+                    drawWrappedRow(label: "Seed/Input", value: s.warning)
                 }
+
                 y += 4
-                let grandTotal = totalChemCost + fuelCost + operatorCost
-                drawRow(label: "Total Cost", value: String(format: "$%.2f", grandTotal))
+                drawRow(label: "Total estimated cost", value: String(format: "$%.2f", r.totalCost))
+
+                let statusLabel: String = {
+                    switch r.completeness {
+                    case .complete: return "Complete"
+                    case .partial: return "Partial"
+                    case .unavailable: return "Unavailable"
+                    }
+                }()
+                drawRow(label: "Costing status", value: statusLabel)
+            } else {
+                // Legacy fallback: render a flat cost table from the explicit
+                // numeric parameters when no structured cost result was supplied.
+                let hasChemCosts = !chemicalCosts.isEmpty
+                let hasCosts = hasChemCosts || fuelCost > 0 || operatorCost > 0
+                if hasCosts && includeCostings {
+                    drawSectionHeader("Costs")
+                    let totalChemCost = chemicalCosts.reduce(0.0) { $0 + $1.1 }
+                    for (name, cost) in chemicalCosts {
+                        drawRow(label: name, value: String(format: "$%.2f", cost))
+                    }
+                    if hasChemCosts {
+                        y += 4
+                        drawRow(label: "Chemical Subtotal", value: String(format: "$%.2f", totalChemCost))
+                    }
+                    if fuelCost > 0 {
+                        drawRow(label: "Fuel Cost", value: String(format: "$%.2f", fuelCost))
+                    }
+                    if operatorCost > 0 {
+                        drawRow(label: operatorCategoryName ?? "Operator", value: String(format: "$%.2f", operatorCost))
+                    }
+                    y += 4
+                    let grandTotal = totalChemCost + fuelCost + operatorCost
+                    drawRow(label: "Total Cost", value: String(format: "$%.2f", grandTotal))
+                }
             }
 
             // ── Map ──────────────────────────────────────────────────────

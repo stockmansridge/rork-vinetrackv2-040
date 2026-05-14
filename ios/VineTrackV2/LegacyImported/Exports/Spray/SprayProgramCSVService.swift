@@ -55,9 +55,29 @@ struct SprayProgramCSVService {
         trips: [Trip],
         vineyardName: String,
         growthStageLookup: ((SprayRecord) -> String?)? = nil,
-        timeZone: TimeZone = .current
+        timeZone: TimeZone = .current,
+        includeCostings: Bool = false,
+        tractors: [Tractor] = [],
+        fuelPurchases: [FuelPurchase] = [],
+        operatorCategories: [OperatorCategory] = [],
+        operatorCategoryForName: ((String) -> OperatorCategory?)? = nil
     ) -> URL {
-        var csv = templateHeaders.map { escapeCSV($0) }.joined(separator: ",") + "\n"
+        // Cost columns are only emitted when the caller explicitly opts in
+        // (owner/manager). Supervisors and operators MUST receive
+        // `includeCostings: false` so cost data never leaves the app for them.
+        var headers = templateHeaders
+        if includeCostings {
+            headers.append(contentsOf: [
+                "active_hours",
+                "labour_cost",
+                "fuel_litres_estimated",
+                "fuel_cost",
+                "chemical_cost",
+                "total_estimated_cost",
+                "costing_status",
+            ])
+        }
+        var csv = headers.map { escapeCSV($0) }.joined(separator: ",") + "\n"
 
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "dd/MM/yyyy"
@@ -108,6 +128,48 @@ struct SprayProgramCSVService {
                     row.append(chem.costPerUnit > 0 ? String(format: "%.4f", chem.costPerUnit) : "")
                 } else {
                     row.append(contentsOf: ["", "", "", "", "", ""])
+                }
+            }
+
+            if includeCostings {
+                if let trip = trip {
+                    let category: OperatorCategory? = {
+                        if let cid = trip.operatorCategoryId,
+                           let c = operatorCategories.first(where: { $0.id == cid }) {
+                            return c
+                        }
+                        if !trip.personName.isEmpty, let lookup = operatorCategoryForName {
+                            return lookup(trip.personName)
+                        }
+                        return nil
+                    }()
+                    let tractor: Tractor? = {
+                        if let tid = trip.tractorId {
+                            return tractors.first { $0.id == tid }
+                        }
+                        return tractors.first { $0.displayName == record.tractor || $0.name == record.tractor }
+                    }()
+                    let vineyardFuelPurchases = fuelPurchases.filter { $0.vineyardId == trip.vineyardId }
+                    let r = TripCostService.estimate(
+                        trip: trip,
+                        operatorCategory: category,
+                        tractor: tractor,
+                        fuelPurchases: vineyardFuelPurchases,
+                        sprayRecord: record
+                    )
+                    row.append(String(format: "%.2f", r.activeHours))
+                    row.append(r.labour.warning == nil ? String(format: "%.2f", r.labour.cost) : "")
+                    row.append(r.fuel.warning == nil ? String(format: "%.2f", r.fuel.litres) : "")
+                    row.append(r.fuel.warning == nil ? String(format: "%.2f", r.fuel.cost) : "")
+                    row.append({
+                        guard let c = r.chemical else { return "" }
+                        if let w = c.warning, c.cost <= 0, !w.isEmpty { return "" }
+                        return String(format: "%.2f", c.cost)
+                    }())
+                    row.append(String(format: "%.2f", r.totalCost))
+                    row.append(r.completeness.rawValue)
+                } else {
+                    row.append(contentsOf: ["", "", "", "", "", "", ""])
                 }
             }
 

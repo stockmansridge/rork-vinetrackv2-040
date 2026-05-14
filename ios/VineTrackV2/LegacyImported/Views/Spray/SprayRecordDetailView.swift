@@ -752,6 +752,36 @@ extension SprayRecordDetailView {
         let recordCopy = record
         let exportTimeZone = store.settings.resolvedTimeZone
 
+        // Build TripCostService.Result for owner/manager exports so we render
+        // the richer Estimated Trip Cost section with warnings + completeness.
+        let costResult: TripCostService.Result? = {
+            guard includeCostings, let trip else { return nil }
+            let category: OperatorCategory? = {
+                if let cid = trip.operatorCategoryId,
+                   let c = store.operatorCategories.first(where: { $0.id == cid }) {
+                    return c
+                }
+                if !trip.personName.isEmpty {
+                    return store.operatorCategoryForName(trip.personName)
+                }
+                return nil
+            }()
+            let tractor: Tractor? = {
+                if let tid = trip.tractorId {
+                    return store.tractors.first { $0.id == tid }
+                }
+                return store.tractors.first { $0.displayName == recordCopy.tractor || $0.name == recordCopy.tractor }
+            }()
+            let fuelPurchases = store.fuelPurchases.filter { $0.vineyardId == trip.vineyardId }
+            return TripCostService.estimate(
+                trip: trip,
+                operatorCategory: category,
+                tractor: tractor,
+                fuelPurchases: fuelPurchases,
+                sprayRecord: recordCopy
+            )
+        }()
+
         Task {
             var snapshot: UIImage? = nil
             if let trip, trip.pathPoints.count > 1 {
@@ -770,7 +800,8 @@ extension SprayRecordDetailView {
                 operatorCost: operatorCost,
                 operatorCategoryName: operatorCatName,
                 includeCostings: includeCostings,
-                timeZone: exportTimeZone
+                timeZone: exportTimeZone,
+                tripCostResult: costResult
             )
             let fileName = "SprayRecord_\(recordCopy.sprayReference.isEmpty ? "Record" : recordCopy.sprayReference)_\(recordCopy.date.formatted(.iso8601.year().month().day()))"
             let url = SprayRecordPDFService.savePDFToTemp(data: data, fileName: fileName)

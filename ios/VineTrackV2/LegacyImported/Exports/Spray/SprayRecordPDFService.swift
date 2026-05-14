@@ -3,7 +3,7 @@ import PDFKit
 import MapKit
 
 struct SprayRecordPDFService {
-    static func generatePDF(record: SprayRecord, trip: Trip?, vineyardName: String, paddockName: String, personName: String, paddocks: [Paddock] = [], mapSnapshot: UIImage? = nil, logoData: Data? = nil, fuelCost: Double = 0, operatorCost: Double = 0, operatorCategoryName: String? = nil, includeCostings: Bool = true, timeZone: TimeZone = .current) -> Data {
+    static func generatePDF(record: SprayRecord, trip: Trip?, vineyardName: String, paddockName: String, personName: String, paddocks: [Paddock] = [], mapSnapshot: UIImage? = nil, logoData: Data? = nil, fuelCost: Double = 0, operatorCost: Double = 0, operatorCategoryName: String? = nil, includeCostings: Bool = true, timeZone: TimeZone = .current, tripCostResult: TripCostService.Result? = nil) -> Data {
         let pageWidth: CGFloat = 595.0
         let pageHeight: CGFloat = 842.0
         let margin: CGFloat = 40.0
@@ -300,25 +300,82 @@ struct SprayRecordPDFService {
             }.sorted { $0.0.lowercased() < $1.0.lowercased() }
             let totalSprayCost = chemCosts.reduce(0.0) { $0 + $1.1 }
 
-            let hasCosts = !chemCosts.isEmpty || fuelCost > 0 || operatorCost > 0
-            if hasCosts && includeCostings {
-                drawSectionHeader("Costs")
-                for (name, cost) in chemCosts {
-                    drawRow(label: name, value: String(format: "$%.2f", cost))
+            // Costing is gated entirely on `includeCostings` — the caller MUST
+            // pass `false` for supervisors and operators so they never receive
+            // pricing in exported spray PDFs.
+            if includeCostings, let r = tripCostResult {
+                drawSectionHeader("Estimated Trip Cost")
+
+                if let w = r.labour.warning {
+                    drawRow(label: "Labour", value: "—")
+                    drawRow(label: "  Note: \(w)", value: "", indent: 12)
+                } else {
+                    if let name = r.labour.categoryName, let rate = r.labour.costPerHour, rate > 0 {
+                        drawRow(label: "Labour (\(name))", value: String(format: "$%.2f", r.labour.cost))
+                        drawRow(label: "  \(String(format: "$%.2f", rate))/hr × \(String(format: "%.2f", r.labour.hours)) hr", value: "", indent: 12)
+                    } else {
+                        drawRow(label: "Labour", value: String(format: "$%.2f", r.labour.cost))
+                    }
                 }
-                if !chemCosts.isEmpty {
-                    y += 4
-                    drawRow(label: "Chemical Subtotal", value: String(format: "$%.2f", totalSprayCost))
+
+                if let w = r.fuel.warning {
+                    drawRow(label: "Fuel", value: "—")
+                    drawRow(label: "  Note: \(w)", value: "", indent: 12)
+                } else {
+                    drawRow(label: "Fuel litres (est.)", value: String(format: "%.1f L", r.fuel.litres))
+                    if let perL = r.fuel.costPerLitre {
+                        drawRow(label: "Fuel cost per litre", value: String(format: "$%.2f/L", perL))
+                    }
+                    drawRow(label: "Fuel cost", value: String(format: "$%.2f", r.fuel.cost))
                 }
-                if fuelCost > 0 {
-                    drawRow(label: "Fuel Cost", value: String(format: "$%.2f", fuelCost))
+
+                if let chem = r.chemical {
+                    if let w = chem.warning, chem.cost <= 0 {
+                        drawRow(label: "Chemical/Input", value: "—")
+                        drawRow(label: "  Note: \(w)", value: "", indent: 12)
+                    } else {
+                        drawRow(label: "Chemical/Input", value: String(format: "$%.2f", chem.cost))
+                        if let w = chem.warning {
+                            drawRow(label: "  Note: \(w)", value: "", indent: 12)
+                        }
+                    }
                 }
-                if operatorCost > 0 {
-                    drawRow(label: operatorCategoryName ?? "Operator", value: String(format: "$%.2f", operatorCost))
+
+                if let s = r.seeding {
+                    drawRow(label: "Seed/Input", value: s.warning)
                 }
+
                 y += 4
-                let grandTotal = totalSprayCost + fuelCost + operatorCost
-                drawRow(label: "Total Cost", value: String(format: "$%.2f", grandTotal))
+                drawRow(label: "Total estimated cost", value: String(format: "$%.2f", r.totalCost))
+                let statusLabel: String = {
+                    switch r.completeness {
+                    case .complete: return "Complete"
+                    case .partial: return "Partial"
+                    case .unavailable: return "Unavailable"
+                    }
+                }()
+                drawRow(label: "Costing status", value: statusLabel)
+            } else {
+                let hasCosts = !chemCosts.isEmpty || fuelCost > 0 || operatorCost > 0
+                if hasCosts && includeCostings {
+                    drawSectionHeader("Costs")
+                    for (name, cost) in chemCosts {
+                        drawRow(label: name, value: String(format: "$%.2f", cost))
+                    }
+                    if !chemCosts.isEmpty {
+                        y += 4
+                        drawRow(label: "Chemical Subtotal", value: String(format: "$%.2f", totalSprayCost))
+                    }
+                    if fuelCost > 0 {
+                        drawRow(label: "Fuel Cost", value: String(format: "$%.2f", fuelCost))
+                    }
+                    if operatorCost > 0 {
+                        drawRow(label: operatorCategoryName ?? "Operator", value: String(format: "$%.2f", operatorCost))
+                    }
+                    y += 4
+                    let grandTotal = totalSprayCost + fuelCost + operatorCost
+                    drawRow(label: "Total Cost", value: String(format: "$%.2f", grandTotal))
+                }
             }
 
             if let snapshot = mapSnapshot {

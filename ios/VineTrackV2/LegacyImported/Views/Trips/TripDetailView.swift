@@ -274,8 +274,17 @@ struct TripDetailView: View {
         .toolbar {
             if accessControl.canExport {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        exportTrip()
+                    Menu {
+                        Button {
+                            exportTrip()
+                        } label: {
+                            Label("Export PDF", systemImage: "doc.richtext")
+                        }
+                        Button {
+                            exportTripCSV()
+                        } label: {
+                            Label("Export CSV", systemImage: "tablecells")
+                        }
                     } label: {
                         if isExporting {
                             ProgressView()
@@ -804,12 +813,14 @@ struct TripDetailView: View {
         let logoData = store.selectedVineyard?.logoData
         let paddockName = trip.paddockName
         let pinCount = pinsForTrip.count
-        let tripCopy = trip
+        let tripCopy = currentTrip
         let exportTimeZone = tz
         let functionLabel = resolvedTripFunctionLabel()
         let paddockGroups = paddockGroupsForReport()
         let fileNameSuffix = functionLabel.map { "_\($0)" } ?? ""
         let fileName = "TripReport_\(vineyardName)\(fileNameSuffix)_\(trip.startTime.formattedTZ(date: .numeric, time: .omitted, in: exportTimeZone))"
+        let includeCostings = accessControl.canViewCosting
+        let costResult: TripCostService.Result? = includeCostings ? costResult : nil
 
         Task {
             let snapshot = await TripPDFService.captureMapSnapshot(trip: tripCopy)
@@ -820,9 +831,11 @@ struct TripDetailView: View {
                 pinCount: pinCount,
                 mapSnapshot: snapshot,
                 logoData: logoData,
+                includeCostings: includeCostings,
                 timeZone: exportTimeZone,
                 tripFunctionLabel: functionLabel,
-                paddockGroups: paddockGroups
+                paddockGroups: paddockGroups,
+                tripCostResult: costResult
             )
             let url = TripPDFService.savePDFToTemp(data: pdfData, fileName: fileName)
             isExporting = false
@@ -836,6 +849,39 @@ struct TripDetailView: View {
                 }
                 presenter.present(activityVC, animated: true)
             }
+        }
+    }
+
+    private func exportTripCSV() {
+        guard !isExporting else { return }
+        isExporting = true
+        let vineyardName = store.selectedVineyard?.name ?? "Vineyard"
+        let paddockName = trip.paddockName
+        let tripCopy = currentTrip
+        let exportTimeZone = tz
+        let functionLabel = resolvedTripFunctionLabel()
+        let includeCostings = accessControl.canViewCosting
+        let resultForExport: TripCostService.Result? = includeCostings ? costResult : nil
+
+        let url = TripCSVService.exportTrip(
+            trip: tripCopy,
+            vineyardName: vineyardName,
+            paddockName: paddockName,
+            tripFunctionLabel: functionLabel,
+            tripCostResult: resultForExport,
+            includeCostings: includeCostings,
+            timeZone: exportTimeZone
+        )
+        isExporting = false
+
+        let activityVC = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            var presenter = rootVC
+            while let presented = presenter.presentedViewController {
+                presenter = presented
+            }
+            presenter.present(activityVC, animated: true)
         }
     }
 }

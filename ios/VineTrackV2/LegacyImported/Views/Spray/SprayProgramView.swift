@@ -216,12 +216,20 @@ struct SprayProgramView: View {
     }
 
     private func exportCSV() {
+        // Costing columns are only included for owner/manager. Supervisors and
+        // operators receive a CSV without any pricing columns.
         let vineyardName = store.selectedVineyard?.name ?? "Vineyard"
+        let includeCostings = accessControl?.canViewCosting ?? false
         let url = SprayProgramCSVService.exportRecords(
             records: operationalRecords,
             trips: store.trips,
             vineyardName: vineyardName,
-            timeZone: store.settings.resolvedTimeZone
+            timeZone: store.settings.resolvedTimeZone,
+            includeCostings: includeCostings,
+            tractors: includeCostings ? store.tractors : [],
+            fuelPurchases: includeCostings ? store.fuelPurchases : [],
+            operatorCategories: includeCostings ? store.operatorCategories : [],
+            operatorCategoryForName: includeCostings ? { store.operatorCategoryForName($0) } : nil
         )
         sharePDFURL = ShareURL(url: url)
     }
