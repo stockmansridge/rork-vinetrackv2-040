@@ -24,7 +24,7 @@ struct HomeRainSummaryCard: View {
 
     var body: some View {
         NavigationLink {
-            RainfallCalendarView()
+            RainAndForecastView()
         } label: {
             HStack(spacing: 10) {
                 ZStack {
