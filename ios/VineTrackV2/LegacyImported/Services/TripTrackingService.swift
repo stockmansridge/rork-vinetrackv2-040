@@ -254,7 +254,10 @@ final class TripTrackingService {
         trackingPattern: TrackingPattern = .sequential,
         personName: String = "",
         tripFunction: String? = nil,
-        tripTitle: String? = nil
+        tripTitle: String? = nil,
+        tractorId: UUID? = nil,
+        operatorUserId: UUID? = nil,
+        operatorCategoryId: UUID? = nil
     ) {
         guard let store else { return }
         guard store.selectedVineyardId != nil else {
@@ -275,7 +278,10 @@ final class TripTrackingService {
             trackingPattern: trackingPattern,
             personName: personName,
             tripFunction: tripFunction,
-            tripTitle: tripTitle
+            tripTitle: tripTitle,
+            tractorId: tractorId,
+            operatorUserId: operatorUserId,
+            operatorCategoryId: operatorCategoryId
         )
         store.startTrip(trip)
         errorMessage = nil

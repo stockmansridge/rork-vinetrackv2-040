@@ -22,6 +22,10 @@ struct StartTripSheet: View {
     /// false = lower rows first (descending). Replaces the old "Reverse direction" toggle.
     @State private var directionHigherFirst: Bool = true
     @State private var personName: String = ""
+    /// Tractor selection for the new trip. Persists as `trips.tractor_id` so
+    /// fuel cost estimates can be calculated downstream (TripCostService).
+    /// Optional — if left unset, the trip continues without fuel costing.
+    @State private var selectedTractorId: UUID?
     @State private var showPaddockPicker: Bool = false
     /// Stable selection key for the trip function:
     ///   - Built-in: the `TripFunction` raw value (e.g. "seeding").
@@ -202,6 +206,7 @@ struct StartTripSheet: View {
                     if trackingPattern == .freeDrive {
                         freeDriveInfoSection
                     }
+                    tractorSection
                     operatorSection
                     if let error = tracking.errorMessage {
                         Text(error)
@@ -227,6 +232,9 @@ struct StartTripSheet: View {
             .onAppear {
                 if personName.isEmpty, let name = auth.userName {
                     personName = name
+                }
+                if selectedTractorId == nil {
+                    selectedTractorId = defaultTractorId
                 }
                 // Intentionally do NOT pre-select a block. Operators have
                 // accidentally started trips in the wrong block when one
@@ -932,6 +940,116 @@ struct StartTripSheet: View {
         }
     }
 
+    // MARK: Tractor
+
+    /// Tractors available for the currently selected vineyard. Falls back to
+    /// the full list if no vineyard is selected (rare — the store usually
+    /// filters tractors at load time).
+    private var availableTractors: [Tractor] {
+        let vineyardId = store.selectedVineyardId
+        let filtered = store.tractors.filter { vineyardId == nil || $0.vineyardId == vineyardId }
+        return filtered.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    /// Most recently used tractor from this vineyard's previous trips. Used as
+    /// a low-risk default when the operator opens Start Trip. Only returns a
+    /// tractor that still exists in the available list.
+    private var defaultTractorId: UUID? {
+        let vineyardId = store.selectedVineyardId
+        let pool = store.trips
+            .filter { $0.vineyardId == vineyardId && $0.tractorId != nil }
+            .sorted { $0.startTime > $1.startTime }
+        let availableIds = Set(availableTractors.map { $0.id })
+        if let recent = pool.first(where: { availableIds.contains($0.tractorId!) })?.tractorId {
+            return recent
+        }
+        // Only auto-default when exactly one tractor exists to avoid guessing.
+        if availableTractors.count == 1 {
+            return availableTractors.first?.id
+        }
+        return nil
+    }
+
+    private var selectedTractorLabel: String {
+        if let id = selectedTractorId, let t = availableTractors.first(where: { $0.id == id }) {
+            return t.displayName
+        }
+        return availableTractors.isEmpty ? "No tractors configured" : "No tractor selected"
+    }
+
+    private var tractorSection: some View {
+        sectionContainer(title: "Tractor", icon: "car.fill", tint: .indigo) {
+            VStack(spacing: 10) {
+                Menu {
+                    Button {
+                        selectedTractorId = nil
+                    } label: {
+                        HStack {
+                            Text("No tractor")
+                            if selectedTractorId == nil {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    if !availableTractors.isEmpty {
+                        Divider()
+                        ForEach(availableTractors) { tractor in
+                            Button {
+                                selectedTractorId = tractor.id
+                            } label: {
+                                HStack {
+                                    Text(tractor.displayName)
+                                    if selectedTractorId == tractor.id {
+                                        Spacer()
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "car.fill")
+                            .foregroundStyle(.indigo)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Tractor")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text(selectedTractorLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(14)
+                    .background(Color(.secondarySystemGroupedBackground))
+                    .clipShape(.rect(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+                .disabled(availableTractors.isEmpty)
+
+                if availableTractors.isEmpty {
+                    Text("Add tractors in Equipment to enable fuel cost estimates.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                } else if selectedTractorId == nil {
+                    Text("Optional — select a tractor so fuel cost can be estimated.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                }
+            }
+        }
+    }
+
     // MARK: Operator
 
     private var operatorSection: some View {
@@ -1039,7 +1157,9 @@ struct StartTripSheet: View {
             trackingPattern: trackingPattern,
             personName: personName,
             tripFunction: selectedFunctionKey,
-            tripTitle: resolvedTitle
+            tripTitle: resolvedTitle,
+            tractorId: selectedTractorId,
+            operatorUserId: auth.userId
         )
 
         // Persist the full multi-block selection on the active trip and apply

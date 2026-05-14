@@ -17,6 +17,7 @@ struct TripDetailView: View {
     @State private var showSeedingDetails: Bool = false
     @State private var showPinsSection: Bool = false
     @State private var showCostSection: Bool = true
+    @State private var showEditCostingLinks: Bool = false
     @State private var vineyardMembers: [BackendVineyardMember] = []
     private let teamRepository: any TeamRepositoryProtocol = SupabaseTeamRepository()
 
@@ -25,6 +26,13 @@ struct TripDetailView: View {
 
     private var sprayRecord: SprayRecord? {
         store.sprayRecords.first { $0.tripId == trip.id }
+    }
+
+    /// Live copy of `trip` from the store so the cost summary reflects any
+    /// owner/manager edits made via `TripCostingLinksEditSheet` without
+    /// requiring the view to be dismissed and reopened.
+    private var currentTrip: Trip {
+        store.trips.first(where: { $0.id == trip.id }) ?? trip
     }
 
     private var pinsForTrip: [VinePin] {
@@ -197,6 +205,13 @@ struct TripDetailView: View {
                 Section {
                     DisclosureGroup(isExpanded: $showCostSection) {
                         tripCostBody
+                        Button {
+                            showEditCostingLinks = true
+                        } label: {
+                            Label("Edit operator, category & tractor", systemImage: "pencil")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .padding(.top, 4)
                     } label: {
                         Label("Estimated Trip Cost", systemImage: "dollarsign.circle")
                             .font(.subheadline.weight(.semibold))
@@ -286,6 +301,20 @@ struct TripDetailView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showEditCostingLinks) {
+            TripCostingLinksEditSheet(
+                trip: currentTrip,
+                vineyardMembers: vineyardMembers
+            ) { tractorId, operatorUserId, operatorCategoryId in
+                var updated = currentTrip
+                updated.tractorId = tractorId
+                updated.operatorUserId = operatorUserId
+                updated.operatorCategoryId = operatorCategoryId
+                store.updateTrip(updated)
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .alert("Delete Trip", isPresented: $showDeleteConfirmation) {
             Button("Delete", role: .destructive) {
                 store.deleteTrip(trip.id)
@@ -333,6 +362,7 @@ struct TripDetailView: View {
     // MARK: - Trip Cost
 
     private var resolvedOperatorCategory: OperatorCategory? {
+        let trip = currentTrip
         if let cid = trip.operatorCategoryId,
            let cat = store.operatorCategories.first(where: { $0.id == cid }) {
             return cat
@@ -346,7 +376,7 @@ struct TripDetailView: View {
     }
 
     private var resolvedTractor: Tractor? {
-        guard let tid = trip.tractorId else { return nil }
+        guard let tid = currentTrip.tractorId else { return nil }
         return store.tractors.first { $0.id == tid }
     }
 
@@ -356,7 +386,7 @@ struct TripDetailView: View {
 
     private var costResult: TripCostService.Result {
         TripCostService.estimate(
-            trip: trip,
+            trip: currentTrip,
             operatorCategory: resolvedOperatorCategory,
             tractor: resolvedTractor,
             fuelPurchases: tripFuelPurchases,

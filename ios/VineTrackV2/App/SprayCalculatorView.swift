@@ -1338,7 +1338,9 @@ struct SprayCalculatorView: View {
             paddockId: firstPaddock?.id,
             paddockName: paddockNames,
             trackingPattern: trackingPatternChoice,
-            personName: auth.userName ?? ""
+            personName: auth.userName ?? "",
+            tractorId: selectedTractorId,
+            operatorUserId: auth.userId
         )
 
         guard let activeTrip = tracking.activeTrip else {
