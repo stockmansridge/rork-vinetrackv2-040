@@ -9,6 +9,11 @@ struct LegacyAccessControl {
     var canExport: Bool = false
     var canExportFinancialPDF: Bool = false
     var canViewFinancials: Bool = false
+    /// Costing visibility (labour/fuel/chemical/total trip cost, operator
+    /// hourly rates, fuel cost per litre). Owners + managers only. Mirrors
+    /// `canViewFinancials` — kept as a distinct flag so future costing
+    /// surfaces can be gated independently if needed.
+    var canViewCosting: Bool = false
     var canFinalizeRecords: Bool = false
     var canReopenRecords: Bool = false
     /// Owner/manager only — controls who can create, edit, or delete shared

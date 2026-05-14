@@ -15,6 +15,12 @@ nonisolated enum BackendRole: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Whether this role may see any costing data (labour/fuel/chemical/
+    /// total trip cost, operator hourly rates, fuel cost per litre, etc.).
+    /// Owners and managers only. Supervisors and operators are blocked from
+    /// every costing surface — UI, exports, debug views — to keep rates private.
+    var canViewCosting: Bool { canViewFinancials }
+
     var canChangeSettings: Bool {
         switch self {
         case .owner, .manager:

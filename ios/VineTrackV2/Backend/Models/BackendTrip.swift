@@ -34,6 +34,9 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
     let fillingTankNumber: Int?
 
     let personName: String?
+    let tractorId: UUID?
+    let operatorUserId: UUID?
+    let operatorCategoryId: UUID?
     let tripFunction: String?
     let tripTitle: String?
     let seedingDetails: SeedingDetails?
@@ -81,6 +84,9 @@ nonisolated struct BackendTrip: Codable, Sendable, Identifiable {
         case isFillingTank = "is_filling_tank"
         case fillingTankNumber = "filling_tank_number"
         case personName = "person_name"
+        case tractorId = "tractor_id"
+        case operatorUserId = "operator_user_id"
+        case operatorCategoryId = "operator_category_id"
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
@@ -127,6 +133,9 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
     let isFillingTank: Bool
     let fillingTankNumber: Int?
     let personName: String
+    let tractorId: UUID?
+    let operatorUserId: UUID?
+    let operatorCategoryId: UUID?
     let tripFunction: String?
     let tripTitle: String?
     /// Optional structured seeding payload. Encoded only when non-nil so older
@@ -174,6 +183,9 @@ nonisolated struct BackendTripUpsert: Encodable, Sendable {
         case isFillingTank = "is_filling_tank"
         case fillingTankNumber = "filling_tank_number"
         case personName = "person_name"
+        case tractorId = "tractor_id"
+        case operatorUserId = "operator_user_id"
+        case operatorCategoryId = "operator_category_id"
         case tripFunction = "trip_function"
         case tripTitle = "trip_title"
         case seedingDetails = "seeding_details"
@@ -224,6 +236,9 @@ extension BackendTrip {
             isFillingTank: trip.isFillingTank,
             fillingTankNumber: trip.fillingTankNumber,
             personName: trip.personName,
+            tractorId: trip.tractorId,
+            operatorUserId: trip.operatorUserId,
+            operatorCategoryId: trip.operatorCategoryId,
             tripFunction: trip.tripFunction,
             tripTitle: trip.tripTitle,
             seedingDetails: trip.seedingDetails,
@@ -269,6 +284,9 @@ extension BackendTrip {
             fillingTankNumber: fillingTankNumber,
             tripFunction: tripFunction,
             tripTitle: tripTitle,
+            tractorId: tractorId,
+            operatorUserId: operatorUserId,
+            operatorCategoryId: operatorCategoryId,
             seedingDetails: seedingDetails,
             manualCorrectionEvents: manualCorrectionEvents ?? [],
             completionNotes: completionNotes
